@@ -108,7 +108,8 @@ try {
         aionui_packed_files = $packedFiles
         binaries = $files
     }
-    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $projectRoot 'artifacts\build-manifest.json') -Encoding utf8
+    $manifestJson = ($manifest | ConvertTo-Json -Depth 5).Replace("`r`n", "`n") + "`n"
+    [IO.File]::WriteAllText((Join-Path $projectRoot 'artifacts\build-manifest.json'), $manifestJson, [Text.UTF8Encoding]::new($false))
 }
 finally {
     Pop-Location

@@ -182,6 +182,30 @@ func TestRendererServesRealFileAndRejectsWindowsSeparator(t *testing.T) {
 	}
 }
 
+func TestUnauthenticatedRendererReceivesChineseLanguageOnly(t *testing.T) {
+	server, _, instances := testServer(t)
+	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/settings/client", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"language":"zh-CN"}` {
+		t.Fatalf("login settings status=%d body=%s", response.Code, response.Body.String())
+	}
+	instances.mu.Lock()
+	if len(instances.ensureSIDs) != 0 || len(instances.routeSIDs) != 0 {
+		instances.mu.Unlock()
+		t.Fatalf("unauthenticated language settings started or routed an instance: ensure=%v route=%v", instances.ensureSIDs, instances.routeSIDs)
+	}
+	instances.mu.Unlock()
+
+	request = httptest.NewRequest(http.MethodPut, "https://portal.example.test/api/settings/client", strings.NewReader(`{"language":"en-US"}`))
+	request.Header.Set("Origin", "https://portal.example.test")
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated settings write status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestLoginCookieAndPortalUserContract(t *testing.T) {
 	server, data, instances := testServer(t)
 	password := []byte("correct-employee-portal-password")

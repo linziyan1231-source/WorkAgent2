@@ -157,6 +157,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/portal-mcp-oauth.js":
 		s.mcpOAuthBridge(w, r)
 		return
+	case "/api/settings/client":
+		if r.Method == http.MethodGet {
+			if _, _, err := s.session(r); err != nil {
+				writeJSON(w, http.StatusOK, map[string]any{"language": "zh-CN"})
+				return
+			}
+		}
 	}
 	if blockedInternalAuthPath(r.URL.Path) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Internal AionUi authentication is managed by the Portal"})
