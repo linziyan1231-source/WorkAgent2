@@ -76,6 +76,8 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 		return instanceCommand(ctx, manager, arguments[1:])
 	case "kimi-oauth":
 		return kimiOAuthCommand(ctx, manager, arguments[1:])
+	case "model-bootstrap":
+		return modelBootstrapCommand(ctx, manager, arguments[1:])
 	case "limits":
 		return limitsCommand(ctx, manager, arguments[1:])
 	case "logs":
@@ -98,6 +100,80 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
+	if len(arguments) == 0 || (arguments[0] != "provision" && arguments[0] != "status") {
+		return errors.New("usage: portal --config <path> model-bootstrap <provision|status> ...")
+	}
+	if arguments[0] == "status" {
+		if len(arguments) != 2 {
+			return errors.New("usage: portal --config <path> model-bootstrap status <portal-username>")
+		}
+		status, err := manager.ModelBootstrapStatus(ctx, arguments[1])
+		if err != nil {
+			return err
+		}
+		outcome := "MISSING"
+		if status.Pending {
+			outcome = "PENDING"
+		} else if status.Applied {
+			outcome = "APPLIED"
+		}
+		fmt.Printf("user=%s outcome=%s codex_key_id=%s kimi_key_id=%s\n", arguments[1], outcome, status.State.CodexKeyID, status.State.KimiKeyID)
+		if !status.Applied {
+			return errors.New("model bootstrap is not applied")
+		}
+		return nil
+	}
+
+	flags := newFlags("model-bootstrap provision")
+	sshTarget := flags.String("ssh-target", "", "CLIProxyAPI SSH user@host")
+	remoteHelper := flags.String("remote-helper", "", "absolute remote key-policy helper path")
+	baseURL := flags.String("base-url", "", "employee OpenAI-compatible /v1 base URL")
+	codexDefault := flags.String("codex-default-model", "gpt-5.4", "default Codex model alias")
+	codexModels := flags.String("codex-models", "", "comma-separated Codex/ChatGPT aliases")
+	kimiModels := flags.String("kimi-models", "", "comma-separated Kimi aliases")
+	rpm := flags.Int("rpm", 0, "requests per minute; zero means unlimited")
+	codexDaily := flags.Float64("codex-daily-usd", 20, "Codex/ChatGPT daily USD limit")
+	codexWeekly := flags.Float64("codex-weekly-usd", 40, "Codex/ChatGPT weekly USD limit")
+	kimiDaily := flags.Float64("kimi-daily-usd", 5, "Kimi daily USD limit")
+	kimiWeekly := flags.Float64("kimi-weekly-usd", 10, "Kimi weekly USD limit")
+	update := flags.Bool("update", false, "rotate keys and replace an existing initialization")
+	if err := flags.Parse(arguments[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 || *sshTarget == "" || *remoteHelper == "" || *baseURL == "" {
+		return errors.New("usage: portal --config <path> model-bootstrap provision --ssh-target <user@host> --remote-helper </path> --base-url <url/v1> --codex-models <aliases> --kimi-models <aliases> [--update] <portal-username>")
+	}
+	parseModels := func(value string) ([]string, error) {
+		parts := strings.Split(value, ",")
+		models := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				return nil, errors.New("model alias lists must not contain empty entries")
+			}
+			models = append(models, part)
+		}
+		return models, nil
+	}
+	parsedCodex, err := parseModels(*codexModels)
+	if err != nil {
+		return err
+	}
+	parsedKimi, err := parseModels(*kimiModels)
+	if err != nil {
+		return err
+	}
+	result, err := manager.ProvisionModelBootstrap(ctx, flags.Arg(0), admin.ModelBootstrapOptions{SSHTarget: *sshTarget, RemoteHelperPath: *remoteHelper,
+		BaseURL: *baseURL, CodexDefaultModel: *codexDefault, CodexModels: parsedCodex, KimiModels: parsedKimi, RPM: *rpm,
+		CodexDailyUSD: *codexDaily, CodexWeeklyUSD: *codexWeekly, KimiDailyUSD: *kimiDaily, KimiWeeklyUSD: *kimiWeekly, Update: *update})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("user=%s outcome=%s codex_key_id=%s kimi_key_id=%s restarted=%t\n", flags.Arg(0), result.Outcome, result.CodexKeyID, result.KimiKeyID, result.Restarted)
+	return nil
 }
 
 func kimiOAuthCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
@@ -757,5 +833,5 @@ func newFlags(name string) *flag.FlagSet {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|kimi-oauth|limits|logs|release|acl|readiness> ...")
+	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|kimi-oauth|model-bootstrap|limits|logs|release|acl|readiness> ...")
 }

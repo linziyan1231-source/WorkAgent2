@@ -168,6 +168,50 @@ func (a *aionClient) getJSON(ctx context.Context, path string, target any) error
 	return nil
 }
 
+func (a *aionClient) sendJSON(ctx context.Context, method, path string, source, target any) error {
+	body, err := json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	defer zero(body)
+	req, err := http.NewRequestWithContext(ctx, method, a.base.String()+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", a.base.String())
+	if csrf := a.cookie("aionui-csrf-token"); csrf != "" {
+		req.Header.Set("x-csrf-token", csrf)
+	}
+	response, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s %s request failed: %w", method, path, err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxControlResponse+1))
+	if err != nil {
+		return fmt.Errorf("read %s %s response: %w", method, path, err)
+	}
+	defer zero(responseBody)
+	if len(responseBody) > maxControlResponse {
+		return fmt.Errorf("%s %s exceeded the %d-byte control response limit", method, path, maxControlResponse)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("%s %s returned HTTP %d", method, path, response.StatusCode)
+	}
+	if target == nil || len(bytes.TrimSpace(responseBody)) == 0 {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode %s %s: %w", method, path, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("decode %s %s: trailing JSON value", method, path)
+	}
+	return nil
+}
+
 func (a *aionClient) cookie(name string) string {
 	for _, cookie := range a.client.Jar.Cookies(a.base) {
 		if cookie.Name == name {

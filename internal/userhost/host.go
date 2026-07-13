@@ -154,6 +154,10 @@ func (h *Host) initialize(ctx context.Context) error {
 		return fmt.Errorf("verify shared agent CLIs: %w", err)
 	}
 	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s", agentVersions.Codex, agentVersions.Kimi)
+	pendingModels, err := h.preparePendingModelBootstrap(ctx, env)
+	if err != nil {
+		return err
+	}
 	migrationPort, err := selectLoopbackPort(h.cfg.MigrationPortStart, h.cfg.MigrationPortTries)
 	if err != nil {
 		return fmt.Errorf("select migration port: %w", err)
@@ -221,6 +225,10 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	h.client, h.auth = client, material
+	if err := h.applyPendingModelBootstrap(startupCtx, pendingModels); err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
 	corePID, corePort, checks, err := h.verifyCompleteHealth(startupCtx, corePath, webPort, uint32(cmd.Process.Pid), username)
 	if err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
@@ -232,6 +240,9 @@ func (h *Host) initialize(ctx context.Context) error {
 	}
 	checks = append(checks, "per-user-restricted-token")
 	checks = append(checks, "codex-cli", "kimi-cli")
+	if pendingModels != nil {
+		checks = append(checks, "codex-api-key", "aion-model-providers")
+	}
 	stats, err := h.job.Stats()
 	if err != nil {
 		return err

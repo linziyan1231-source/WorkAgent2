@@ -14,10 +14,12 @@ import (
 	"aionuiportal/internal/adminipc"
 	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/auth"
+	"aionuiportal/internal/cliproxy"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/kimi"
+	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/scheduler"
 	"aionuiportal/internal/store"
@@ -47,6 +49,28 @@ type KimiOAuthSeedResult struct {
 	SHA256    string
 	Output    string
 	Restarted bool
+}
+
+type ModelBootstrapOptions struct {
+	SSHTarget         string
+	RemoteHelperPath  string
+	BaseURL           string
+	CodexDefaultModel string
+	CodexModels       []string
+	KimiModels        []string
+	RPM               int
+	CodexDailyUSD     float64
+	CodexWeeklyUSD    float64
+	KimiDailyUSD      float64
+	KimiWeeklyUSD     float64
+	Update            bool
+}
+
+type ModelBootstrapResult struct {
+	Outcome    string
+	CodexKeyID string
+	KimiKeyID  string
+	Restarted  bool
 }
 
 func Open(configPath string) (*Manager, error) {
@@ -235,6 +259,85 @@ func (m *Manager) kimiPythonPath() (string, error) {
 		return "", fmt.Errorf("verify shared agent CLI release before Kimi OAuth seeding: %w", err)
 	}
 	return filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath)), nil
+}
+
+func (m *Manager) ModelBootstrapStatus(ctx context.Context, username string) (modelbootstrap.Status, error) {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return modelbootstrap.Status{}, err
+	}
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return modelbootstrap.Status{}, err
+	}
+	return modelbootstrap.Inspect(dataRoot)
+}
+
+func (m *Manager) ProvisionModelBootstrap(ctx context.Context, username string, options ModelBootstrapOptions) (ModelBootstrapResult, error) {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	status, err := modelbootstrap.Inspect(dataRoot)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	if status.Applied && !options.Update {
+		return ModelBootstrapResult{Outcome: "SKIP", CodexKeyID: status.State.CodexKeyID, KimiKeyID: status.State.KimiKeyID}, nil
+	}
+	if status.Pending && !options.Update {
+		return ModelBootstrapResult{Outcome: "PENDING", CodexKeyID: status.State.CodexKeyID, KimiKeyID: status.State.KimiKeyID}, nil
+	}
+
+	wasRunning := false
+	if instanceStatus, statusErr := m.Instances.Status(ctx, user.WindowsSID); statusErr == nil {
+		wasRunning = instanceStatus.Healthy || instanceStatus.State == "starting"
+	} else if !isPipeUnavailable(statusErr) {
+		return ModelBootstrapResult{}, fmt.Errorf("inspect target UserHost before model bootstrap: %w", statusErr)
+	}
+	stopErr := m.Instances.Stop(ctx, user.WindowsSID)
+	if stopErr != nil && !isPipeUnavailable(stopErr) {
+		return ModelBootstrapResult{}, fmt.Errorf("stop target UserHost before model bootstrap: %w", stopErr)
+	}
+
+	client := cliproxy.Client{SSHTarget: options.SSHTarget, HelperPath: options.RemoteHelperPath}
+	bundle, err := client.Provision(ctx, cliproxy.ProvisionOptions{Username: user.Username, WindowsSID: user.WindowsSID, BaseURL: options.BaseURL,
+		CodexDefaultModel: options.CodexDefaultModel, CodexModels: options.CodexModels, KimiModels: options.KimiModels, RPM: options.RPM,
+		CodexDailyUSD: options.CodexDailyUSD, CodexWeeklyUSD: options.CodexWeeklyUSD, KimiDailyUSD: options.KimiDailyUSD, KimiWeeklyUSD: options.KimiWeeklyUSD})
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	if err := modelbootstrap.Stage(dataRoot, bundle, options.Update); err != nil {
+		return ModelBootstrapResult{}, fmt.Errorf("stage private model bootstrap: %w", err)
+	}
+	policy := winutil.PrivateTreePolicy(user.WindowsSID)
+	if err := winutil.ApplyTreeACL(dataRoot, policy); err != nil {
+		return ModelBootstrapResult{}, fmt.Errorf("model bootstrap was staged but its private ACL could not be applied: %w", err)
+	}
+	if err := winutil.VerifyTreeACL(dataRoot, policy); err != nil {
+		return ModelBootstrapResult{}, fmt.Errorf("model bootstrap was staged but its private ACL could not be verified: %w", err)
+	}
+
+	result := ModelBootstrapResult{Outcome: "PENDING", CodexKeyID: bundle.CodexKeyID, KimiKeyID: bundle.KimiKeyID}
+	if wasRunning && user.Enabled {
+		if _, err := m.Instances.Ensure(ctx, user.WindowsSID); err != nil {
+			return ModelBootstrapResult{}, fmt.Errorf("model bootstrap was staged but the previously running UserHost could not apply it: %w", err)
+		}
+		applied, err := modelbootstrap.Inspect(dataRoot)
+		if err != nil || !applied.Applied {
+			return ModelBootstrapResult{}, fmt.Errorf("restarted UserHost did not publish the model bootstrap marker: %v", err)
+		}
+		result.Outcome, result.Restarted = "APPLIED", true
+	}
+	if err := m.Store.Audit(ctx, "admin.model_bootstrap.provision", "success", user.Username, user.WindowsSID, "local-admin",
+		map[string]any{"codex_key_id": bundle.CodexKeyID, "kimi_key_id": bundle.KimiKeyID, "outcome": result.Outcome, "restarted": result.Restarted}, time.Now()); err != nil {
+		return result, fmt.Errorf("model bootstrap succeeded but its audit event could not be recorded: %w", err)
+	}
+	return result, nil
 }
 
 func (m *Manager) MapWindowsAccount(ctx context.Context, username, windowsAccount string) (store.User, error) {
