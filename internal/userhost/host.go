@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/release"
@@ -136,6 +137,11 @@ func (h *Host) initialize(ctx context.Context) error {
 	webPath := filepath.Join(h.release.Path, "aionui-web.exe")
 	staticPath := filepath.Join(h.release.Path, "static")
 	env := h.environment()
+	agentVersions, err := agentcli.Probe(ctx, agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), env)
+	if err != nil {
+		return fmt.Errorf("verify shared agent CLIs: %w", err)
+	}
+	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s", agentVersions.Codex, agentVersions.Kimi)
 	migrationPort, err := selectLoopbackPort(h.cfg.MigrationPortStart, h.cfg.MigrationPortTries)
 	if err != nil {
 		return fmt.Errorf("select migration port: %w", err)
@@ -193,6 +199,7 @@ func (h *Host) initialize(ctx context.Context) error {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
 	}
+	checks = append(checks, "codex-cli", "kimi-cli")
 	stats, err := h.job.Stats()
 	if err != nil {
 		return err
@@ -577,7 +584,7 @@ func (h *Host) environment() []string {
 	for key, value := range overrides {
 		result = append(result, key+"="+value)
 	}
-	return result
+	return agentcli.PrependPath(result, agentcli.BinFromAionReleases(h.cfg.ReleasesRoot))
 }
 
 func isSensitiveEnvironmentName(name string) bool {

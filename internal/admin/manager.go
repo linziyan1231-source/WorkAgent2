@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"aionuiportal/internal/adminipc"
+	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/auth"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/instance"
@@ -411,6 +412,12 @@ func (m *Manager) VerifyACLs(ctx context.Context) []error {
 	} else if err := winutil.VerifyTreeACL(verified.Path, winutil.SharedReadOnlyPolicy()); err != nil {
 		failures = append(failures, err)
 	}
+	agentRoot := agentcli.RootFromAionReleases(m.Config.ReleasesRoot)
+	if _, err := agentcli.VerifyCurrent(agentRoot); err != nil {
+		failures = append(failures, fmt.Errorf("shared agent CLI release: %w", err))
+	} else if err := winutil.VerifyTreeACL(agentRoot, winutil.SharedReadOnlyPolicy()); err != nil {
+		failures = append(failures, fmt.Errorf("shared agent CLI ACL: %w", err))
+	}
 	users, err := m.Store.ListUsers(ctx)
 	if err != nil {
 		return append(failures, err)
@@ -486,6 +493,12 @@ func (m *Manager) ApplyACLs(ctx context.Context) []error {
 		if err := winutil.ApplyTreeACL(verified.Path, winutil.SharedReadOnlyPolicy()); err != nil {
 			failures = append(failures, err)
 		}
+	}
+	agentRoot := agentcli.RootFromAionReleases(m.Config.ReleasesRoot)
+	if err := winutil.ApplyTreeACL(agentRoot, winutil.SharedReadOnlyPolicy()); err != nil {
+		failures = append(failures, fmt.Errorf("shared agent CLI ACL: %w", err))
+	} else if _, err := agentcli.VerifyCurrent(agentRoot); err != nil {
+		failures = append(failures, fmt.Errorf("shared agent CLI release: %w", err))
 	}
 	users, err := m.Store.ListUsers(ctx)
 	if err != nil {

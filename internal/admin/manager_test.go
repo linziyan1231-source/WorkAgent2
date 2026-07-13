@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/winutil"
@@ -38,6 +39,28 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	}
 	current := filepath.Join(shared, "current.json")
 	if err := release.Activate(installed, current, filepath.Join(shared, "previous.json")); err != nil {
+		t.Fatal(err)
+	}
+	agentRoot := agentcli.RootFromAionReleases(releases)
+	agentReleaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
+	agentRelease := filepath.Join(agentRoot, "releases", agentReleaseID)
+	for name, body := range map[string]string{agentcli.CodexRelativePath: "codex", agentcli.KimiRelativePath: "kimi"} {
+		path := filepath.Join(agentRelease, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agentManifest, err := agentcli.BuildManifest(agentRelease, agentReleaseID, "0.142.5", "1.38.0", "3.13.13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agentcli.WriteManifest(agentRelease, agentManifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agentcli.Activate(agentRoot, agentReleaseID); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(program, 0o700); err != nil {
@@ -86,7 +109,7 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if failures := manager.VerifyACLs(context.Background()); len(failures) != 0 {
 		t.Fatalf("ACL verification failures: %v", failures)
 	}
-	for _, path := range []string{configPath, shared, releases, current} {
+	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease} {
 		policy := winutil.SharedReadOnlyPolicy()
 		if path == configPath {
 			policy = winutil.ServicePrivatePolicy(identity.SID)

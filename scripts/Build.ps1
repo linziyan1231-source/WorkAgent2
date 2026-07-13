@@ -75,6 +75,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "AionUiUserHost build failed" }
     & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'portal.exe') ./cmd/portal
     if ($LASTEXITCODE -ne 0) { throw "Portal administrator CLI build failed" }
+    & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionAgentCli.exe') ./cmd/aion-agent-cli
+    if ($LASTEXITCODE -ne 0) { throw "Shared agent CLI launcher build failed" }
 
     $files = @{}
     Get-ChildItem -LiteralPath $bin -File | Sort-Object Name | ForEach-Object {

@@ -2,7 +2,12 @@ package userhost
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"aionuiportal/internal/agentcli"
+	"aionuiportal/internal/config"
 )
 
 func TestInspectAgentActivityAcceptsCapturedEmptyResponse(t *testing.T) {
@@ -97,5 +102,28 @@ func TestSensitiveEnvironmentNamesAreRemoved(t *testing.T) {
 	}
 	if isSensitiveEnvironmentName("PATH") {
 		t.Fatal("PATH was classified as sensitive")
+	}
+}
+
+func TestEnvironmentPrependsSharedAgentCLIsAndKeepsPrivateCodexHome(t *testing.T) {
+	root := t.TempDir()
+	host := Host{cfg: config.UserHost{ReleasesRoot: filepath.Join(root, "AionUiWebShared", "releases")}, dirs: privateDirs{
+		Profile: filepath.Join(root, "profile"), AppData: filepath.Join(root, "profile", "AppData", "Roaming"),
+		LocalAppData: filepath.Join(root, "profile", "AppData", "Local"), Temp: filepath.Join(root, "temp"), Data: filepath.Join(root, "data"),
+		Logs: filepath.Join(root, "logs"), Cache: filepath.Join(root, "cache"), Workspace: filepath.Join(root, "workspace"), Config: filepath.Join(root, "config"),
+	}}
+	environment := host.environment()
+	values := make(map[string]string)
+	for _, entry := range environment {
+		if index := strings.IndexByte(entry, '='); index >= 0 {
+			values[strings.ToUpper(entry[:index])] = entry[index+1:]
+		}
+	}
+	wantBin := agentcli.BinFromAionReleases(host.cfg.ReleasesRoot)
+	if segments := filepath.SplitList(values["PATH"]); len(segments) == 0 || !strings.EqualFold(filepath.Clean(segments[0]), filepath.Clean(wantBin)) {
+		t.Fatalf("shared agent CLI bin is not first in PATH: %q", values["PATH"])
+	}
+	if values["CODEX_HOME"] != filepath.Join(host.dirs.Config, "codex") {
+		t.Fatalf("CODEX_HOME is not private: %q", values["CODEX_HOME"])
 	}
 }

@@ -18,7 +18,7 @@ if ($manifest.format_version -ne 1 -or [string]$manifest.aionui_version -cne $Ai
 }
 
 if ($BinariesDirectory) {
-    foreach ($name in @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe')) {
+    foreach ($name in @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionAgentCli.exe')) {
         $path = Join-Path $BinariesDirectory $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Built binary is missing: $path" }
         $entry = $manifest.binaries.PSObject.Properties[$name].Value
