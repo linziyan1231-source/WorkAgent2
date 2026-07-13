@@ -150,6 +150,13 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	dbPath := filepath.Join(h.dirs.Data, "aionui-backend.db")
+	agentDefaultsApplied, err := applyInitialAgentDefaults(ctx, dbPath, filepath.Join(h.dirs.Config, agentDefaultsMarkerName), time.Now())
+	if err != nil {
+		return err
+	}
+	if agentDefaultsApplied {
+		h.log.Printf("Initialized AionUi agents with only Codex and Kimi enabled")
+	}
 	username, password, err := rotateInternalCredentials(ctx, dbPath, time.Now())
 	if err != nil {
 		return err
