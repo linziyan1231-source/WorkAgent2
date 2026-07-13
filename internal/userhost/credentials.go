@@ -16,7 +16,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const internalBcryptCost = 12
+const (
+	internalBcryptCost = 12
+	preferredLanguage  = "zh-CN"
+)
 
 var expectedUserColumns = []string{"id", "username", "email", "password_hash", "avatar_path", "jwt_secret", "created_at", "updated_at", "last_login"}
 
@@ -91,6 +94,15 @@ func rotateInternalCredentials(ctx context.Context, dbPath string, now time.Time
 	changed, err := result.RowsAffected()
 	if err != nil || changed != 1 {
 		return fail(errors.New("internal AionCore credential update did not affect exactly one row"))
+	}
+	result, err = tx.ExecContext(ctx, `INSERT INTO system_settings(id,language,updated_at) VALUES(1,?,?)
+ON CONFLICT(id) DO UPDATE SET language=excluded.language,updated_at=excluded.updated_at`, preferredLanguage, now.UnixMilli())
+	if err != nil {
+		return fail(fmt.Errorf("set preferred AionUi language: %w", err))
+	}
+	changed, err = result.RowsAffected()
+	if err != nil || changed != 1 {
+		return fail(errors.New("preferred AionUi language update did not affect exactly one row"))
 	}
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit internal AionCore credential rotation: %w", err))
