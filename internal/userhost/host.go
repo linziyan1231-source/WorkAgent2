@@ -96,6 +96,9 @@ func (h *Host) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := winutil.VerifyTreeACL(h.cfg.DataRoot, winutil.PrivateTreePolicy(h.cfg.WindowsSID)); err != nil {
+		return fmt.Errorf("verify private user tree before sandbox launch: %w", err)
+	}
 	if err := winutil.RequireCurrentTokenOutsideCodexSandboxGroup(); err != nil {
 		return err
 	}
@@ -593,7 +596,8 @@ func (h *Host) environment() []string {
 		"HOME": h.dirs.Profile, "USERPROFILE": h.dirs.Profile, "APPDATA": h.dirs.AppData, "LOCALAPPDATA": h.dirs.LocalAppData,
 		"TEMP": h.dirs.Temp, "TMP": h.dirs.Temp, "AIONUI_DATA_DIR": h.dirs.Data, "AIONUI_LOG_DIR": h.dirs.Logs,
 		"AIONUI_CACHE_DIR": h.dirs.Cache, "AIONUI_WORK_DIR": h.dirs.Workspace, "CODEX_HOME": filepath.Join(h.dirs.Config, "codex"),
-		"CLAUDE_CONFIG_DIR": filepath.Join(h.dirs.Config, "claude"), "GEMINI_CLI_HOME": filepath.Join(h.dirs.Config, "gemini"),
+		agentcli.PerUserSandboxEnvironment: "1",
+		"CLAUDE_CONFIG_DIR":                filepath.Join(h.dirs.Config, "claude"), "GEMINI_CLI_HOME": filepath.Join(h.dirs.Config, "gemini"),
 		"XDG_CONFIG_HOME": h.dirs.Config, "XDG_CACHE_HOME": h.dirs.Cache, "XDG_DATA_HOME": h.dirs.Data,
 		"npm_config_cache": filepath.Join(h.dirs.Cache, "npm"), "BUN_INSTALL_CACHE_DIR": filepath.Join(h.dirs.Cache, "bun"),
 	}

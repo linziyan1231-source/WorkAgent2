@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/store"
+	"aionuiportal/internal/winutil"
 )
 
 const (
@@ -48,6 +50,7 @@ type Server struct {
 	now          func() time.Time
 	cookieName   string
 	cookieSecure bool
+	profilePath  func(string) (string, error)
 }
 
 func New(cfg config.Portal, data *store.Store, instances InstanceManager, staticDir string, logger *log.Logger) (*Server, error) {
@@ -74,7 +77,20 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, static
 		cookieName = sessionCookie
 	}
 	return &Server{cfg: cfg, store: data, instances: instances, static: static, public: public, dummyHash: dummy, logger: logger, now: time.Now,
-		cookieName: cookieName, cookieSecure: cfg.UsesTLS()}, nil
+		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID}, nil
+}
+
+func (s *Server) userFilesystemRoot(sid string) (string, error) {
+	profile, err := s.profilePath(sid)
+	if err != nil {
+		return "", err
+	}
+	profile = filepath.Clean(profile)
+	profilesRoot := filepath.Clean(s.cfg.UserProfilesRoot)
+	if !filepath.IsAbs(profile) || !strings.EqualFold(filepath.Dir(profile), profilesRoot) || strings.EqualFold(profile, profilesRoot) {
+		return "", fmt.Errorf("Windows profile %s for %s is outside %s", profile, sid, profilesRoot)
+	}
+	return filepath.Join(profile, config.UserDataDirectoryName), nil
 }
 
 func (s *Server) Handler() http.Handler {

@@ -154,6 +154,60 @@ func TestWrongPasswordNeverStartsInstance(t *testing.T) {
 	}
 }
 
+func TestFilesystemBrowseStartsAtPrivateRootAndRejectsEscape(t *testing.T) {
+	root := `C:\Users\user-1b4f0e98\AionUiPortal`
+	initial := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path=&showFiles=true", nil)
+	if err := constrainFilesystemBrowse(initial, root); err != nil {
+		t.Fatal(err)
+	}
+	if got := initial.URL.Query().Get("path"); !strings.EqualFold(got, root) {
+		t.Fatalf("initial browse path=%q, want %q", got, root)
+	}
+
+	allowed := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`\\?\C:\Users\user-1b4f0e98\AionUiPortal\workspace`), nil)
+	if err := constrainFilesystemBrowse(allowed, root); err != nil {
+		t.Fatalf("private descendant was rejected: %v", err)
+	}
+	if got := allowed.URL.Query().Get("path"); got != `C:\Users\user-1b4f0e98\AionUiPortal\workspace` {
+		t.Fatalf("verbatim path normalized to %q", got)
+	}
+
+	for _, outside := range []string{
+		`C:\Users\user-4194d170`,
+		`C:\Users\user-1b4f0e98\AionUiPortal-other`,
+		`C:\Users\user-1b4f0e98\AionUiPortal\..\Documents`,
+		`workspace`,
+	} {
+		request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(outside), nil)
+		if err := constrainFilesystemBrowse(request, root); err == nil {
+			t.Fatalf("outside browse path was accepted: %s", outside)
+		}
+	}
+}
+
+func TestProxyRejectsFilesystemBrowseEscapeBeforeStartingInstance(t *testing.T) {
+	server, data, instances := testServer(t)
+	server.profilePath = func(sid string) (string, error) {
+		if sid != testSID1 {
+			return "", fmt.Errorf("unexpected SID %s", sid)
+		}
+		return `C:\Users\user-1b4f0e98`, nil
+	}
+	token := createPortalSession(t, data)
+	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`C:\Users\user-4194d170`), nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("outside browse status=%d body=%s", response.Code, response.Body.String())
+	}
+	instances.mu.Lock()
+	defer instances.mu.Unlock()
+	if len(instances.beginSIDs) != 0 || len(instances.ensureSIDs) != 0 || len(instances.routeSIDs) != 0 {
+		t.Fatalf("outside browse reached UserHost: begin=%v ensure=%v route=%v", instances.beginSIDs, instances.ensureSIDs, instances.routeSIDs)
+	}
+}
+
 func TestRendererRootAndHashRouteFallbackDoNotRedirect(t *testing.T) {
 	server, _, _ := testServer(t)
 	for _, target := range []string{"https://portal.example.test/", "https://portal.example.test/conversations/123"} {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"aionuiportal/internal/instance"
@@ -20,6 +21,17 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
 		return
+	}
+	if r.URL.Path == "/api/fs/browse" {
+		root, err := s.userFilesystemRoot(session.User.WindowsSID)
+		if err != nil {
+			s.internalError(w, "resolve user filesystem root", err)
+			return
+		}
+		if err := constrainFilesystemBrowse(r, root); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "File browsing is limited to your private AionUiPortal directory"})
+			return
+		}
 	}
 	webSocket := isUpgrade(r)
 	finish, err := s.instances.BeginRequest(session.User.WindowsSID, webSocket)
@@ -73,6 +85,44 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		FlushInterval: -1,
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func constrainFilesystemBrowse(request *http.Request, root string) error {
+	if request.Method != http.MethodGet {
+		return errors.New("filesystem browse must use GET")
+	}
+	query := request.URL.Query()
+	values, present := query["path"]
+	if !present || len(values) != 1 {
+		return errors.New("filesystem browse requires one path")
+	}
+	requested := strings.TrimSpace(values[0])
+	if requested == "" {
+		query.Set("path", filepath.Clean(root))
+		request.URL.RawQuery = query.Encode()
+		return nil
+	}
+	requested = stripWindowsVerbatimPrefix(requested)
+	if !filepath.IsAbs(requested) {
+		return errors.New("filesystem browse path must be absolute")
+	}
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(requested))
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("filesystem browse path is outside the private root")
+	}
+	query.Set("path", filepath.Clean(requested))
+	request.URL.RawQuery = query.Encode()
+	return nil
+}
+
+func stripWindowsVerbatimPrefix(path string) string {
+	if strings.HasPrefix(path, `\\?\UNC\`) {
+		return `\\` + path[len(`\\?\UNC\`):]
+	}
+	if strings.HasPrefix(path, `\\?\`) {
+		return path[len(`\\?\`):]
+	}
+	return path
 }
 
 func requiresOrigin(r *http.Request) bool {

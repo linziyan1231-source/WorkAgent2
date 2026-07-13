@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const PerUserSandboxEnvironment = "AIONUI_PER_USER_SANDBOX"
+
 type LauncherSpec struct {
 	Target string
 	Args   []string
@@ -36,6 +38,9 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 	switch name {
 	case "codex":
 		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(CodexRelativePath))
+		if environmentValue(spec.Env, PerUserSandboxEnvironment) == "1" {
+			spec.Args = append([]string{"-c", `windows.sandbox="unelevated"`}, spec.Args...)
+		}
 		spec.Env = setEnvironment(spec.Env, "CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(verified.Path, "codex"))
 		spec.Env = prependEnvironmentPath(spec.Env, filepath.Join(verified.Path, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-path"))
 	case "kimi":

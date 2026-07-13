@@ -37,6 +37,15 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if environmentValue(codex.Env, "CODEX_HOME") != `C:\Users\user-87eba76e\AionUiPortal\config\codex` {
 		t.Fatal("per-user CODEX_HOME was overwritten")
 	}
+	perUserEnvironment := append(append([]string(nil), environment...), PerUserSandboxEnvironment+"=1")
+	perUserCodex, err := Spec(filepath.Join(root, "bin", "codex.exe"), arguments, perUserEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPerUserArgs := append([]string{"-c", `windows.sandbox="unelevated"`}, arguments...)
+	if strings.Join(perUserCodex.Args, "|") != strings.Join(wantPerUserArgs, "|") {
+		t.Fatalf("per-user Codex sandbox override was not injected: %+v", perUserCodex.Args)
+	}
 
 	kimi, err := Spec(filepath.Join(root, "bin", "kimi.exe"), []string{"--version"}, environment)
 	if err != nil {
