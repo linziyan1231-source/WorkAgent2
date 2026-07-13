@@ -44,6 +44,7 @@ type Host struct {
 	release release.Verified
 	dirs    privateDirs
 	job     *winutil.Job
+	sandbox *winutil.RestrictedToken
 	log     *privateLog
 	oauth   *oauthManager
 
@@ -95,6 +96,14 @@ func (h *Host) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := winutil.RequireCurrentTokenOutsideCodexSandboxGroup(); err != nil {
+		return err
+	}
+	h.sandbox, err = winutil.NewCurrentUserRestrictedToken(h.cfg.WindowsSID)
+	if err != nil {
+		return fmt.Errorf("create per-user process sandbox: %w", err)
+	}
+	defer h.sandbox.Close()
 	h.oauth = newOAuthManager(filepath.Join(h.dirs.Data, "aionui-backend.db"), nil, time.Now, false)
 	h.log, err = openPrivateLog(h.dirs.Logs)
 	if err != nil {
@@ -137,7 +146,7 @@ func (h *Host) initialize(ctx context.Context) error {
 	webPath := filepath.Join(h.release.Path, "aionui-web.exe")
 	staticPath := filepath.Join(h.release.Path, "static")
 	env := h.environment()
-	agentVersions, err := agentcli.Probe(ctx, agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), env)
+	agentVersions, err := agentcli.Probe(ctx, agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), env, h.sandbox.Apply)
 	if err != nil {
 		return fmt.Errorf("verify shared agent CLIs: %w", err)
 	}
@@ -171,6 +180,9 @@ func (h *Host) initialize(ctx context.Context) error {
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
+	if err := h.sandbox.Apply(cmd); err != nil {
+		return fmt.Errorf("sandbox aionui-web.exe: %w", err)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -181,6 +193,11 @@ func (h *Host) initialize(ctx context.Context) error {
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start shared aionui-web.exe: %w", err)
+	}
+	if err := h.sandbox.VerifyProcess(uint32(cmd.Process.Pid), h.cfg.WindowsSID); err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return err
 	}
 	h.web = cmd
 	h.webDone = make(chan error, 1)
@@ -206,6 +223,11 @@ func (h *Host) initialize(ctx context.Context) error {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
 	}
+	if err := h.sandbox.VerifyProcess(corePID, h.cfg.WindowsSID); err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
+	checks = append(checks, "per-user-restricted-token")
 	checks = append(checks, "codex-cli", "kimi-cli")
 	stats, err := h.job.Stats()
 	if err != nil {
@@ -231,6 +253,9 @@ func (h *Host) runMigrations(ctx context.Context, corePath string, port int, env
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
+	if err := h.sandbox.Apply(cmd); err != nil {
+		return fmt.Errorf("sandbox AionCore migration process: %w", err)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -241,6 +266,11 @@ func (h *Host) runMigrations(ctx context.Context, corePath string, port int, env
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start AionCore migration process: %w", err)
+	}
+	if err := h.sandbox.VerifyProcess(uint32(cmd.Process.Pid), h.cfg.WindowsSID); err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return err
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()

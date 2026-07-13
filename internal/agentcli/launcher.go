@@ -61,7 +61,7 @@ func RunLauncher(executablePath string, arguments []string) error {
 	return command.Run()
 }
 
-func Probe(ctx context.Context, binDirectory string, environment []string) (Versions, error) {
+func Probe(ctx context.Context, binDirectory string, environment []string, prepare func(*exec.Cmd) error) (Versions, error) {
 	if !filepath.IsAbs(binDirectory) {
 		return Versions{}, errors.New("agent CLI bin directory must be absolute")
 	}
@@ -89,6 +89,12 @@ func Probe(ctx context.Context, binDirectory string, environment []string) (Vers
 		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		command := exec.CommandContext(probeCtx, resolved, "--version")
 		command.Env = environment
+		if prepare != nil {
+			if err := prepare(command); err != nil {
+				cancel()
+				return Versions{}, fmt.Errorf("prepare %s CLI version probe: %w", check.name, err)
+			}
+		}
 		output, commandErr := command.CombinedOutput()
 		cancel()
 		if commandErr != nil {
