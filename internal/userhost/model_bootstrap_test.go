@@ -59,7 +59,7 @@ func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testi
 		mu.Lock()
 		defer mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/api/providers" {
-			_ = json.NewEncoder(w).Encode(providers)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": providers})
 			return
 		}
 		var incoming aionProvider

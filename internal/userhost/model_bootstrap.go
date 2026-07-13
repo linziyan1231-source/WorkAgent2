@@ -231,8 +231,8 @@ func (h *Host) applyPendingModelBootstrap(ctx context.Context, pending *pendingM
 }
 
 func (a *aionClient) upsertManagedProviders(ctx context.Context, desired []aionProvider) error {
-	var current []aionProvider
-	if err := a.getJSON(ctx, "/api/providers", &current); err != nil {
+	current, err := a.listProviders(ctx)
+	if err != nil {
 		return err
 	}
 	existing := make(map[string]aionProvider, len(current))
@@ -251,8 +251,8 @@ func (a *aionClient) upsertManagedProviders(ctx context.Context, desired []aionP
 			return err
 		}
 	}
-	var verified []aionProvider
-	if err := a.getJSON(ctx, "/api/providers", &verified); err != nil {
+	verified, err := a.listProviders(ctx)
+	if err != nil {
 		return err
 	}
 	byID := make(map[string][]aionProvider, len(verified))
@@ -266,6 +266,20 @@ func (a *aionClient) upsertManagedProviders(ctx context.Context, desired []aionP
 		}
 	}
 	return nil
+}
+
+func (a *aionClient) listProviders(ctx context.Context) ([]aionProvider, error) {
+	var response struct {
+		Success bool           `json:"success"`
+		Data    []aionProvider `json:"data"`
+	}
+	if err := a.getJSON(ctx, "/api/providers", &response); err != nil {
+		return nil, err
+	}
+	if !response.Success || response.Data == nil {
+		return nil, errors.New("Aion provider list response was unsuccessful or incomplete")
+	}
+	return response.Data, nil
 }
 
 func sameProvider(actual, expected aionProvider) bool {
