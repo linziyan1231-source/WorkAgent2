@@ -1,0 +1,6 @@
+# Local Go SDKs, caches, and downloaded toolchains
+/.tools/go/
+/.tools/go[0-9]*/
+/.tools/gocache/
+/.tools/gomodcache/
+/.tools/downloads/go*.zip
