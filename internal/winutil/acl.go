@@ -101,6 +101,7 @@ func ApplyTreeACL(root string, policy ACLPolicy) error {
 	if err := validateACLPolicy(policy); err != nil {
 		return err
 	}
+	cleanRoot := filepath.Clean(root)
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -108,7 +109,16 @@ func ApplyTreeACL(root string, policy ACLPolicy) error {
 		if reparse, err := isReparsePoint(path); err != nil {
 			return err
 		} else if reparse {
-			return fmt.Errorf("refuse to apply ACL through reparse point: %s", path)
+			if !policy.DescendantsMayInherit || strings.EqualFold(filepath.Clean(path), cleanRoot) {
+				return fmt.Errorf("refuse to apply ACL through reparse point: %s", path)
+			}
+			if err := validateContainedReparsePoint(cleanRoot, path); err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		return applyPathACL(path, entry.IsDir(), policy)
 	})
@@ -122,14 +132,23 @@ func VerifyTreeACL(root string, policy ACLPolicy) error {
 		return err
 	}
 	cleanRoot := filepath.Clean(root)
-	return filepath.WalkDir(root, func(path string, _ os.DirEntry, walkErr error) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if reparse, err := isReparsePoint(path); err != nil {
 			return err
 		} else if reparse {
-			return fmt.Errorf("ACL tree contains reparse point: %s", path)
+			if !policy.DescendantsMayInherit || strings.EqualFold(filepath.Clean(path), cleanRoot) {
+				return fmt.Errorf("ACL tree contains reparse point: %s", path)
+			}
+			if err := validateContainedReparsePoint(cleanRoot, path); err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		requireProtected := !policy.DescendantsMayInherit || strings.EqualFold(filepath.Clean(path), cleanRoot)
 		if err := verifyPathACL(path, policy, requireProtected); err != nil {
@@ -137,6 +156,23 @@ func VerifyTreeACL(root string, policy ACLPolicy) error {
 		}
 		return nil
 	})
+}
+
+func validateContainedReparsePoint(root, path string) error {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve private ACL root: %w", err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve private-tree reparse point %s: %w", path, err)
+	}
+	rootPrefix := filepath.Clean(resolvedRoot) + string(filepath.Separator)
+	target := filepath.Clean(resolvedTarget)
+	if !strings.EqualFold(target, filepath.Clean(resolvedRoot)) && !strings.HasPrefix(strings.ToLower(target), strings.ToLower(rootPrefix)) {
+		return fmt.Errorf("private-tree reparse point escapes its protected root: %s -> %s", path, resolvedTarget)
+	}
+	return nil
 }
 
 func applyPathACL(path string, directory bool, policy ACLPolicy) error {

@@ -21,8 +21,9 @@ const (
 	CurrentName       = "current.json"
 	PreviousName      = "previous.json"
 
-	CodexRelativePath = "codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
-	KimiRelativePath  = "kimi-bin/kimi.exe"
+	CodexRelativePath      = "codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+	KimiRelativePath       = "kimi-tool/Scripts/python.exe"
+	KimiModuleRelativePath = "kimi-tool/Lib/site-packages/kimi_cli/__main__.py"
 )
 
 type File struct {
@@ -264,7 +265,7 @@ func loadCurrentFast(root string) (Verified, error) {
 	if err := pointerMatchesManifest(pointer, manifest, filepath.Join(releasePath, ManifestName)); err != nil {
 		return Verified{}, err
 	}
-	for _, name := range []string{CodexRelativePath, KimiRelativePath} {
+	for _, name := range []string{CodexRelativePath, KimiRelativePath, KimiModuleRelativePath} {
 		entry := manifest.Files[name]
 		path := filepath.Join(releasePath, filepath.FromSlash(name))
 		info, err := os.Lstat(path)
@@ -332,7 +333,7 @@ func validateManifest(manifest Manifest) error {
 		!validVersion(manifest.KimiVersion) || !validVersion(manifest.PythonVersion) || len(manifest.Files) == 0 {
 		return errors.New("agent CLI release manifest metadata is invalid")
 	}
-	for _, critical := range []string{CodexRelativePath, KimiRelativePath} {
+	for _, critical := range []string{CodexRelativePath, KimiRelativePath, KimiModuleRelativePath} {
 		if _, ok := manifest.Files[critical]; !ok {
 			return fmt.Errorf("agent CLI release manifest is missing critical file %s", critical)
 		}

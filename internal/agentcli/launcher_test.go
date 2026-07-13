@@ -42,7 +42,8 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kimi.Target != filepath.Join(releasePath, filepath.FromSlash(KimiRelativePath)) || environmentValue(kimi.Env, "PYTHONDONTWRITEBYTECODE") != "1" {
+	if kimi.Target != filepath.Join(releasePath, filepath.FromSlash(KimiRelativePath)) || strings.Join(kimi.Args, "|") != "-m|kimi_cli|--version" ||
+		environmentValue(kimi.Env, "PYTHONDONTWRITEBYTECODE") != "1" {
 		t.Fatalf("unexpected Kimi launcher spec: %+v", kimi)
 	}
 	if _, err := Spec(filepath.Join(root, "bin", "unknown.exe"), nil, environment); err == nil {
@@ -56,5 +57,28 @@ func TestPrependPathIsCaseInsensitiveAndIdempotent(t *testing.T) {
 	updated := PrependPath(environment, directory)
 	if got := environmentValue(updated, "PATH"); got != `C:\Windows;C:\PROGRAM FILES\AIONAGENTCLISHARED\BIN` {
 		t.Fatalf("existing PATH entry was duplicated: %s", got)
+	}
+}
+
+func TestExecutableFromPathUsesFirstRealExecutable(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	if err := os.MkdirAll(first, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(second, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(second, "codex.exe")
+	if err := os.WriteFile(want, []byte("launcher"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := executableFromPath([]string{"PATH=" + strings.Join([]string{first, second}, string(os.PathListSeparator))}, "codex.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != want {
+		t.Fatalf("PATH resolved %s, want %s", resolved, want)
 	}
 }

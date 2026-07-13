@@ -56,7 +56,10 @@ $packedFiles = [ordered]@{}
 $packedRoot = [IO.Path]::GetFullPath($packedDirectory).TrimEnd('\') + '\'
 Get-ChildItem -LiteralPath $packedDirectory -Force -File -Recurse | Sort-Object FullName | ForEach-Object {
     $relative = ([IO.Path]::GetFullPath($_.FullName).Substring($packedRoot.Length)).Replace('\', '/')
-    $packedFiles[$relative] = @{ size = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+    $packedFiles[$relative] = [ordered]@{
+        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        size = $_.Length
+    }
 }
 
 $env:GOTOOLCHAIN = 'local'
@@ -78,11 +81,19 @@ try {
     & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionAgentCli.exe') ./cmd/aion-agent-cli
     if ($LASTEXITCODE -ne 0) { throw "Shared agent CLI launcher build failed" }
 
-    $files = @{}
-    Get-ChildItem -LiteralPath $bin -File | Sort-Object Name | ForEach-Object {
-        $files[$_.Name] = @{
-            size = $_.Length
-            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    foreach ($temporary in @(Get-ChildItem -LiteralPath $bin -File -Filter '*.exe~')) {
+        Remove-Item -LiteralPath $temporary.FullName -Force
+    }
+    $binaryNames = @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionAgentCli.exe')
+    $unexpected = @(Get-ChildItem -LiteralPath $bin -File | Where-Object { $_.Name -notin $binaryNames })
+    if ($unexpected.Count -ne 0) { throw "Unexpected build artifact: $($unexpected[0].FullName)" }
+    $files = [ordered]@{}
+    foreach ($name in $binaryNames) {
+        $path = Join-Path $bin $name
+        $item = Get-Item -LiteralPath $path -Force
+        $files[$name] = [ordered]@{
+            sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            size = $item.Length
         }
     }
     $manifest = [ordered]@{

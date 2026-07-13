@@ -18,7 +18,13 @@ if ($manifest.format_version -ne 1 -or [string]$manifest.aionui_version -cne $Ai
 }
 
 if ($BinariesDirectory) {
-    foreach ($name in @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionAgentCli.exe')) {
+    $binaryNames = @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionAgentCli.exe')
+    $actualBinaryNames = @(Get-ChildItem -LiteralPath $BinariesDirectory -File | ForEach-Object { $_.Name })
+    $unexpectedBinaryNames = @($actualBinaryNames | Where-Object { $_ -notin $binaryNames })
+    if ($actualBinaryNames.Count -ne $binaryNames.Count -or $unexpectedBinaryNames.Count -ne 0) {
+        throw "Binaries directory must contain exactly the four product executables; found: $($actualBinaryNames -join ', ')"
+    }
+    foreach ($name in $binaryNames) {
         $path = Join-Path $BinariesDirectory $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Built binary is missing: $path" }
         $entry = $manifest.binaries.PSObject.Properties[$name].Value

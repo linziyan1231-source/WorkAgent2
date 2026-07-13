@@ -40,6 +40,7 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 		spec.Env = prependEnvironmentPath(spec.Env, filepath.Join(verified.Path, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-path"))
 	case "kimi":
 		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiRelativePath))
+		spec.Args = append([]string{"-m", "kimi_cli"}, spec.Args...)
 		spec.Env = setEnvironment(spec.Env, "PYTHONDONTWRITEBYTECODE", "1")
 	default:
 		return LauncherSpec{}, fmt.Errorf("unsupported shared agent CLI launcher name %q", name)
@@ -78,8 +79,15 @@ func Probe(ctx context.Context, binDirectory string, environment []string) (Vers
 	}
 	versions := Versions{Codex: verified.Manifest.CodexVersion, Kimi: verified.Manifest.KimiVersion}
 	for _, check := range checks {
+		resolved, err := executableFromPath(environment, filepath.Base(check.path))
+		if err != nil {
+			return Versions{}, fmt.Errorf("%s CLI PATH lookup failed: %w", check.name, err)
+		}
+		if !strings.EqualFold(filepath.Clean(resolved), filepath.Clean(check.path)) {
+			return Versions{}, fmt.Errorf("%s CLI PATH resolved to %s instead of protected launcher %s", check.name, resolved, check.path)
+		}
 		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		command := exec.CommandContext(probeCtx, check.path, "--version")
+		command := exec.CommandContext(probeCtx, resolved, "--version")
 		command.Env = environment
 		output, commandErr := command.CombinedOutput()
 		cancel()
@@ -91,6 +99,23 @@ func Probe(ctx context.Context, binDirectory string, environment []string) (Vers
 		}
 	}
 	return versions, nil
+}
+
+func executableFromPath(environment []string, name string) (string, error) {
+	for _, directory := range filepath.SplitList(environmentValue(environment, "PATH")) {
+		if directory == "" {
+			continue
+		}
+		candidate := filepath.Join(directory, name)
+		info, err := os.Stat(candidate)
+		if err == nil && info.Mode().IsRegular() {
+			return candidate, nil
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("%s was not found in PATH", name)
 }
 
 func PrependPath(environment []string, directory string) []string {

@@ -65,3 +65,48 @@ func TestSharedReadOnlyPolicyRejectsUsersWrite(t *testing.T) {
 		t.Fatal("read-only verifier accepted Users full control")
 	}
 }
+
+func TestPrivateTreeAllowsOnlyContainedDescendantReparsePoints(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "private")
+	target := filepath.Join(root, "data", "builtin-skills", "cron")
+	linkDirectory := filepath.Join(root, "data", "conversations", "session", ".codex", "skills")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linkDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contained := filepath.Join(linkDirectory, "cron")
+	if err := os.Symlink(target, contained); err != nil {
+		t.Skipf("directory symlink creation is unavailable: %v", err)
+	}
+	policy := PrivateTreePolicy(identity.SID)
+	if err := ApplyTreeACL(root, policy); err != nil {
+		t.Fatalf("contained private-tree skill link was rejected: %v", err)
+	}
+	if err := VerifyTreeACL(root, policy); err != nil {
+		t.Fatalf("contained private-tree skill link failed ACL verification: %v", err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	escaping := filepath.Join(linkDirectory, "escaping")
+	if err := os.Symlink(outside, escaping); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyTreeACL(root, policy); err == nil {
+		t.Fatal("private-tree link escaping its protected root was accepted")
+	}
+	if err := VerifyTreeACL(root, policy); err == nil {
+		t.Fatal("escaping private-tree link passed ACL verification")
+	}
+	if err := VerifyTreeACL(root, SharedReadOnlyPolicy()); err == nil {
+		t.Fatal("shared immutable policy accepted a reparse point")
+	}
+}
