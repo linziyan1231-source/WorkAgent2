@@ -19,6 +19,7 @@ import (
 	"aionuiportal/internal/auth"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/kimi"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/winutil"
 	"golang.org/x/term"
@@ -46,7 +47,12 @@ func run(arguments []string) int {
 		return 1
 	}
 	defer manager.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	timeout := 10 * time.Minute
+	parsed := global.Args()
+	if len(parsed) >= 2 && parsed[0] == "kimi-oauth" && (parsed[1] == "seed-missing" || parsed[1] == "update-all") {
+		timeout = 60 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := dispatch(ctx, manager, global.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED: %v\n", err)
@@ -68,6 +74,8 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 		return taskCommand(ctx, manager, arguments[1:])
 	case "instance":
 		return instanceCommand(ctx, manager, arguments[1:])
+	case "kimi-oauth":
+		return kimiOAuthCommand(ctx, manager, arguments[1:])
 	case "limits":
 		return limitsCommand(ctx, manager, arguments[1:])
 	case "logs":
@@ -90,6 +98,153 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func kimiOAuthCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
+	if len(arguments) == 0 {
+		return errors.New("usage: portal --config <path> kimi-oauth <validate-source|seed|seed-missing|update-all> ...")
+	}
+	flags := newFlags("kimi-oauth " + arguments[0])
+	defaultSource, err := defaultKimiOAuthSource()
+	if err != nil {
+		return err
+	}
+	sourceOAuth := flags.String("source-oauth", defaultSource, "source Kimi Code OAuth JSON")
+	sourceConfig := flags.String("source-config", "", "source Kimi config.toml; defaults beside the OAuth credentials directory")
+	if err := flags.Parse(arguments[1:]); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(*sourceOAuth) {
+		return errors.New("--source-oauth must be an absolute path")
+	}
+	if *sourceConfig == "" {
+		*sourceConfig = filepath.Join(filepath.Dir(filepath.Dir(filepath.Clean(*sourceOAuth))), "config.toml")
+	}
+	if !filepath.IsAbs(*sourceConfig) {
+		return errors.New("--source-config must be an absolute path")
+	}
+	switch arguments[0] {
+	case "validate-source":
+		if flags.NArg() != 0 {
+			return errors.New("usage: portal --config <path> kimi-oauth validate-source [--source-oauth <path>] [--source-config <path>]")
+		}
+		if err := manager.ValidateKimiOAuthSource(ctx, *sourceOAuth, *sourceConfig); err != nil {
+			return err
+		}
+		fmt.Println("Kimi OAuth source and provider/model metadata: PASS")
+		return nil
+	case "seed":
+		if flags.NArg() != 1 {
+			return errors.New("usage: portal --config <path> kimi-oauth seed [--source-oauth <path>] [--source-config <path>] <portal-username>")
+		}
+		result, err := manager.SeedKimiOAuth(ctx, flags.Arg(0), *sourceOAuth, *sourceConfig)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("user=%s outcome=SEEDED sha256=%s restarted=%t\n", flags.Arg(0), result.SHA256, result.Restarted)
+		return nil
+	case "seed-missing", "update-all":
+		if flags.NArg() != 0 {
+			return fmt.Errorf("usage: portal --config <path> kimi-oauth %s [--source-oauth <path>] [--source-config <path>]", arguments[0])
+		}
+		return seedKimiOAuthUsers(ctx, manager, *sourceOAuth, *sourceConfig, arguments[0] == "seed-missing")
+	default:
+		return fmt.Errorf("unknown kimi-oauth subcommand %q", arguments[0])
+	}
+}
+
+func seedKimiOAuthUsers(ctx context.Context, manager *admin.Manager, sourceOAuth, sourceConfig string, missingOnly bool) error {
+	if err := manager.ValidateKimiOAuthSource(ctx, sourceOAuth, sourceConfig); err != nil {
+		return err
+	}
+	expectedHash, err := kimi.CredentialSHA256(sourceOAuth)
+	if err != nil {
+		return err
+	}
+	users, err := manager.Store.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	usernames := make([]string, 0, len(users))
+	for _, user := range users {
+		usernames = append(usernames, user.Username)
+	}
+	rows := executeKimiOAuthBatch(usernames, missingOnly, expectedHash,
+		func(username string) (bool, error) { return manager.HasKimiOAuth(ctx, username) },
+		func(username string) (admin.KimiOAuthSeedResult, error) {
+			return manager.SeedKimiOAuth(ctx, username, sourceOAuth, sourceConfig)
+		})
+	succeeded, skipped, failed := 0, 0, 0
+	for _, row := range rows {
+		switch row.Outcome {
+		case "SEEDED":
+			fmt.Printf("user=%s outcome=SEEDED sha256=%s restarted=%t\n", row.Username, row.SHA256, row.Restarted)
+			succeeded++
+		case "SKIP":
+			fmt.Printf("user=%s outcome=SKIP reason=%q\n", row.Username, row.Detail)
+			skipped++
+		default:
+			fmt.Printf("user=%s outcome=FAIL error=%q\n", row.Username, row.Detail)
+			failed++
+		}
+	}
+	if finalHash, err := kimi.CredentialSHA256(sourceOAuth); err != nil {
+		fmt.Printf("source outcome=FAIL error=%q\n", err)
+		failed++
+	} else if !strings.EqualFold(finalHash, expectedHash) {
+		fmt.Printf("source outcome=FAIL error=%q\n", "source Kimi OAuth changed during the batch")
+		failed++
+	}
+	fmt.Printf("Kimi OAuth batch summary: seeded=%d skipped=%d failed=%d\n", succeeded, skipped, failed)
+	if failed != 0 {
+		return fmt.Errorf("Kimi OAuth batch completed with %d failure(s)", failed)
+	}
+	return nil
+}
+
+type kimiOAuthBatchRow struct {
+	Username  string
+	Outcome   string
+	Detail    string
+	SHA256    string
+	Restarted bool
+}
+
+func executeKimiOAuthBatch(usernames []string, missingOnly bool, expectedHash string,
+	hasCredential func(string) (bool, error), seed func(string) (admin.KimiOAuthSeedResult, error)) []kimiOAuthBatchRow {
+	rows := make([]kimiOAuthBatchRow, 0, len(usernames))
+	for _, username := range usernames {
+		if missingOnly {
+			has, err := hasCredential(username)
+			if err != nil {
+				rows = append(rows, kimiOAuthBatchRow{Username: username, Outcome: "FAIL", Detail: err.Error()})
+				continue
+			}
+			if has {
+				rows = append(rows, kimiOAuthBatchRow{Username: username, Outcome: "SKIP", Detail: "valid Kimi OAuth already exists"})
+				continue
+			}
+		}
+		result, err := seed(username)
+		if err != nil {
+			rows = append(rows, kimiOAuthBatchRow{Username: username, Outcome: "FAIL", Detail: err.Error()})
+			continue
+		}
+		if !strings.EqualFold(result.SHA256, expectedHash) {
+			rows = append(rows, kimiOAuthBatchRow{Username: username, Outcome: "FAIL", Detail: "source Kimi OAuth changed during the batch"})
+			continue
+		}
+		rows = append(rows, kimiOAuthBatchRow{Username: username, Outcome: "SEEDED", SHA256: result.SHA256, Restarted: result.Restarted})
+	}
+	return rows
+}
+
+func defaultKimiOAuthSource() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve administrator profile for the default Kimi OAuth source: %w", err)
+	}
+	return filepath.Join(home, ".kimi", "credentials", "kimi-code.json"), nil
 }
 
 func userCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
@@ -602,5 +757,5 @@ func newFlags(name string) *flag.FlagSet {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|limits|logs|release|acl|readiness> ...")
+	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|kimi-oauth|limits|logs|release|acl|readiness> ...")
 }

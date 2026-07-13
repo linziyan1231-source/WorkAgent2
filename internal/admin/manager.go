@@ -17,6 +17,7 @@ import (
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/kimi"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/scheduler"
 	"aionuiportal/internal/store"
@@ -40,6 +41,12 @@ type UserStatus struct {
 	Requests    int
 	WebSockets  int
 	StatusError error
+}
+
+type KimiOAuthSeedResult struct {
+	SHA256    string
+	Output    string
+	Restarted bool
 }
 
 func Open(configPath string) (*Manager, error) {
@@ -143,6 +150,91 @@ func (m *Manager) ResetPortalPassword(ctx context.Context, username string, pass
 		return fmt.Errorf("Portal password was reset but its audit event could not be recorded: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) ValidateKimiOAuthSource(ctx context.Context, sourceOAuthPath, sourceConfigPath string) error {
+	pythonPath, err := m.kimiPythonPath()
+	if err != nil {
+		return err
+	}
+	return kimi.ValidateSource(ctx, sourceOAuthPath, sourceConfigPath, pythonPath, nil)
+}
+
+func (m *Manager) HasKimiOAuth(ctx context.Context, username string) (bool, error) {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return false, err
+	}
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return false, err
+	}
+	return kimi.HasCredential(filepath.Join(dataRoot, "profile", ".kimi", "credentials", "kimi-code.json"))
+}
+
+func (m *Manager) SeedKimiOAuth(ctx context.Context, username, sourceOAuthPath, sourceConfigPath string) (KimiOAuthSeedResult, error) {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return KimiOAuthSeedResult{}, err
+	}
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return KimiOAuthSeedResult{}, err
+	}
+	pythonPath, err := m.kimiPythonPath()
+	if err != nil {
+		return KimiOAuthSeedResult{}, err
+	}
+	wasRunning := false
+	if status, statusErr := m.Instances.Status(ctx, user.WindowsSID); statusErr == nil {
+		wasRunning = status.Healthy || status.State == "starting"
+	} else if !isPipeUnavailable(statusErr) {
+		return KimiOAuthSeedResult{}, fmt.Errorf("inspect target UserHost before Kimi OAuth seeding: %w", statusErr)
+	}
+	seeded, err := kimi.Seed(ctx, kimi.SeedOptions{
+		SourceOAuthPath:  sourceOAuthPath,
+		SourceConfigPath: sourceConfigPath,
+		TargetProfile:    filepath.Join(dataRoot, "profile"),
+		PythonPath:       pythonPath,
+		BeforeWrite: func() error {
+			stopErr := m.Instances.Stop(ctx, user.WindowsSID)
+			if stopErr != nil && !isPipeUnavailable(stopErr) {
+				return stopErr
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return KimiOAuthSeedResult{}, err
+	}
+	policy := winutil.PrivateTreePolicy(user.WindowsSID)
+	if err := winutil.ApplyTreeACL(dataRoot, policy); err != nil {
+		return KimiOAuthSeedResult{}, fmt.Errorf("Kimi OAuth was seeded but its private ACL could not be applied: %w", err)
+	}
+	if err := winutil.VerifyTreeACL(dataRoot, policy); err != nil {
+		return KimiOAuthSeedResult{}, fmt.Errorf("Kimi OAuth was seeded but its private ACL could not be verified: %w", err)
+	}
+	restarted := false
+	if wasRunning && user.Enabled {
+		if _, err := m.Instances.Ensure(ctx, user.WindowsSID); err != nil {
+			return KimiOAuthSeedResult{}, fmt.Errorf("Kimi OAuth was seeded but the previously running UserHost could not be restarted: %w", err)
+		}
+		restarted = true
+	}
+	if err := m.Store.Audit(ctx, "admin.kimi_oauth.seed", "success", user.Username, user.WindowsSID, "local-admin",
+		map[string]any{"sha256": seeded.SHA256, "restarted": restarted}, time.Now()); err != nil {
+		return KimiOAuthSeedResult{}, fmt.Errorf("Kimi OAuth was seeded but its audit event could not be recorded: %w", err)
+	}
+	return KimiOAuthSeedResult{SHA256: seeded.SHA256, Output: seeded.Output, Restarted: restarted}, nil
+}
+
+func (m *Manager) kimiPythonPath() (string, error) {
+	root := agentcli.RootFromAionReleases(m.Config.ReleasesRoot)
+	verified, err := agentcli.VerifyCurrent(root)
+	if err != nil {
+		return "", fmt.Errorf("verify shared agent CLI release before Kimi OAuth seeding: %w", err)
+	}
+	return filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath)), nil
 }
 
 func (m *Manager) MapWindowsAccount(ctx context.Context, username, windowsAccount string) (store.User, error) {
