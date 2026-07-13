@@ -244,7 +244,7 @@ func (w *limitedOutput) Write(data []byte) (int, error) {
 }
 
 func runConfigure(ctx context.Context, pythonPath, sourceConfigPath, targetConfigPath, mode string) (string, error) {
-	command := exec.CommandContext(ctx, pythonPath, "-", sourceConfigPath, targetConfigPath, mode)
+	command := configureCommand(ctx, pythonPath, sourceConfigPath, targetConfigPath, mode)
 	command.Stdin = strings.NewReader(configureScript)
 	output := &limitedOutput{limit: 64 << 10}
 	command.Stdout = output
@@ -257,6 +257,12 @@ func runConfigure(ctx context.Context, pythonPath, sourceConfigPath, targetConfi
 		return "", fmt.Errorf("%w: %s", err, message)
 	}
 	return output.buffer.String(), nil
+}
+
+func configureCommand(ctx context.Context, pythonPath, sourceConfigPath, targetConfigPath, mode string) *exec.Cmd {
+	command := exec.CommandContext(ctx, pythonPath, "-B", "-", sourceConfigPath, targetConfigPath, mode)
+	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	return command
 }
 
 const configureScript = `

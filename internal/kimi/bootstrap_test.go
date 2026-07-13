@@ -132,3 +132,20 @@ func TestHasCredentialDistinguishesMissingFromMalformed(t *testing.T) {
 		t.Fatalf("malformed credential found=%t err=%v", found, err)
 	}
 }
+
+func TestConfigureCommandCannotWriteBytecodeIntoImmutableRelease(t *testing.T) {
+	command := configureCommand(context.Background(), `C:\Program Files\AionAgentCliShared\python.exe`, `C:\source\config.toml`, `C:\target\config.toml`, "configure")
+	if len(command.Args) != 6 || command.Args[1] != "-B" || command.Args[2] != "-" {
+		t.Fatalf("Python command does not disable bytecode writes: %v", command.Args)
+	}
+	found := false
+	for _, value := range command.Env {
+		if value == "PYTHONDONTWRITEBYTECODE=1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Python command does not set PYTHONDONTWRITEBYTECODE=1")
+	}
+}
