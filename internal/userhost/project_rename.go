@@ -24,22 +24,56 @@ type projectConversationUpdate struct {
 	newJSON string
 }
 
+var errProjectRenameRollback = errors.New("project rename rollback failed")
+
 func (h *Host) renameProject(ctx context.Context, request ipc.ProjectRenameRequest) (ipc.ProjectRenameResult, string, error) {
 	if !h.validOAuthInstance(request.InstanceID) {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_UNAVAILABLE", errors.New("project rename did not match this healthy UserHost instance")
 	}
-	activity := h.probeActivity(ctx)
-	if !activity.Known {
-		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_UNAVAILABLE", errors.New("project activity could not be verified")
+	source := h.dirs.Workspace
+	if !request.LegacyRoot {
+		var ok bool
+		source, ok = projectfs.ResolveChild(h.dirs.Workspace, request.OldName)
+		if !ok {
+			return ipc.ProjectRenameResult{}, "INVALID_PROJECT_NAME", errors.New("project name is invalid")
+		}
 	}
-	if activity.Active {
-		return ipc.ProjectRenameResult{}, "PROJECT_IN_USE", errors.New("AionUi has active work and cannot rename a project")
+	dbPath := filepath.Join(h.dirs.Data, "aionui-backend.db")
+	conversationIDs, err := projectConversationIDs(ctx, dbPath, source)
+	if err != nil {
+		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_UNAVAILABLE", fmt.Errorf("inspect project conversations: %w", err)
 	}
-	return renameProjectState(ctx, h.dirs.Workspace, filepath.Join(h.dirs.Data, "aionui-backend.db"), h.cfg.WindowsSID, request.OldName, request.NewName)
+	active, err := h.activeProjectConversations(ctx, conversationIDs)
+	if err != nil {
+		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_UNAVAILABLE", fmt.Errorf("inspect project activity: %w", err)
+	}
+	if len(active) > 0 && !request.Force {
+		return ipc.ProjectRenameResult{}, "PROJECT_IN_USE", errors.New("project has active conversations")
+	}
+	if len(active) > 0 {
+		if err := h.stopProjectConversations(ctx, active); err != nil {
+			return ipc.ProjectRenameResult{}, "PROJECT_IN_USE", fmt.Errorf("stop active project conversations: %w", err)
+		}
+	}
+	result, code, err := renameProjectState(ctx, h.dirs.Workspace, dbPath, h.cfg.WindowsSID, request.OldName, request.NewName, request.LegacyRoot)
+	if err == nil || !request.Force || code != "PROJECT_IN_USE" {
+		return result, code, err
+	}
+	excluded := map[uint32]bool{uint32(os.Getpid()): true}
+	status := h.snapshot()
+	excluded[status.WebPID] = true
+	excluded[status.AionCorePID] = true
+	if _, stopErr := winutil.TerminateFileUsers(source, h.cfg.WindowsSID, excluded); stopErr != nil {
+		return ipc.ProjectRenameResult{}, "PROJECT_FORCE_STOP_FAILED", fmt.Errorf("force stop programs using project: %w", stopErr)
+	}
+	return renameProjectState(ctx, h.dirs.Workspace, dbPath, h.cfg.WindowsSID, request.OldName, request.NewName, request.LegacyRoot)
 }
 
-func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName, newName string) (ipc.ProjectRenameResult, string, error) {
+func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName, newName string, legacyRoot bool) (ipc.ProjectRenameResult, string, error) {
 	source, sourceOK := projectfs.ResolveChild(workspaceRoot, oldName)
+	if legacyRoot {
+		source, sourceOK = filepath.Clean(workspaceRoot), true
+	}
 	target, targetOK := projectfs.ResolveChild(workspaceRoot, newName)
 	if !sourceOK || !targetOK || source == target {
 		return ipc.ProjectRenameResult{}, "INVALID_PROJECT_NAME", errors.New("project names are invalid or unchanged")
@@ -55,8 +89,10 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("inspect project directory: %w", err)
 	}
-	if err := winutil.VerifyDescendantACL(source, policy); err != nil {
-		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("verify project directory ACL: %w", err)
+	if !legacyRoot {
+		if err := winutil.VerifyDescendantACL(source, policy); err != nil {
+			return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("verify project directory ACL: %w", err)
+		}
 	}
 	if !strings.EqualFold(source, target) {
 		if _, err := os.Lstat(target); err == nil {
@@ -99,14 +135,13 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 			return ipc.ProjectRenameResult{}, "PROJECT_IN_USE", errors.New("project conversation changed during rename")
 		}
 	}
-	if err := os.Rename(source, target); err != nil {
-		return ipc.ProjectRenameResult{}, projectRenameFilesystemErrorCode(err), fmt.Errorf("rename project directory: %w", err)
+	preserved, err := managedProjectChildren(ctx, tx, workspaceRoot, source)
+	if err != nil {
+		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", err
 	}
-	rollbackDirectory := func(cause error) error {
-		if rollbackErr := os.Rename(target, source); rollbackErr != nil {
-			return errors.Join(cause, fmt.Errorf("roll back project directory rename: %w", rollbackErr))
-		}
-		return cause
+	rollbackDirectory, err := renameProjectDirectory(source, target, legacyRoot, preserved)
+	if err != nil {
+		return ipc.ProjectRenameResult{}, projectRenameFilesystemErrorCode(err), fmt.Errorf("rename project directory: %w", err)
 	}
 	if err := winutil.VerifyDescendantACL(target, policy); err != nil {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", rollbackDirectory(fmt.Errorf("verify renamed project ACL: %w", err))
@@ -115,6 +150,86 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 		return ipc.ProjectRenameResult{}, projectRenameDatabaseErrorCode(err), rollbackDirectory(fmt.Errorf("commit project rename: %w", err))
 	}
 	return ipc.ProjectRenameResult{OldPath: source, NewPath: target, UpdatedConversations: len(updates)}, "", nil
+}
+
+func managedProjectChildren(ctx context.Context, tx *sql.Tx, workspaceRoot, source string) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,extra FROM conversations`)
+	if err != nil {
+		return nil, fmt.Errorf("read managed project paths: %w", err)
+	}
+	defer rows.Close()
+	preserved := make(map[string]bool)
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, fmt.Errorf("scan managed project path: %w", err)
+		}
+		var extra map[string]any
+		if err := json.Unmarshal([]byte(raw), &extra); err != nil || extra == nil {
+			return nil, fmt.Errorf("conversation %s has invalid extra JSON", id)
+		}
+		path, pathOK := extra["workspace"].(string)
+		custom, customOK := extra["custom_workspace"].(bool)
+		if !pathOK || !customOK || !custom || samePath(path, source) {
+			continue
+		}
+		if _, ok := projectfs.NameFromPath(workspaceRoot, path); ok {
+			preserved[strings.ToLower(filepath.Clean(path))] = true
+		}
+	}
+	return preserved, rows.Err()
+}
+
+func renameProjectDirectory(source, target string, legacyRoot bool, preserved map[string]bool) (func(error) error, error) {
+	if !legacyRoot {
+		if err := os.Rename(source, target); err != nil {
+			return nil, err
+		}
+		return func(cause error) error {
+			if err := os.Rename(target, source); err != nil {
+				return errors.Join(cause, fmt.Errorf("roll back project directory rename: %w", err))
+			}
+			return cause
+		}, nil
+	}
+	if err := os.Mkdir(target, 0o700); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		os.Remove(target)
+		return nil, err
+	}
+	moved := make([]string, 0, len(entries))
+	rollback := func(cause error) error {
+		rollbackFailed := false
+		for index := len(moved) - 1; index >= 0; index-- {
+			name := moved[index]
+			if err := os.Rename(filepath.Join(target, name), filepath.Join(source, name)); err != nil {
+				rollbackFailed = true
+				cause = errors.Join(cause, fmt.Errorf("roll back legacy project entry %s: %w", name, err))
+			}
+		}
+		if err := os.Remove(target); err != nil {
+			rollbackFailed = true
+			cause = errors.Join(cause, fmt.Errorf("remove rolled back legacy project directory: %w", err))
+		}
+		if rollbackFailed {
+			cause = errors.Join(cause, errProjectRenameRollback)
+		}
+		return cause
+	}
+	for _, entry := range entries {
+		from := filepath.Join(source, entry.Name())
+		if samePath(from, target) || preserved[strings.ToLower(filepath.Clean(from))] {
+			continue
+		}
+		if err := os.Rename(from, filepath.Join(target, entry.Name())); err != nil {
+			return nil, rollback(err)
+		}
+		moved = append(moved, entry.Name())
+	}
+	return rollback, nil
 }
 
 func projectConversationUpdates(ctx context.Context, tx *sql.Tx, source, target string) ([]projectConversationUpdate, error) {
@@ -152,6 +267,9 @@ func projectConversationUpdates(ctx context.Context, tx *sql.Tx, source, target 
 }
 
 func projectRenameFilesystemErrorCode(err error) string {
+	if errors.Is(err, errProjectRenameRollback) {
+		return "PROJECT_RENAME_FAILED"
+	}
 	for _, code := range []syscall.Errno{windows.ERROR_ACCESS_DENIED, windows.ERROR_SHARING_VIOLATION, windows.ERROR_LOCK_VIOLATION} {
 		if errors.Is(err, code) {
 			return "PROJECT_IN_USE"

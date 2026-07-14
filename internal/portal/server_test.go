@@ -119,11 +119,11 @@ func (f *fakeInstances) CreateProject(_ context.Context, sid, name string) (ipc.
 	return f.projectCreateResult, f.projectCreateError
 }
 
-func (f *fakeInstances) RenameProject(_ context.Context, sid, oldName, newName string) (ipc.ProjectRenameResult, error) {
+func (f *fakeInstances) RenameProject(_ context.Context, sid, oldName, newName string, force, legacyRoot bool) (ipc.ProjectRenameResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensureSIDs = append(f.ensureSIDs, sid)
-	f.projectRename = &ipc.ProjectRenameRequest{OldName: oldName, NewName: newName}
+	f.projectRename = &ipc.ProjectRenameRequest{OldName: oldName, NewName: newName, Force: force, LegacyRoot: legacyRoot}
 	return f.projectRenameResult, f.projectRenameError
 }
 

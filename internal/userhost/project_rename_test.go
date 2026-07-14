@@ -17,7 +17,7 @@ const projectRenameTestSID = "S-1-5-21-1958036862-1490797588-1401426644-2813"
 
 func TestRenameProjectUpdatesDirectoryAndMatchingConversationPaths(t *testing.T) {
 	workspace, dbPath, source := projectRenameFixture(t)
-	result, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "new-project")
+	result, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "new-project", false)
 	if err != nil || code != "" {
 		t.Fatalf("rename failed: code=%s err=%v", code, err)
 	}
@@ -46,7 +46,7 @@ func TestRenameProjectConflictLeavesDirectoryAndDatabaseUnchanged(t *testing.T) 
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "existing-project")
+	_, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "existing-project", false)
 	if err == nil || code != "PROJECT_EXISTS" {
 		t.Fatalf("conflict result: code=%s err=%v", code, err)
 	}
@@ -70,7 +70,7 @@ func TestRenameProjectReportsWindowsDirectoryOccupationWithoutPartialUpdates(t *
 	}
 	defer windows.CloseHandle(handle)
 
-	_, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "blocked-project")
+	_, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "blocked-project", false)
 	if err == nil || code != "PROJECT_IN_USE" {
 		t.Fatalf("occupied result: code=%s err=%v", code, err)
 	}
@@ -79,6 +79,43 @@ func TestRenameProjectReportsWindowsDirectoryOccupationWithoutPartialUpdates(t *
 	}
 	if got := readConversationWorkspaces(t, dbPath)["one"]; got != source {
 		t.Fatalf("conversation changed while occupied: %s", got)
+	}
+}
+
+func TestRenameLegacyWorkspaceRootMovesOnlyRootProjectEntries(t *testing.T) {
+	workspace, dbPath, childProject := projectRenameFixture(t)
+	rootFile := filepath.Join(workspace, "index.html")
+	if err := os.WriteFile(rootFile, []byte("legacy project"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, _ := json.Marshal(map[string]any{"workspace": workspace, "custom_workspace": true})
+	if _, err := db.Exec(`INSERT INTO conversations(id,extra,updated_at) VALUES('legacy-root',?,1)`, string(extra)); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	result, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "", "renamed-root", true)
+	if err != nil || code != "" {
+		t.Fatalf("legacy rename failed: code=%s err=%v", code, err)
+	}
+	target := filepath.Join(workspace, "renamed-root")
+	if result.OldPath != workspace || result.NewPath != target || result.UpdatedConversations != 1 {
+		t.Fatalf("unexpected legacy result: %+v", result)
+	}
+	if content, err := os.ReadFile(filepath.Join(target, "index.html")); err != nil || string(content) != "legacy project" {
+		t.Fatalf("legacy project file was not moved: content=%q err=%v", content, err)
+	}
+	if info, err := os.Stat(childProject); err != nil || !info.IsDir() {
+		t.Fatalf("managed child project moved with legacy root: info=%v err=%v", info, err)
+	}
+	workspaces := readConversationWorkspaces(t, dbPath)
+	if workspaces["legacy-root"] != target || workspaces["one"] != childProject {
+		t.Fatalf("legacy conversation paths were not updated exactly: %+v", workspaces)
 	}
 }
 

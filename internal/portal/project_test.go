@@ -97,6 +97,22 @@ func TestRenameProjectRoutesOnlyManagedProtectedDirectory(t *testing.T) {
 	}
 }
 
+func TestRenameProjectRoutesLegacyWorkspaceRootAndForceConfirmation(t *testing.T) {
+	server, data, instances := testServer(t)
+	profile := prepareProjectProfile(t, server, testSID1, "test1")
+	token := createPortalSession(t, data)
+	workspace := filepath.Join(profile, config.UserDataDirectoryName, "workspace")
+	instances.projectRenameResult = ipc.ProjectRenameResult{OldPath: workspace, NewPath: filepath.Join(workspace, "renamed-root"), UpdatedConversations: 1}
+
+	response := renameProjectRequestForce(server, token, workspace, "renamed-root", true)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if instances.projectRename == nil || !instances.projectRename.LegacyRoot || !instances.projectRename.Force || instances.projectRename.OldName != "" {
+		t.Fatalf("legacy force flags were not routed: %+v", instances.projectRename)
+	}
+}
+
 func TestRenameProjectRejectsOutsidePathAndMapsOccupiedDirectory(t *testing.T) {
 	server, data, instances := testServer(t)
 	profile := prepareProjectProfile(t, server, testSID1, "test1")
@@ -150,7 +166,11 @@ func newCreateProjectRequest(token, body string) *http.Request {
 }
 
 func renameProjectRequest(server *Server, token, path, name string) *httptest.ResponseRecorder {
-	body := `{"path":` + strconv.Quote(path) + `,"name":` + strconv.Quote(name) + `}`
+	return renameProjectRequestForce(server, token, path, name, false)
+}
+
+func renameProjectRequestForce(server *Server, token, path, name string, force bool) *httptest.ResponseRecorder {
+	body := `{"path":` + strconv.Quote(path) + `,"name":` + strconv.Quote(name) + `,"force":` + strconv.FormatBool(force) + `}`
 	request := httptest.NewRequest(http.MethodPatch, "https://portal.example.test/api/portal/me/projects", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "https://portal.example.test")

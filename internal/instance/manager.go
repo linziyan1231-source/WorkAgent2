@@ -283,12 +283,12 @@ func (m *Manager) CreateProject(ctx context.Context, sid, name string) (ipc.Proj
 	return *response.ProjectCreate, nil
 }
 
-func (m *Manager) RenameProject(ctx context.Context, sid, oldName, newName string) (ipc.ProjectRenameResult, error) {
+func (m *Manager) RenameProject(ctx context.Context, sid, oldName, newName string, force, legacyRoot bool) (ipc.ProjectRenameResult, error) {
 	status, err := m.Ensure(ctx, sid)
 	if err != nil {
 		return ipc.ProjectRenameResult{}, err
 	}
-	request := ipc.ProjectRenameRequest{InstanceID: id(status), OldName: oldName, NewName: newName}
+	request := ipc.ProjectRenameRequest{InstanceID: id(status), OldName: oldName, NewName: newName, Force: force, LegacyRoot: legacyRoot}
 	response, err := m.request(ctx, sid, ipc.Request{Command: "project_rename", ProjectRename: &request})
 	if err != nil {
 		return ipc.ProjectRenameResult{}, err

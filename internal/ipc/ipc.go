@@ -70,6 +70,8 @@ type ProjectRenameRequest struct {
 	InstanceID string `json:"instance_id"`
 	OldName    string `json:"old_name"`
 	NewName    string `json:"new_name"`
+	Force      bool   `json:"force"`
+	LegacyRoot bool   `json:"legacy_root"`
 }
 
 type ProjectRenameResult struct {

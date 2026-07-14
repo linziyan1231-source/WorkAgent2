@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/projectfs"
@@ -91,8 +92,9 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	var request struct {
-		Path string `json:"path"`
-		Name string `json:"name"`
+		Path  string `json:"path"`
+		Name  string `json:"name"`
+		Force bool   `json:"force"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -107,11 +109,12 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
 	}
 	workspaceRoot := filepath.Join(privateRoot, "workspace")
 	oldName, ok := projectfs.NameFromPath(workspaceRoot, request.Path)
-	if !ok {
+	legacyRoot := strings.EqualFold(filepath.Clean(request.Path), filepath.Clean(workspaceRoot))
+	if !ok && !legacyRoot {
 		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_PATH", "Project path is outside the managed workspace")
 		return
 	}
-	result, err := s.instances.RenameProject(r.Context(), session.User.WindowsSID, oldName, request.Name)
+	result, err := s.instances.RenameProject(r.Context(), session.User.WindowsSID, oldName, request.Name, request.Force, legacyRoot)
 	if err != nil {
 		var commandError *instance.UserHostCommandError
 		if errors.As(err, &commandError) {
@@ -120,6 +123,8 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
 				writeProjectError(w, http.StatusBadRequest, commandError.Code, "Project name is invalid")
 			case "PROJECT_EXISTS", "PROJECT_IN_USE":
 				writeProjectError(w, http.StatusConflict, commandError.Code, "Project could not be renamed")
+			case "PROJECT_FORCE_STOP_FAILED":
+				writeProjectError(w, http.StatusConflict, commandError.Code, "Programs using this project could not be safely identified or stopped")
 			case "PROJECT_NOT_FOUND":
 				writeProjectError(w, http.StatusNotFound, commandError.Code, "Project directory does not exist")
 			default:
@@ -132,7 +137,7 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditBestEffort(r.Context(), "portal.project.rename", "success", session, r, map[string]any{
-		"old_name": oldName, "new_name": request.Name, "updated_conversations": result.UpdatedConversations,
+		"old_name": oldName, "new_name": request.Name, "force": request.Force, "legacy_root": legacyRoot, "updated_conversations": result.UpdatedConversations,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": result})
 }

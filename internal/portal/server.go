@@ -39,7 +39,7 @@ type InstanceManager interface {
 	OAuthComplete(context.Context, string, ipc.OAuthCompleteRequest) error
 	OAuthCancel(context.Context, string, ipc.OAuthCancelRequest) error
 	CreateProject(context.Context, string, string) (ipc.ProjectCreateResult, error)
-	RenameProject(context.Context, string, string, string) (ipc.ProjectRenameResult, error)
+	RenameProject(context.Context, string, string, string, bool, bool) (ipc.ProjectRenameResult, error)
 	BeginRequest(string, bool) (func(), error)
 	ModelKeyIDs(context.Context, string) (modelbootstrap.KeyIDs, error)
 }
