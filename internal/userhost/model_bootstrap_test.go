@@ -22,6 +22,7 @@ func TestInitialCodexConfigUpdatesOnlyManagedTopLevelKeys(t *testing.T) {
 openai_base_url = "https://old.example/v1"
 model_reasoning_effort = "low"
 approval_policy = "on-request"
+developer_instructions = "默认使用简体中文回复。"
 
 [features]
 model = "table-value-must-survive"
@@ -38,7 +39,7 @@ web_search = true
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{`openai_base_url = "http://203.0.113.52:8317/v1"`, `model = "example-reasoning"`, `model_reasoning_effort = "xhigh"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `model = "table-value-must-survive"`} {
+	for _, required := range []string{`openai_base_url = "http://203.0.113.52:8317/v1"`, `model = "example-reasoning"`, `model_reasoning_effort = "xhigh"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `developer_instructions = "默认使用简体中文回复。"`, `model = "table-value-must-survive"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("managed config is missing %q:\n%s", required, got)
 		}

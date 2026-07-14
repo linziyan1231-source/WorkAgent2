@@ -55,6 +55,22 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 		environmentValue(kimi.Env, "PYTHONDONTWRITEBYTECODE") != "1" {
 		t.Fatalf("unexpected Kimi launcher spec: %+v", kimi)
 	}
+	perUserKimiEnvironment := append(append([]string(nil), perUserEnvironment...), `USERPROFILE=C:\Users\user-87eba76e\AionUiPortal\profile`)
+	perUserKimi, err := Spec(filepath.Join(root, "bin", "kimi.exe"), []string{"--version"}, perUserKimiEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKimiArgs := []string{"-m", "kimi_cli", "--agent-file", `C:\Users\user-87eba76e\AionUiPortal\profile\.kimi\aion-default-agent.yaml`, "--version"}
+	if strings.Join(perUserKimi.Args, "|") != strings.Join(wantKimiArgs, "|") {
+		t.Fatalf("per-user Kimi language agent was not injected: %+v", perUserKimi.Args)
+	}
+	overriddenKimi, err := Spec(filepath.Join(root, "bin", "kimi.exe"), []string{"--agent", "default", "--version"}, perUserKimiEnvironment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(overriddenKimi.Args, "|") != "-m|kimi_cli|--agent|default|--version" {
+		t.Fatalf("explicit Kimi agent override was not preserved: %+v", overriddenKimi.Args)
+	}
 	if _, err := Spec(filepath.Join(root, "bin", "unknown.exe"), nil, environment); err == nil {
 		t.Fatal("unknown launcher name was accepted")
 	}

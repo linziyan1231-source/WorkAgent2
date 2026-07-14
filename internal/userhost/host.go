@@ -96,6 +96,9 @@ func (h *Host) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, err := applyInitialCLILanguageDefaults(h.dirs); err != nil {
+		return err
+	}
 	if err := winutil.VerifyTreeACL(h.cfg.DataRoot, winutil.PrivateTreePolicy(h.cfg.WindowsSID)); err != nil {
 		return fmt.Errorf("verify private user tree before sandbox launch: %w", err)
 	}

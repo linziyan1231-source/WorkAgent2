@@ -28,6 +28,7 @@ import (
 const maxCodexConfig = 1024 * 1024
 
 var managedCodexAssignment = regexp.MustCompile(`^\s*(?:["']?(openai_base_url|model_reasoning_effort|model|cli_auth_credentials_store)["']?)\s*=`)
+var managedCodexLanguageAssignment = regexp.MustCompile(`^\s*(?:["']?(developer_instructions)["']?)\s*=`)
 
 type pendingModelBootstrap struct {
 	bundle modelbootstrap.Bundle
@@ -96,6 +97,27 @@ func (h *Host) loginCodexAPIKey(ctx context.Context, env []string, apiKey string
 }
 
 func writeInitialCodexConfig(path, baseURL, model string) error {
+	managed := []string{
+		"# Initial CLIProxyAPI settings managed by AionUiPortal.",
+		"openai_base_url = " + strconv.Quote(baseURL),
+		"model = " + strconv.Quote(model),
+		`model_reasoning_effort = "xhigh"`,
+		`cli_auth_credentials_store = "file"`,
+		"",
+	}
+	return rewriteCodexConfig(path, managedCodexAssignment, managed)
+}
+
+func writeInitialCodexLanguageDefault(path string) error {
+	managed := []string{
+		"# Initial response-language default managed once by AionUiPortal.",
+		"developer_instructions = " + strconv.Quote(cliChineseLanguageInstruction),
+		"",
+	}
+	return rewriteCodexConfig(path, managedCodexLanguageAssignment, managed)
+}
+
+func rewriteCodexConfig(path string, assignment *regexp.Regexp, managed []string) error {
 	var existing string
 	info, err := os.Lstat(path)
 	if err == nil {
@@ -122,7 +144,7 @@ func writeInitialCodexConfig(path, baseURL, model string) error {
 			inTable = true
 		}
 		if !inTable {
-			if match := managedCodexAssignment.FindStringSubmatch(line); len(match) == 2 {
+			if match := assignment.FindStringSubmatch(line); len(match) == 2 {
 				right := strings.TrimSpace(strings.SplitN(line, "=", 2)[1])
 				if strings.HasPrefix(right, `"""`) || strings.HasPrefix(right, `'''`) {
 					return fmt.Errorf("managed Codex key %s uses a multiline value", match[1])
@@ -137,14 +159,6 @@ func writeInitialCodexConfig(path, baseURL, model string) error {
 	}
 	for len(preserved) > 0 && strings.TrimSpace(preserved[0]) == "" {
 		preserved = preserved[1:]
-	}
-	managed := []string{
-		"# Initial CLIProxyAPI settings managed by AionUiPortal.",
-		"openai_base_url = " + strconv.Quote(baseURL),
-		"model = " + strconv.Quote(model),
-		`model_reasoning_effort = "xhigh"`,
-		`cli_auth_credentials_store = "file"`,
-		"",
 	}
 	content := strings.Join(append(managed, preserved...), "\n")
 	content = strings.TrimRight(content, "\n") + "\n"

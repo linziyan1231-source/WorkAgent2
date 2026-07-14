@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const PerUserSandboxEnvironment = "AIONUI_PER_USER_SANDBOX"
+const (
+	PerUserSandboxEnvironment    = "AIONUI_PER_USER_SANDBOX"
+	KimiManagedAgentRelativePath = ".kimi/aion-default-agent.yaml"
+)
 
 type LauncherSpec struct {
 	Target string
@@ -45,12 +48,28 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 		spec.Env = prependEnvironmentPath(spec.Env, filepath.Join(verified.Path, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-path"))
 	case "kimi":
 		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiRelativePath))
+		if environmentValue(spec.Env, PerUserSandboxEnvironment) == "1" && !hasKimiAgentOverride(spec.Args) {
+			profile := environmentValue(spec.Env, "USERPROFILE")
+			if !filepath.IsAbs(profile) {
+				return LauncherSpec{}, errors.New("per-user Kimi launcher requires an absolute USERPROFILE")
+			}
+			spec.Args = append([]string{"--agent-file", filepath.Join(profile, filepath.FromSlash(KimiManagedAgentRelativePath))}, spec.Args...)
+		}
 		spec.Args = append([]string{"-m", "kimi_cli"}, spec.Args...)
 		spec.Env = setEnvironment(spec.Env, "PYTHONDONTWRITEBYTECODE", "1")
 	default:
 		return LauncherSpec{}, fmt.Errorf("unsupported shared agent CLI launcher name %q", name)
 	}
 	return spec, nil
+}
+
+func hasKimiAgentOverride(arguments []string) bool {
+	for _, argument := range arguments {
+		if argument == "--agent" || argument == "--agent-file" || strings.HasPrefix(argument, "--agent=") || strings.HasPrefix(argument, "--agent-file=") {
+			return true
+		}
+	}
+	return false
 }
 
 func RunLauncher(executablePath string, arguments []string) error {
