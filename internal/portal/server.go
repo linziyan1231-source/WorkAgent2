@@ -20,6 +20,8 @@ import (
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/modelbootstrap"
+	"aionuiportal/internal/portalusage"
 	"aionuiportal/internal/store"
 	"aionuiportal/internal/winutil"
 )
@@ -37,12 +39,18 @@ type InstanceManager interface {
 	OAuthComplete(context.Context, string, ipc.OAuthCompleteRequest) error
 	OAuthCancel(context.Context, string, ipc.OAuthCancelRequest) error
 	BeginRequest(string, bool) (func(), error)
+	ModelKeyIDs(context.Context, string) (modelbootstrap.KeyIDs, error)
+}
+
+type UsageService interface {
+	Current(context.Context, string, modelbootstrap.KeyIDs) (portalusage.Summary, error)
 }
 
 type Server struct {
 	cfg          config.Portal
 	store        *store.Store
 	instances    InstanceManager
+	usage        UsageService
 	static       http.Handler
 	public       *url.URL
 	dummyHash    string
@@ -53,9 +61,9 @@ type Server struct {
 	profilePath  func(string) (string, error)
 }
 
-func New(cfg config.Portal, data *store.Store, instances InstanceManager, staticDir string, logger *log.Logger) (*Server, error) {
-	if data == nil || instances == nil {
-		return nil, errors.New("Portal store and instance manager are required")
+func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage UsageService, staticDir string, logger *log.Logger) (*Server, error) {
+	if data == nil || instances == nil || usage == nil {
+		return nil, errors.New("Portal store, instance manager, and usage service are required")
 	}
 	public, err := url.Parse(cfg.PublicBaseURL)
 	if err != nil {
@@ -76,7 +84,7 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, static
 	if cfg.UsesTLS() {
 		cookieName = sessionCookie
 	}
-	return &Server{cfg: cfg, store: data, instances: instances, static: static, public: public, dummyHash: dummy, logger: logger, now: time.Now,
+	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, dummyHash: dummy, logger: logger, now: time.Now,
 		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID}, nil
 }
 
@@ -157,6 +165,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/auth/user":
 		s.authUser(w, r)
+		return
+	case "/api/portal/me/usage":
+		s.currentUsage(w, r)
 		return
 	case "/api/mcp/oauth/login":
 		s.mcpOAuthLogin(w, r)

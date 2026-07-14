@@ -66,6 +66,23 @@ func TestSharedReadOnlyPolicyRejectsUsersWrite(t *testing.T) {
 	}
 }
 
+func TestServiceCredentialPolicyGrantsServiceReadOnly(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := ServiceCredentialPolicy(identity.SID)
+	if policy.Principals[identity.SID] != ACLReadExecute {
+		t.Fatal("credential policy did not constrain the service identity to read/execute")
+	}
+	if policy.Principals[SystemSID] != ACLFullControl || policy.Principals[AdministratorsSID] != ACLFullControl {
+		t.Fatal("credential policy removed an administrative principal")
+	}
+	if _, exists := policy.Principals[UsersSID]; exists {
+		t.Fatal("credential policy exposed credentials to Users")
+	}
+}
+
 func TestPrivateTreeAllowsOnlyContainedDescendantReparsePoints(t *testing.T) {
 	identity, err := CurrentIdentity()
 	if err != nil {

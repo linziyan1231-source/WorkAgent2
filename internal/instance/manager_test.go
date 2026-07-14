@@ -11,6 +11,7 @@ import (
 	"aionuiportal/internal/auth"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/store"
 )
 
@@ -220,6 +221,42 @@ func TestOAuthIPCRequestsStayBoundToTheRequestedSIDAndInstance(t *testing.T) {
 		if len(request.Nonce) < 16 {
 			t.Fatalf("OAuth IPC nonce was missing: %+v", request)
 		}
+	}
+}
+
+func TestModelKeyIDsStayBoundToRequestedSIDAndPipe(t *testing.T) {
+	data, cfg := managerStore(t)
+	want := modelbootstrap.KeyIDsForSID(managerSID)
+	var seenPipe string
+	var seenRequest ipc.Request
+	caller := func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
+		seenPipe, seenRequest = pipe, request
+		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true,
+			ModelKeyIDs: &ipc.ModelKeyIDs{CodexKeyID: want.CodexKeyID, KimiKeyID: want.KimiKeyID}}, nil
+	}
+	manager := NewWithIPC(cfg, data, &fakeTask{}, caller)
+	got, err := manager.ModelKeyIDs(context.Background(), managerSID)
+	if err != nil || got != want {
+		t.Fatalf("model key IDs=%+v err=%v, want %+v", got, err, want)
+	}
+	if seenPipe != config.PipeNameForSID(managerSID) || seenRequest.Command != "model_key_ids" || len(seenRequest.Nonce) < 16 {
+		t.Fatalf("model marker IPC was not SID-bound: pipe=%q request=%+v", seenPipe, seenRequest)
+	}
+}
+
+func TestModelKeyIDsRejectAnotherUsersWellFormedIDs(t *testing.T) {
+	data, cfg := managerStore(t)
+	other := modelbootstrap.KeyIDsForSID("S-1-5-21-1836781275-1957422218-1832856846-7828")
+	caller := func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
+		if pipe != config.PipeNameForSID(managerSID) {
+			t.Fatalf("model marker IPC used wrong pipe: %s", pipe)
+		}
+		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true,
+			ModelKeyIDs: &ipc.ModelKeyIDs{CodexKeyID: other.CodexKeyID, KimiKeyID: other.KimiKeyID}}, nil
+	}
+	manager := NewWithIPC(cfg, data, &fakeTask{}, caller)
+	if _, err := manager.ModelKeyIDs(context.Background(), managerSID); err == nil {
+		t.Fatal("another user's well-formed key IDs were accepted from the requested user's pipe")
 	}
 }
 

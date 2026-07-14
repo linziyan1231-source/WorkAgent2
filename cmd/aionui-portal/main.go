@@ -17,6 +17,7 @@ import (
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/portal"
+	"aionuiportal/internal/portalusage"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/scheduler"
 	"aionuiportal/internal/store"
@@ -119,6 +120,15 @@ func runPortal(ctx context.Context, configPath string) error {
 	}
 	defer data.Close()
 	manager := instance.New(cfg, data, scheduler.Controller{})
+	usageRemote, err := portalusage.NewSSHClient(portalusage.SSHOptions{Target: cfg.UsageSSHTarget, HelperPath: cfg.UsageSSHHelperPath,
+		IdentityFile: cfg.UsageSSHIdentityFile, KnownHostsFile: cfg.UsageSSHKnownHostsFile})
+	if err != nil {
+		return fmt.Errorf("initialize Portal quota SSH client: %w", err)
+	}
+	usage, err := portalusage.NewService(usageRemote, time.Duration(cfg.UsageCacheSeconds)*time.Second, time.Now)
+	if err != nil {
+		return fmt.Errorf("initialize Portal quota service: %w", err)
+	}
 	adminSDDL, err := adminipc.SDDL(cfg.PortalServiceSID)
 	if err != nil {
 		return err
@@ -146,7 +156,7 @@ func runPortal(ctx context.Context, configPath string) error {
 		return fmt.Errorf("start protected Portal admin IPC: %w", err)
 	}
 	defer adminPipe.Close()
-	server, err := portal.New(cfg, data, manager, filepath.Join(verified.Path, "static"), logger)
+	server, err := portal.New(cfg, data, manager, usage, filepath.Join(verified.Path, "static"), logger)
 	if err != nil {
 		return err
 	}

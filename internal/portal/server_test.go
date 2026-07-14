@@ -24,6 +24,8 @@ import (
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/modelbootstrap"
+	"aionuiportal/internal/portalusage"
 	"aionuiportal/internal/store"
 )
 
@@ -49,6 +51,9 @@ type fakeInstances struct {
 	oauthCancelError   error
 	requests           int
 	webSockets         int
+	modelKeyIDs        map[string]modelbootstrap.KeyIDs
+	modelKeyIDSError   error
+	modelKeyIDSIDs     []string
 }
 
 func (f *fakeInstances) Ensure(_ context.Context, sid string) (ipc.Status, error) {
@@ -119,6 +124,49 @@ func (f *fakeInstances) BeginRequest(sid string, webSocket bool) (func(), error)
 			}
 		})
 	}, nil
+}
+
+func (f *fakeInstances) ModelKeyIDs(_ context.Context, sid string) (modelbootstrap.KeyIDs, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modelKeyIDSIDs = append(f.modelKeyIDSIDs, sid)
+	if f.modelKeyIDSError != nil {
+		return modelbootstrap.KeyIDs{}, f.modelKeyIDSError
+	}
+	if ids, exists := f.modelKeyIDs[sid]; exists {
+		return ids, nil
+	}
+	return modelbootstrap.KeyIDsForSID(sid), nil
+}
+
+type fakeUsageService struct {
+	mu           sync.Mutex
+	calls        []usageCall
+	summary      portalusage.Summary
+	summaryBySID map[string]portalusage.Summary
+	err          error
+}
+
+type usageCall struct {
+	sid string
+	ids modelbootstrap.KeyIDs
+}
+
+func (f *fakeUsageService) Current(_ context.Context, sid string, ids modelbootstrap.KeyIDs) (portalusage.Summary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, usageCall{sid: sid, ids: ids})
+	if summary, exists := f.summaryBySID[sid]; exists {
+		return summary, f.err
+	}
+	return f.summary, f.err
+}
+
+func validUsageSummary() portalusage.Summary {
+	return portalusage.Summary{AsOf: "2026-07-14T05:00:00Z", Providers: []portalusage.Provider{
+		{Kind: portalusage.KindChatGPT, Label: "ChatGPT", Daily: portalusage.Window{LimitUSD: "20.00", UsedUSD: "1.25", RemainingUSD: "18.75"}, Weekly: portalusage.Window{LimitUSD: "40.00", UsedUSD: "3.50", RemainingUSD: "36.50"}},
+		{Kind: portalusage.KindKimi, Label: "Kimi", Daily: portalusage.Window{LimitUSD: "5.00", UsedUSD: "0.40", RemainingUSD: "4.60"}, Weekly: portalusage.Window{LimitUSD: "10.00", UsedUSD: "1.10", RemainingUSD: "8.90"}},
+	}}
 }
 
 func TestWrongPasswordNeverStartsInstance(t *testing.T) {
@@ -1083,7 +1131,8 @@ func testServerAtRootWithPublicURL(t *testing.T, root, publicURL string) (*Serve
 	cfg.LoginIPFailures = 20
 	instances := &fakeInstances{route: instance.Route{Status: ipc.Status{WindowsSID: testSID1, Healthy: true, WebPort: 31001, AionCorePort: 32001,
 		Version: "2.1.29", UserHostPID: 1234, StartedAtUnix: 1_700_000_000}, InstanceID: "2.1.29:1234:1700000000"}}
-	server, err := New(cfg, data, instances, staticDir, nil)
+	usage := &fakeUsageService{summary: validUsageSummary()}
+	server, err := New(cfg, data, instances, usage, staticDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1100,11 +1149,16 @@ func loginRequest(body string) *http.Request {
 
 func createPortalSession(t *testing.T, data *store.Store) string {
 	t.Helper()
+	return createPortalSessionFor(t, data, "portal-alice", testSID1, `SERVER\test1`)
+}
+
+func createPortalSessionFor(t *testing.T, data *store.Store, username, sid, windowsUsername string) string {
+	t.Helper()
 	hash, err := auth.HashPassword([]byte("correct-employee-portal-password"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := data.CreateUser(context.Background(), "portal-alice", hash, testSID1, `SERVER\test1`, false, time.Now())
+	user, err := data.CreateUser(context.Background(), username, hash, sid, windowsUsername, false, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

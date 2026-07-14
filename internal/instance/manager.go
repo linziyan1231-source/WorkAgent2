@@ -10,6 +10,7 @@ import (
 	"aionuiportal/internal/auth"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/store"
 )
 
@@ -215,6 +216,24 @@ func (m *Manager) Route(ctx context.Context, sid string) (Route, error) {
 func (m *Manager) Touch(ctx context.Context, sid string) error {
 	_, err := m.command(ctx, sid, "touch")
 	return err
+}
+
+func (m *Manager) ModelKeyIDs(ctx context.Context, sid string) (modelbootstrap.KeyIDs, error) {
+	if err := m.requireEnabled(ctx, sid); err != nil {
+		return modelbootstrap.KeyIDs{}, err
+	}
+	response, err := m.command(ctx, sid, "model_key_ids")
+	if err != nil {
+		return modelbootstrap.KeyIDs{}, err
+	}
+	if response.ModelKeyIDs == nil {
+		return modelbootstrap.KeyIDs{}, errors.New("UserHost returned no applied model mapping")
+	}
+	ids := modelbootstrap.KeyIDs{CodexKeyID: response.ModelKeyIDs.CodexKeyID, KimiKeyID: response.ModelKeyIDs.KimiKeyID}
+	if err := ids.ValidateForSID(sid); err != nil {
+		return modelbootstrap.KeyIDs{}, fmt.Errorf("UserHost applied model mapping did not match the requested Windows identity: %w", err)
+	}
+	return ids, nil
 }
 
 func (m *Manager) OAuthStart(ctx context.Context, sid string, start ipc.OAuthStartRequest) (ipc.OAuthResult, error) {

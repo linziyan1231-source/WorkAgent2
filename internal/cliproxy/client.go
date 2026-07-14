@@ -3,8 +3,6 @@ package cliproxy
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,10 +129,9 @@ func stateFor(options ProvisionOptions) (modelbootstrap.State, error) {
 	if options.RPM < 0 || options.RPM > 100000 || options.CodexDailyUSD <= 0 || options.CodexWeeklyUSD != options.CodexDailyUSD*2 || options.KimiDailyUSD <= 0 || options.KimiWeeklyUSD != options.KimiDailyUSD*2 {
 		return modelbootstrap.State{}, errors.New("CLIProxyAPI quota policy is invalid")
 	}
-	digest := sha256.Sum256([]byte(strings.ToUpper(options.WindowsSID)))
-	prefix := "aionui-" + hex.EncodeToString(digest[:10])
+	ids := modelbootstrap.KeyIDsForSID(options.WindowsSID)
 	state := modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: options.BaseURL,
-		CodexKeyID: prefix + "-chatgpt", KimiKeyID: prefix + "-kimi", CodexDefaultModel: options.CodexDefaultModel,
+		CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID, CodexDefaultModel: options.CodexDefaultModel,
 		CodexModels: append([]string(nil), options.CodexModels...), KimiModels: append([]string(nil), options.KimiModels...)}
 	if err := state.Validate(); err != nil {
 		return modelbootstrap.State{}, err

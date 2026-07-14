@@ -87,6 +87,9 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	cfg.UserProfilesRoot = filepath.Join(root, "profiles")
 	cfg.UserHostExecutable = userHost
 	cfg.PortalServiceSID = identity.SID
+	credentialRoot := filepath.Join(root, "usage-ssh")
+	cfg.UsageSSHIdentityFile = filepath.Join(credentialRoot, "usage_ed25519")
+	cfg.UsageSSHKnownHostsFile = filepath.Join(credentialRoot, "known_hosts")
 	configPath := filepath.Join(data, "portal.json")
 	if err := os.MkdirAll(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -97,6 +100,14 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	}
 	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.MkdirAll(credentialRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{cfg.UsageSSHIdentityFile, cfg.UsageSSHKnownHostsFile} {
+		if err := os.WriteFile(path, []byte("credential fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	manager, err := Open(configPath)
 	if err != nil {
@@ -109,10 +120,12 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if failures := manager.VerifyACLs(context.Background()); len(failures) != 0 {
 		t.Fatalf("ACL verification failures: %v", failures)
 	}
-	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease} {
+	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageSSHIdentityFile, cfg.UsageSSHKnownHostsFile} {
 		policy := winutil.SharedReadOnlyPolicy()
 		if path == configPath {
 			policy = winutil.ServicePrivatePolicy(identity.SID)
+		} else if path == credentialRoot || path == cfg.UsageSSHIdentityFile || path == cfg.UsageSSHKnownHostsFile {
+			policy = winutil.ServiceCredentialPolicy(identity.SID)
 		}
 		if err := winutil.VerifyACL(path, policy); err != nil {
 			t.Fatalf("protected ACL missing on %s: %v", path, err)

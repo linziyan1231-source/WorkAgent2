@@ -1,6 +1,7 @@
 package modelbootstrap
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,5 +59,58 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 		if err := bundle.Validate(); err == nil {
 			t.Fatalf("case %d was accepted", index)
 		}
+	}
+}
+
+func TestKeyIDsAreStableAndBoundToUppercaseSID(t *testing.T) {
+	const sid = "S-1-5-21-1335169958-1819941586-1322872941-1322"
+	want := KeyIDs{CodexKeyID: "aionui-c6caa7a66c7a1ad24ed9-chatgpt", KimiKeyID: "aionui-c6caa7a66c7a1ad24ed9-kimi"}
+	if got := KeyIDsForSID(sid); got != want {
+		t.Fatalf("key IDs=%+v, want %+v", got, want)
+	}
+	if got := KeyIDsForSID("S-1-5-21-1335169958-1819941586-1322872941-1322"); got != want {
+		t.Fatalf("lowercase SID derived different key IDs: %+v", got)
+	}
+	if err := want.ValidateForSID(sid); err != nil {
+		t.Fatal(err)
+	}
+	other := KeyIDsForSID("S-1-5-21-1836781275-1957422218-1832856846-7828")
+	if err := other.ValidateForSID(sid); err == nil {
+		t.Fatal("another user's well-formed key IDs matched this SID")
+	}
+}
+
+func TestAppliedKeyIDsReadsOnlySIDBoundAppliedMarker(t *testing.T) {
+	const sid = "S-1-5-21-1335169958-1819941586-1322872941-1322"
+	root := t.TempDir()
+	ids := KeyIDsForSID(sid)
+	state := realBundle().State
+	state.CodexKeyID = ids.CodexKeyID
+	state.KimiKeyID = ids.KimiKeyID
+	bundlePath, markerPath, err := Paths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{filepath.Dir(bundlePath), filepath.Dir(markerPath)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(markerPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bundlePath, []byte(`{"codex_api_key":"cpa_must-not-be-read"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := AppliedKeyIDs(root, sid)
+	if err != nil || got != ids {
+		t.Fatalf("marker-only key lookup failed: ids=%+v err=%v", got, err)
+	}
+	if _, err := AppliedKeyIDs(root, "S-1-5-21-1988320210-1174886911-1684912000-8042"); err == nil {
+		t.Fatal("marker key IDs were accepted for another Windows SID")
 	}
 }

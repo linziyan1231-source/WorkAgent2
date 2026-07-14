@@ -649,6 +649,13 @@ func (m *Manager) servicePrivateFiles() []string {
 	return paths
 }
 
+func (m *Manager) usageCredentialFiles() []string {
+	if m.Config.UsageSSHIdentityFile == "" || m.Config.UsageSSHKnownHostsFile == "" {
+		return nil
+	}
+	return []string{m.Config.UsageSSHIdentityFile, m.Config.UsageSSHKnownHostsFile}
+}
+
 func (m *Manager) ApplyACLs(ctx context.Context) []error {
 	var failures []error
 	if err := winutil.ApplyTreeACL(filepath.Dir(m.Config.UserHostExecutable), winutil.SharedReadOnlyPolicy()); err != nil {
@@ -679,6 +686,25 @@ func (m *Manager) ApplyACLs(ctx context.Context) []error {
 		}
 		if err := winutil.ApplyACL(path, servicePolicy); err != nil {
 			failures = append(failures, fmt.Errorf("service file %s: %w", path, err))
+		}
+	}
+	credentialFiles := m.usageCredentialFiles()
+	if len(credentialFiles) != 0 {
+		credentialPolicy := winutil.ServiceCredentialPolicy(m.Config.PortalServiceSID)
+		credentialRoot := filepath.Dir(credentialFiles[0])
+		if err := os.MkdirAll(credentialRoot, 0o700); err != nil {
+			failures = append(failures, fmt.Errorf("create usage credential directory: %w", err))
+		} else if err := winutil.ApplyACL(credentialRoot, credentialPolicy); err != nil {
+			failures = append(failures, fmt.Errorf("usage credential directory: %w", err))
+		}
+		for _, path := range credentialFiles {
+			if info, err := os.Lstat(path); err != nil {
+				failures = append(failures, fmt.Errorf("required usage credential file %s: %w", path, err))
+			} else if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				failures = append(failures, fmt.Errorf("usage credential file %s is not a regular non-reparse file", path))
+			} else if err := winutil.ApplyACL(path, credentialPolicy); err != nil {
+				failures = append(failures, fmt.Errorf("usage credential file %s: %w", path, err))
+			}
 		}
 	}
 	failures = append(failures, m.applyReleaseControlACLs()...)
@@ -733,6 +759,22 @@ func (m *Manager) verifyBaseACLs() []error {
 		}
 		if err := winutil.VerifyACL(path, servicePolicy); err != nil {
 			failures = append(failures, fmt.Errorf("service file %s: %w", path, err))
+		}
+	}
+	credentialFiles := m.usageCredentialFiles()
+	if len(credentialFiles) != 0 {
+		credentialPolicy := winutil.ServiceCredentialPolicy(m.Config.PortalServiceSID)
+		if err := winutil.VerifyACL(filepath.Dir(credentialFiles[0]), credentialPolicy); err != nil {
+			failures = append(failures, fmt.Errorf("usage credential directory: %w", err))
+		}
+		for _, path := range credentialFiles {
+			if info, err := os.Lstat(path); err != nil {
+				failures = append(failures, fmt.Errorf("required usage credential file %s: %w", path, err))
+			} else if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				failures = append(failures, fmt.Errorf("usage credential file %s is not a regular non-reparse file", path))
+			} else if err := winutil.VerifyACL(path, credentialPolicy); err != nil {
+				failures = append(failures, fmt.Errorf("usage credential file %s: %w", path, err))
+			}
 		}
 	}
 	failures = append(failures, m.verifyReleaseControlACLs()...)

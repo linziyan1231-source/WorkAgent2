@@ -87,6 +87,11 @@ type AuthMaterial struct {
 	CSRFToken    string `json:"csrf_token"`
 }
 
+type ModelKeyIDs struct {
+	CodexKeyID string `json:"codex_key_id"`
+	KimiKeyID  string `json:"kimi_key_id"`
+}
+
 type Response struct {
 	ProtocolVersion int           `json:"protocol_version"`
 	Nonce           string        `json:"nonce"`
@@ -96,6 +101,7 @@ type Response struct {
 	Status          *Status       `json:"status,omitempty"`
 	Auth            *AuthMaterial `json:"auth,omitempty"`
 	OAuth           *OAuthResult  `json:"oauth,omitempty"`
+	ModelKeyIDs     *ModelKeyIDs  `json:"model_key_ids,omitempty"`
 }
 
 type Handler func(context.Context, Request) Response

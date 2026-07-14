@@ -54,6 +54,12 @@ func ServicePrivatePolicy(serviceSID string) ACLPolicy {
 	}}
 }
 
+func ServiceCredentialPolicy(serviceSID string) ACLPolicy {
+	return ACLPolicy{OwnerSID: AdministratorsSID, Principals: map[string]ACLPermission{
+		SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, serviceSID: ACLReadExecute,
+	}}
+}
+
 func UserConfigPolicy(serviceSID, userSID string) ACLPolicy {
 	return ACLPolicy{OwnerSID: AdministratorsSID, Principals: map[string]ACLPermission{
 		SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, serviceSID: ACLFullControl, userSID: ACLReadExecute,

@@ -2,6 +2,8 @@ package modelbootstrap
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,8 @@ var (
 	modelPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
+var ErrAppliedMarkerMissing = errors.New("applied model bootstrap marker is missing")
+
 type State struct {
 	FormatVersion     int      `json:"format_version"`
 	BaseURL           string   `json:"base_url"`
@@ -39,6 +43,11 @@ type State struct {
 	CodexDefaultModel string   `json:"codex_default_model"`
 	CodexModels       []string `json:"codex_models"`
 	KimiModels        []string `json:"kimi_models"`
+}
+
+type KeyIDs struct {
+	CodexKeyID string `json:"codex_key_id"`
+	KimiKeyID  string `json:"kimi_key_id"`
 }
 
 type Bundle struct {
@@ -77,6 +86,51 @@ func (s State) Validate() error {
 		return errors.New("Codex default model must be one of the configured Codex models")
 	}
 	return nil
+}
+
+func KeyIDsForSID(windowsSID string) KeyIDs {
+	digest := sha256.Sum256([]byte(strings.ToUpper(windowsSID)))
+	prefix := "aionui-" + hex.EncodeToString(digest[:10])
+	return KeyIDs{CodexKeyID: prefix + "-chatgpt", KimiKeyID: prefix + "-kimi"}
+}
+
+func (ids KeyIDs) ValidateForSID(windowsSID string) error {
+	if !keyIDPattern.MatchString(ids.CodexKeyID) || !keyIDPattern.MatchString(ids.KimiKeyID) || ids.CodexKeyID == ids.KimiKeyID {
+		return errors.New("model bootstrap key ids are invalid or duplicated")
+	}
+	if ids != KeyIDsForSID(windowsSID) {
+		return errors.New("model bootstrap key ids do not match the Windows SID")
+	}
+	return nil
+}
+
+func (s State) ValidateForSID(windowsSID string) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	return (KeyIDs{CodexKeyID: s.CodexKeyID, KimiKeyID: s.KimiKeyID}).ValidateForSID(windowsSID)
+}
+
+func AppliedKeyIDs(dataRoot, windowsSID string) (KeyIDs, error) {
+	_, markerPath, err := Paths(dataRoot)
+	if err != nil {
+		return KeyIDs{}, err
+	}
+	exists, err := regularFileExists(markerPath)
+	if err != nil {
+		return KeyIDs{}, fmt.Errorf("inspect applied model bootstrap marker: %w", err)
+	}
+	if !exists {
+		return KeyIDs{}, ErrAppliedMarkerMissing
+	}
+	var state State
+	if err := readStrictJSON(markerPath, &state); err != nil {
+		return KeyIDs{}, fmt.Errorf("read applied model bootstrap marker: %w", err)
+	}
+	if err := state.ValidateForSID(windowsSID); err != nil {
+		return KeyIDs{}, fmt.Errorf("validate applied model bootstrap marker: %w", err)
+	}
+	return KeyIDs{CodexKeyID: state.CodexKeyID, KimiKeyID: state.KimiKeyID}, nil
 }
 
 func (b Bundle) Validate() error {

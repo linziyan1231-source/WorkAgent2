@@ -19,6 +19,7 @@ import (
 	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/ipc"
+	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/winutil"
 	"golang.org/x/sys/windows"
@@ -515,6 +516,16 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		}
 		auth := h.auth
 		return ipc.Response{OK: true, Auth: &auth}
+	case "model_key_ids":
+		ids, err := modelbootstrap.AppliedKeyIDs(h.cfg.DataRoot, h.cfg.WindowsSID)
+		if errors.Is(err, modelbootstrap.ErrAppliedMarkerMissing) {
+			return ipc.Response{OK: false, ErrorCode: "MODEL_MARKER_MISSING", ErrorMessage: "applied model mapping is unavailable"}
+		}
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: "MODEL_MARKER_INVALID", ErrorMessage: "applied model mapping is invalid"}
+		}
+		responseIDs := ipc.ModelKeyIDs{CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID}
+		return ipc.Response{OK: true, ModelKeyIDs: &responseIDs}
 	case "touch":
 		h.mu.Lock()
 		h.status.LastActivityUnix = time.Now().Unix()
