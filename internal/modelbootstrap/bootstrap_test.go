@@ -62,6 +62,18 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 	}
 }
 
+func TestManagedModelPolicyIsExactAndReturnsCopies(t *testing.T) {
+	codex := ManagedCodexModels()
+	kimi := ManagedKimiModels()
+	if !reflect.DeepEqual(codex, []string{"example-reasoning", "example-balanced", "example-fast"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding"}) {
+		t.Fatalf("unexpected managed model policy: codex=%v kimi=%v", codex, kimi)
+	}
+	codex[0] = "changed"
+	if ManagedCodexModels()[0] != "example-reasoning" {
+		t.Fatal("managed model policy leaked mutable storage")
+	}
+}
+
 func TestKeyIDsAreStableAndBoundToUppercaseSID(t *testing.T) {
 	const sid = "S-1-5-21-1335169958-1819941586-1322872941-1322"
 	want := KeyIDs{CodexKeyID: "aionui-c6caa7a66c7a1ad24ed9-chatgpt", KimiKeyID: "aionui-c6caa7a66c7a1ad24ed9-kimi"}

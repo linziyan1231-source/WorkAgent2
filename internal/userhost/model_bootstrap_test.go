@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"aionuiportal/internal/agentcli"
+	"aionuiportal/internal/modelbootstrap"
 )
 
 func TestInitialCodexConfigUpdatesOnlyManagedTopLevelKeys(t *testing.T) {
@@ -109,7 +110,7 @@ api_key = "custom-secret"
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{"# preserve this comment", `theme = "light"`, `[providers.custom]`, `base_url = "http://203.0.113.52:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+	for _, required := range []string{"# preserve this comment", `theme = "light"`, `default_yolo = true`, `[providers.custom]`, `base_url = "http://203.0.113.52:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
 		}
@@ -126,8 +127,8 @@ api_key = "custom-secret"
 
 func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testing.T) {
 	desired := []aionProvider{
-		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"example-reasoning", "gpt-5.4-mini"}, Enabled: true},
-		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "Kimi for Coding (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding"}, Enabled: true},
+		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"example-reasoning", "example-balanced", "example-fast"}, Enabled: true},
+		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "KIMI", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding"}, Enabled: true},
 	}
 	providers := []aionProvider{{ID: "custom-user-provider", Platform: "custom", Name: "Keep me", BaseURL: "https://example.test/v1", APIKey: "user-secret", Models: []string{"model"}, Enabled: true},
 		{ID: desired[0].ID, Platform: "custom", Name: "stale", BaseURL: "https://stale.test/v1", APIKey: "stale", Models: []string{"stale"}, Enabled: false}}
@@ -168,5 +169,45 @@ func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testi
 	defer mu.Unlock()
 	if len(providers) != 3 || providers[0].ID != "custom-user-provider" || !reflect.DeepEqual(providers[1:], desired) {
 		t.Fatalf("provider upsert changed unrelated state or failed exact replacement: %+v", providers)
+	}
+}
+
+func TestManagedProviderPolicyReplacesOnlyNamesAndModelLists(t *testing.T) {
+	providers := []aionProvider{
+		{ID: "custom-user-provider", Platform: "custom", Name: "Keep me", BaseURL: "https://example.test/v1", APIKey: "user-secret", Models: []string{"model"}, Enabled: true},
+		{ID: modelbootstrap.CodexProviderID, Platform: "custom", Name: "ChatGPT (CLIProxyAPI)", BaseURL: "http://proxy.test/v1", APIKey: "codex-secret", Models: []string{"gpt-5.4"}, Enabled: false},
+		{ID: modelbootstrap.KimiProviderID, Platform: "custom", Name: "Kimi for Coding (CLIProxyAPI)", BaseURL: "http://proxy.test/v1", APIKey: "kimi-secret", Models: []string{"kimi-k2.6"}, Enabled: true},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/providers" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": providers})
+			return
+		}
+		for index := 1; index < len(providers); index++ {
+			if r.Method == http.MethodPut && r.URL.Path == "/api/providers/"+providers[index].ID {
+				if err := json.NewDecoder(r.Body).Decode(&providers[index]); err != nil {
+					http.Error(w, "bad json", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(providers[index])
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+	jar, _ := cookiejar.New(nil)
+	client := server.Client()
+	client.Jar = jar
+	host := Host{client: &aionClient{base: base, client: client}}
+	if err := host.enforceManagedProviderPolicy(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if providers[0].Name != "Keep me" || providers[1].Name != "ChatGPT" || providers[1].APIKey != "codex-secret" || providers[1].Enabled || !reflect.DeepEqual(providers[1].Models, modelbootstrap.ManagedCodexModels()) {
+		t.Fatalf("unexpected ChatGPT provider policy result: %+v", providers)
+	}
+	if providers[2].Name != "KIMI" || providers[2].APIKey != "kimi-secret" || !providers[2].Enabled || !reflect.DeepEqual(providers[2].Models, modelbootstrap.ManagedKimiModels()) {
+		t.Fatalf("unexpected KIMI provider policy result: %+v", providers)
 	}
 }

@@ -210,6 +210,7 @@ if "display_name" not in model:
     model["display_name"] = "Kimi for Coding"
 models[MODEL_KEY] = model
 document["default_model"] = MODEL_KEY
+document["default_yolo"] = True
 
 def remove_kimi_oauth(section):
     if not isinstance(section, dict):
@@ -237,6 +238,7 @@ try:
     candidate_model = candidate.models.get(MODEL_KEY)
     if (
         candidate.default_model != MODEL_KEY
+        or candidate.default_yolo is not True
         or candidate_provider is None
         or candidate_provider.type != "kimi"
         or candidate_provider.base_url != base_url
@@ -266,7 +268,7 @@ for path in oauth_paths:
 
 verified = load_config(config_path)
 verified_provider = verified.providers.get(PROVIDER_KEY)
-if verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
+if verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
     raise RuntimeError("persisted Kimi API-key configuration verification failed")
 `
 
@@ -447,6 +449,36 @@ func (h *Host) applyPendingModelBootstrap(ctx context.Context, pending *pendingM
 		return err
 	}
 	h.log.Printf("Initialized Codex API-key login and Aion providers codex_key_id=%s kimi_key_id=%s", bundle.CodexKeyID, bundle.KimiKeyID)
+	return nil
+}
+
+func (h *Host) enforceManagedProviderPolicy(ctx context.Context) error {
+	current, err := h.client.listProviders(ctx)
+	if err != nil {
+		return err
+	}
+	byID := make(map[string]aionProvider, len(current))
+	for _, provider := range current {
+		if _, duplicate := byID[provider.ID]; duplicate {
+			return fmt.Errorf("Aion provider id is duplicated: %s", provider.ID)
+		}
+		byID[provider.ID] = provider
+	}
+	codex, hasCodex := byID[modelbootstrap.CodexProviderID]
+	kimi, hasKimi := byID[modelbootstrap.KimiProviderID]
+	if !hasCodex && !hasKimi {
+		return nil
+	}
+	if !hasCodex || !hasKimi {
+		return errors.New("managed Aion providers are incomplete")
+	}
+	codex.Name = modelbootstrap.CodexProviderName
+	codex.Models = modelbootstrap.ManagedCodexModels()
+	kimi.Name = modelbootstrap.KimiProviderName
+	kimi.Models = modelbootstrap.ManagedKimiModels()
+	if err := h.client.upsertManagedProviders(ctx, []aionProvider{codex, kimi}); err != nil {
+		return fmt.Errorf("enforce managed Aion provider policy: %w", err)
+	}
 	return nil
 }
 

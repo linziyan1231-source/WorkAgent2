@@ -175,7 +175,7 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	if agentDefaultsApplied {
-		h.log.Printf("Initialized AionUi agents with Aion CLI, Codex, and Kimi enabled")
+		h.log.Printf("Initialized AionUi agents with Aion CLI, Codex, and Kimi enabled and Aion CLI defaulting to YOLO")
 	}
 	username, password, err := rotateInternalCredentials(ctx, dbPath, time.Now())
 	if err != nil {
@@ -230,6 +230,10 @@ func (h *Host) initialize(ctx context.Context) error {
 	}
 	h.client, h.auth = client, material
 	if err := h.applyPendingModelBootstrap(startupCtx, pendingModels); err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
+	if err := h.enforceManagedProviderPolicy(startupCtx); err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
 	}

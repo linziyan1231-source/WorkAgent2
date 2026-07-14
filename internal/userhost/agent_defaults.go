@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	agentDefaultsMarkerName          = "agent-defaults-v2.applied"
-	agentDefaultsMarkerContent       = "builtin-enabled=aion,codex,kimi\n"
-	legacyAgentDefaultsMarkerName    = "agent-defaults-v1.applied"
-	legacyAgentDefaultsMarkerContent = "builtin-enabled=codex,kimi\n"
+	agentDefaultsMarkerName            = "agent-defaults-v3.applied"
+	agentDefaultsMarkerContent         = "builtin-enabled=aion,codex,kimi;default-yolo=aion\n"
+	previousAgentDefaultsMarkerName    = "agent-defaults-v2.applied"
+	previousAgentDefaultsMarkerContent = "builtin-enabled=aion,codex,kimi\n"
+	legacyAgentDefaultsMarkerName      = "agent-defaults-v1.applied"
+	legacyAgentDefaultsMarkerContent   = "builtin-enabled=codex,kimi\n"
 )
 
 func applyInitialAgentDefaults(ctx context.Context, dbPath, markerPath string, now time.Time) (bool, error) {
@@ -29,6 +31,10 @@ func applyInitialAgentDefaults(ctx context.Context, dbPath, markerPath string, n
 		return false, nil
 	}
 	legacyApplied, err := markerHasContent(filepath.Join(filepath.Dir(markerPath), legacyAgentDefaultsMarkerName), legacyAgentDefaultsMarkerContent)
+	if err != nil {
+		return false, err
+	}
+	previousApplied, err := markerHasContent(filepath.Join(filepath.Dir(markerPath), previousAgentDefaultsMarkerName), previousAgentDefaultsMarkerContent)
 	if err != nil {
 		return false, err
 	}
@@ -78,19 +84,60 @@ func applyInitialAgentDefaults(ctx context.Context, dbPath, markerPath string, n
 SET enabled=CASE WHEN backend IN ('codex','kimi') OR agent_type='aionrs' THEN 1 ELSE 0 END,updated_at=?
 WHERE agent_source IN ('builtin','internal')
   AND enabled<>CASE WHEN backend IN ('codex','kimi') OR agent_type='aionrs' THEN 1 ELSE 0 END`
-	if legacyApplied {
+	if previousApplied {
+		query = `UPDATE agent_metadata SET updated_at=updated_at WHERE 0`
+	} else if legacyApplied {
 		query = `UPDATE agent_metadata SET enabled=1,updated_at=?
 WHERE agent_source='internal' AND agent_type='aionrs' AND enabled=0`
 	}
 	if _, err := tx.ExecContext(ctx, query, now.UnixMilli()); err != nil {
 		return false, fmt.Errorf("set initial AionUi agent defaults: %w", err)
 	}
-	enabled, err := managedAgentTargets(ctx, tx, `enabled<>0 AND (backend IN ('codex','kimi') OR agent_type='aionrs')`)
+	if !previousApplied {
+		enabled, err := managedAgentTargets(ctx, tx, `enabled<>0 AND (backend IN ('codex','kimi') OR agent_type='aionrs')`)
+		if err != nil {
+			return false, err
+		}
+		if len(enabled) != 3 || enabled[0] != "aion" || enabled[1] != "codex" || enabled[2] != "kimi" {
+			return false, fmt.Errorf("verify initial AionUi agent defaults: enabled=%v", enabled)
+		}
+	}
+	assistantColumns, err := tableColumns(ctx, tx, "assistant_definitions")
 	if err != nil {
 		return false, err
 	}
-	if len(enabled) != 3 || enabled[0] != "aion" || enabled[1] != "codex" || enabled[2] != "kimi" {
-		return false, fmt.Errorf("verify initial AionUi agent defaults: enabled=%v", enabled)
+	for _, required := range []string{"id", "source", "source_ref", "agent_id", "default_permission_mode", "default_permission_value", "updated_at", "deleted_at"} {
+		if !containsColumn(assistantColumns, required) {
+			return false, fmt.Errorf("unsupported AionCore assistant_definitions schema: missing %s", required)
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE assistant_definitions
+SET default_permission_mode='fixed',default_permission_value='yolo',updated_at=?
+WHERE source='generated' AND deleted_at IS NULL
+  AND source_ref=agent_id
+  AND agent_id IN (
+    SELECT id FROM agent_metadata
+    WHERE agent_source='internal' AND agent_type='aionrs'
+  )
+  AND (default_permission_mode<>'fixed' OR default_permission_value<>'yolo')`, now.UnixMilli())
+	if err != nil {
+		return false, fmt.Errorf("set Aion CLI YOLO default: %w", err)
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed < 0 || changed > 1 {
+		return false, fmt.Errorf("unexpected Aion CLI YOLO update count: %d (%v)", changed, err)
+	}
+	var yoloCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_definitions
+WHERE source='generated' AND deleted_at IS NULL AND source_ref=agent_id
+  AND agent_id IN (
+    SELECT id FROM agent_metadata
+    WHERE agent_source='internal' AND agent_type='aionrs'
+  )
+	  AND default_permission_mode='fixed' AND default_permission_value='yolo'`).Scan(&yoloCount); err != nil {
+		return false, fmt.Errorf("verify Aion CLI YOLO default: %w", err)
+	}
+	if yoloCount != 1 {
+		return false, fmt.Errorf("expected exactly one Aion CLI YOLO default, found %d", yoloCount)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit initial AionUi agent defaults: %w", err)
@@ -162,7 +209,7 @@ func markerHasContent(path, expected string) (bool, error) {
 }
 
 func writeAgentDefaultsMarker(path string) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".agent-defaults-v1.tmp-*")
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".agent-defaults-v3.tmp-*")
 	if err != nil {
 		return fmt.Errorf("create AionUi agent defaults marker: %w", err)
 	}

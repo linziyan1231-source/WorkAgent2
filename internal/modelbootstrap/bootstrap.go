@@ -23,9 +23,18 @@ const (
 	CodexProviderID   = "managed-cliproxy-chatgpt"
 	KimiProviderID    = "managed-cliproxy-kimi"
 	maxBootstrapFile  = 256 * 1024
-	CodexProviderName = "ChatGPT (CLIProxyAPI)"
-	KimiProviderName  = "Kimi for Coding (CLIProxyAPI)"
+	CodexProviderName = "ChatGPT"
+	KimiProviderName  = "KIMI"
 )
+
+var (
+	managedCodexModels = []string{"example-reasoning", "example-balanced", "example-fast"}
+	managedKimiModels  = []string{"kimi-for-coding"}
+)
+
+func ManagedCodexModels() []string { return append([]string(nil), managedCodexModels...) }
+
+func ManagedKimiModels() []string { return append([]string(nil), managedKimiModels...) }
 
 var (
 	keyIDPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,95}$`)

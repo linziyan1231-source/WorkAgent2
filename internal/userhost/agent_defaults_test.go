@@ -43,6 +43,7 @@ func TestApplyInitialAgentDefaultsEnablesOnlyAionCodexAndKimiOnce(t *testing.T) 
 	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "codex", "custom", "kimi"}) {
 		t.Fatalf("unexpected enabled agents: %v", got)
 	}
+	assertYoloAssistantDefaults(t, db)
 	if _, err := db.Exec(`UPDATE agent_metadata SET enabled=1 WHERE id='qwen'`); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +111,34 @@ func TestApplyInitialAgentDefaultsV2EnablesAionWithoutOverwritingSelections(t *t
 	}
 }
 
+func TestApplyInitialAgentDefaultsV3PreservesAgentSelectionsAndSetsYolo(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "aionui-backend.db")
+	markerPath := filepath.Join(root, agentDefaultsMarkerName)
+	db := seedAgentMetadata(t, dbPath, []agentFixture{
+		{"aion", "Aion CLI", "", "internal", 0},
+		{"codex", "Codex CLI", "codex", "builtin", 1},
+		{"kimi", "Kimi", "kimi", "builtin", 0},
+	})
+	db.Close()
+	if err := os.WriteFile(filepath.Join(root, previousAgentDefaultsMarkerName), []byte(previousAgentDefaultsMarkerContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := applyInitialAgentDefaults(context.Background(), dbPath, markerPath, time.UnixMilli(1783969300000))
+	if err != nil || !applied {
+		t.Fatalf("apply v3 defaults: applied=%v err=%v", applied, err)
+	}
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("v3 migration overwrote agent selections: %v", got)
+	}
+	assertYoloAssistantDefaults(t, db)
+}
+
 type agentFixture struct {
 	id, name, backend, source string
 	enabled                   int
@@ -133,6 +162,13 @@ last_check_latency_ms INTEGER,last_check_at INTEGER,last_success_at INTEGER,last
 		db.Close()
 		t.Fatal(err)
 	}
+	_, err = db.Exec(`CREATE TABLE assistant_definitions (
+id TEXT PRIMARY KEY NOT NULL,source TEXT NOT NULL,source_ref TEXT,agent_id TEXT NOT NULL,
+default_permission_mode TEXT NOT NULL,default_permission_value TEXT,updated_at INTEGER NOT NULL,deleted_at INTEGER)`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
 	for _, agent := range agents {
 		var backend any
 		if agent.backend != "" {
@@ -147,8 +183,40 @@ VALUES(?,?,?,?,?,?,1783950847713,1783950847713)`, agent.id, agent.name, backend,
 			db.Close()
 			t.Fatal(err)
 		}
+		if agent.id == "aion" || agent.id == "kimi" {
+			if _, err := db.Exec(`INSERT INTO assistant_definitions(id,source,source_ref,agent_id,default_permission_mode,updated_at)
+VALUES(?,?,?,?,?,1783950847713)`, "bare:"+agent.id, "generated", agent.id, agent.id, "auto"); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+		}
 	}
 	return db
+}
+
+func assertYoloAssistantDefaults(t *testing.T, db *sql.DB) {
+	t.Helper()
+	rows, err := db.Query(`SELECT agent_id,default_permission_mode,default_permission_value
+FROM assistant_definitions ORDER BY agent_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var agentID, mode string
+		var value sql.NullString
+		if err := rows.Scan(&agentID, &mode, &value); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, agentID+":"+mode+":"+value.String)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"aion:fixed:yolo", "kimi:auto:"}) {
+		t.Fatalf("unexpected assistant permission defaults: %v", got)
+	}
 }
 
 func enabledAgentIDs(t *testing.T, db *sql.DB) []string {
