@@ -87,10 +87,7 @@ func (c Client) Provision(ctx context.Context, options ProvisionOptions) (modelb
 	if executable == "" {
 		executable = "ssh.exe"
 	}
-	payload := request{Version: 1, Keys: []requestKey{
-		{ID: state.CodexKeyID, Name: options.Username + " / ChatGPT-Codex", Enabled: true, RPM: options.RPM, Aliases: append([]string(nil), state.CodexModels...), DailyLimitUSD: options.CodexDailyUSD, WeeklyLimitUSD: options.CodexWeeklyUSD},
-		{ID: state.KimiKeyID, Name: options.Username + " / Kimi", Enabled: true, RPM: options.RPM, Aliases: append([]string(nil), state.KimiModels...), DailyLimitUSD: options.KimiDailyUSD, WeeklyLimitUSD: options.KimiWeeklyUSD},
-	}}
+	payload := provisionRequest(options, state)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return modelbootstrap.Bundle{}, err
@@ -118,6 +115,13 @@ func (c Client) Provision(ctx context.Context, options ProvisionOptions) (modelb
 		return modelbootstrap.Bundle{}, fmt.Errorf("validate CLIProxyAPI provision result: %w", err)
 	}
 	return bundle, nil
+}
+
+func provisionRequest(options ProvisionOptions, state modelbootstrap.State) request {
+	return request{Version: 1, Keys: []requestKey{
+		{ID: state.CodexKeyID, Name: options.Username + " / ChatGPT-Codex", Enabled: true, RPM: options.RPM, Aliases: append([]string(nil), state.CodexModels...), DailyLimitUSD: options.CodexDailyUSD, WeeklyLimitUSD: options.CodexWeeklyUSD, AllowModelsEndpoint: true},
+		{ID: state.KimiKeyID, Name: options.Username + " / Kimi", Enabled: true, RPM: options.RPM, Aliases: append([]string(nil), state.KimiModels...), DailyLimitUSD: options.KimiDailyUSD, WeeklyLimitUSD: options.KimiWeeklyUSD, AllowModelsEndpoint: true},
+	}}
 }
 
 func stateFor(options ProvisionOptions) (modelbootstrap.State, error) {
