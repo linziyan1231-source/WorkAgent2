@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"aionuiportal/internal/portalusage"
 )
 
 func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +46,7 @@ func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	summary, err := s.usage.Current(ctx, session.User.WindowsSID, ids)
 	if err != nil {
-		s.usageFailure("remote_query_failed")
+		s.usageFailure(portalusage.RemoteFailureStage(err))
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			writeJSON(w, http.StatusGatewayTimeout, map[string]any{"success": false, "message": "Quota request timed out"})
 			return

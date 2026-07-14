@@ -137,4 +137,15 @@ func TestSSHQueryFailsOnOutputLimitTimeoutAndSecretBearingDiagnostics(t *testing
 			t.Fatalf("remote diagnostic was exposed: %v", err)
 		}
 	})
+	t.Run("safe native stage", func(t *testing.T) {
+		client := testSSHClient(t)
+		client.run = func(_ context.Context, _ string, _ []byte, _, stderr io.Writer) error {
+			_, _ = io.WriteString(stderr, "cpa_plaintext-secret "+ids.KimiKeyID+" ManagementKey")
+			return &sshStageError{stage: "handshake"}
+		}
+		_, err := client.Query(context.Background(), ids)
+		if err == nil || RemoteFailureStage(err) != "remote_handshake_failed" || strings.Contains(err.Error(), ids.KimiKeyID) || strings.Contains(err.Error(), "ManagementKey") {
+			t.Fatalf("safe native stage was not preserved: %v", err)
+		}
+	})
 }

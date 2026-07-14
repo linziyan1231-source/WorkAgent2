@@ -47,6 +47,18 @@ type SSHClient struct {
 	run     commandRunner
 }
 
+type sshStageError struct{ stage string }
+
+func (e *sshStageError) Error() string { return "remote SSH " + e.stage + " failed" }
+
+func RemoteFailureStage(err error) string {
+	var stageError *sshStageError
+	if errors.As(err, &stageError) {
+		return "remote_" + stageError.stage + "_failed"
+	}
+	return "remote_query_failed"
+}
+
 func NewSSHClient(options SSHOptions) (*SSHClient, error) {
 	if !sshTargetPattern.MatchString(options.Target) {
 		return nil, errors.New("Portal usage SSH target is invalid")
@@ -113,6 +125,10 @@ func (c *SSHClient) Query(ctx context.Context, ids modelbootstrap.KeyIDs) (RawSn
 		if ctx.Err() != nil {
 			return RawSnapshot{}, ctx.Err()
 		}
+		var stageError *sshStageError
+		if errors.As(err, &stageError) {
+			return RawSnapshot{}, fmt.Errorf("remote usage helper failed: %w", stageError)
+		}
 		return RawSnapshot{}, errors.New("remote usage helper failed")
 	}
 	if stdout.overflow {
@@ -139,24 +155,24 @@ func nativeSSHRunner(address string, config *ssh.ClientConfig) commandRunner {
 		dialer := net.Dialer{Timeout: sshConnectTimeout}
 		connection, err := dialer.DialContext(ctx, "tcp", address)
 		if err != nil {
-			return err
+			return &sshStageError{stage: "connect"}
 		}
 		defer connection.Close()
 		if err := connection.SetDeadline(boundedDeadline(ctx, sshConnectTimeout)); err != nil {
-			return err
+			return &sshStageError{stage: "connect"}
 		}
 		clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, config)
 		if err != nil {
-			return err
+			return &sshStageError{stage: "handshake"}
 		}
 		client := ssh.NewClient(clientConnection, channels, requests)
 		defer client.Close()
 		if err := connection.SetDeadline(boundedDeadline(ctx, sshIOTimeout)); err != nil {
-			return err
+			return &sshStageError{stage: "session"}
 		}
 		session, err := client.NewSession()
 		if err != nil {
-			return err
+			return &sshStageError{stage: "session"}
 		}
 		defer session.Close()
 		session.Stdin = bytes.NewReader(stdin)
@@ -166,7 +182,7 @@ func nativeSSHRunner(address string, config *ssh.ClientConfig) commandRunner {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return err
+			return &sshStageError{stage: "command"}
 		}
 		return nil
 	}
