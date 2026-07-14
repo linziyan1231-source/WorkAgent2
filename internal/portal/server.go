@@ -169,6 +169,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/portal/me/usage":
 		s.currentUsage(w, r)
 		return
+	case "/api/portal/me/projects":
+		s.createProject(w, r)
+		return
 	case "/api/mcp/oauth/login":
 		s.mcpOAuthLogin(w, r)
 		return
