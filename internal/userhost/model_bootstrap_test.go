@@ -51,7 +51,7 @@ web_search = true
 func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testing.T) {
 	desired := []aionProvider{
 		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"example-reasoning", "gpt-5.4-mini"}, Enabled: true},
-		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "Kimi K2.7 (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-k2.7"}, Enabled: true},
+		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "Kimi for Coding (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding"}, Enabled: true},
 	}
 	providers := []aionProvider{{ID: "custom-user-provider", Platform: "custom", Name: "Keep me", BaseURL: "https://example.test/v1", APIKey: "user-secret", Models: []string{"model"}, Enabled: true},
 		{ID: desired[0].ID, Platform: "custom", Name: "stale", BaseURL: "https://stale.test/v1", APIKey: "stale", Models: []string{"stale"}, Enabled: false}}

@@ -8,7 +8,7 @@ import (
 
 func testOptions() ProvisionOptions {
 	return ProvisionOptions{Username: "test1", WindowsSID: "S-1-5-21-1335169958-1819941586-1322872941-1322", BaseURL: "http://203.0.113.52:8317/v1",
-		CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-k2.7"},
+		CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding"},
 		RPM: 0, CodexDailyUSD: 20, CodexWeeklyUSD: 40, KimiDailyUSD: 5, KimiWeeklyUSD: 10}
 }
 

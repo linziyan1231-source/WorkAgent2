@@ -9,7 +9,7 @@ import (
 
 func realBundle() Bundle {
 	return Bundle{State: State{FormatVersion: 1, BaseURL: "http://203.0.113.52:8317/v1", CodexKeyID: "aionui-0123456789abcdef-chatgpt",
-		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-k2.7"}},
+		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding"}},
 		CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
 }
 
