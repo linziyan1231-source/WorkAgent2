@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestApplyInitialAgentDefaultsEnablesOnlyCodexAndKimiOnce(t *testing.T) {
+func TestApplyInitialAgentDefaultsEnablesOnlyAionCodexAndKimiOnce(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "aionui-backend.db")
 	markerPath := filepath.Join(root, agentDefaultsMarkerName)
@@ -40,7 +40,7 @@ func TestApplyInitialAgentDefaultsEnablesOnlyCodexAndKimiOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"codex", "custom", "kimi"}) {
+	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "codex", "custom", "kimi"}) {
 		t.Fatalf("unexpected enabled agents: %v", got)
 	}
 	if _, err := db.Exec(`UPDATE agent_metadata SET enabled=1 WHERE id='qwen'`); err != nil {
@@ -50,7 +50,7 @@ func TestApplyInitialAgentDefaultsEnablesOnlyCodexAndKimiOnce(t *testing.T) {
 	if err != nil || applied {
 		t.Fatalf("repeat defaults: applied=%v err=%v", applied, err)
 	}
-	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"codex", "custom", "kimi", "qwen"}) {
+	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "codex", "custom", "kimi", "qwen"}) {
 		t.Fatalf("repeat call overwrote user selection: %v", got)
 	}
 }
@@ -65,7 +65,7 @@ func TestApplyInitialAgentDefaultsFailsWithoutBothTargets(t *testing.T) {
 	db.Close()
 	markerPath := filepath.Join(root, agentDefaultsMarkerName)
 	applied, err := applyInitialAgentDefaults(context.Background(), dbPath, markerPath, time.Now())
-	if err == nil || applied || !strings.Contains(err.Error(), "Codex and Kimi") {
+	if err == nil || applied || !strings.Contains(err.Error(), "Aion, Codex, and Kimi") {
 		t.Fatalf("expected missing-target failure, applied=%v err=%v", applied, err)
 	}
 	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
@@ -78,6 +78,35 @@ func TestApplyInitialAgentDefaultsFailsWithoutBothTargets(t *testing.T) {
 	defer db.Close()
 	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"qwen"}) {
 		t.Fatalf("failed initialization changed agent state: %v", got)
+	}
+}
+
+func TestApplyInitialAgentDefaultsV2EnablesAionWithoutOverwritingSelections(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "aionui-backend.db")
+	markerPath := filepath.Join(root, agentDefaultsMarkerName)
+	db := seedAgentMetadata(t, dbPath, []agentFixture{
+		{"aion", "Aion CLI", "", "internal", 0},
+		{"claude", "Claude Code", "claude", "builtin", 1},
+		{"codex", "Codex CLI", "codex", "builtin", 1},
+		{"kimi", "Kimi", "kimi", "builtin", 1},
+		{"qwen", "Qwen", "qwen", "builtin", 1},
+	})
+	db.Close()
+	if err := os.WriteFile(filepath.Join(root, legacyAgentDefaultsMarkerName), []byte(legacyAgentDefaultsMarkerContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := applyInitialAgentDefaults(context.Background(), dbPath, markerPath, time.UnixMilli(1783969200000))
+	if err != nil || !applied {
+		t.Fatalf("apply v2 defaults: applied=%v err=%v", applied, err)
+	}
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "claude", "codex", "kimi", "qwen"}) {
+		t.Fatalf("v2 migration overwrote prior selections: %v", got)
 	}
 }
 
@@ -109,8 +138,12 @@ last_check_latency_ms INTEGER,last_check_at INTEGER,last_success_at INTEGER,last
 		if agent.backend != "" {
 			backend = agent.backend
 		}
+		agentType := "acp"
+		if agent.id == "aion" {
+			agentType = "aionrs"
+		}
 		if _, err := db.Exec(`INSERT INTO agent_metadata(id,name,backend,agent_type,agent_source,enabled,created_at,updated_at)
-VALUES(?,?,?,'acp',?,?,1783950847713,1783950847713)`, agent.id, agent.name, backend, agent.source, agent.enabled); err != nil {
+VALUES(?,?,?,?,?,?,1783950847713,1783950847713)`, agent.id, agent.name, backend, agentType, agent.source, agent.enabled); err != nil {
 			db.Close()
 			t.Fatal(err)
 		}

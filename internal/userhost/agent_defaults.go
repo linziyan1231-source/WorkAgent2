@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	agentDefaultsMarkerName    = "agent-defaults-v1.applied"
-	agentDefaultsMarkerContent = "builtin-enabled=codex,kimi\n"
+	agentDefaultsMarkerName          = "agent-defaults-v2.applied"
+	agentDefaultsMarkerContent       = "builtin-enabled=aion,codex,kimi\n"
+	legacyAgentDefaultsMarkerName    = "agent-defaults-v1.applied"
+	legacyAgentDefaultsMarkerContent = "builtin-enabled=codex,kimi\n"
 )
 
 func applyInitialAgentDefaults(ctx context.Context, dbPath, markerPath string, now time.Time) (bool, error) {
@@ -25,6 +27,10 @@ func applyInitialAgentDefaults(ctx context.Context, dbPath, markerPath string, n
 	}
 	if applied {
 		return false, nil
+	}
+	legacyApplied, err := markerHasContent(filepath.Join(filepath.Dir(markerPath), legacyAgentDefaultsMarkerName), legacyAgentDefaultsMarkerContent)
+	if err != nil {
+		return false, err
 	}
 	info, err := os.Lstat(dbPath)
 	if err != nil {
@@ -61,24 +67,29 @@ func applyInitialAgentDefaults(ctx context.Context, dbPath, markerPath string, n
 	if managedCount < 2 {
 		return false, fmt.Errorf("expected managed AionUi agents, found %d", managedCount)
 	}
-	targets, err := enabledManagedAgentBackends(ctx, tx, `backend IN ('codex','kimi')`)
+	targets, err := managedAgentTargets(ctx, tx, `backend IN ('codex','kimi') OR agent_type='aionrs'`)
 	if err != nil {
 		return false, err
 	}
-	if len(targets) != 2 || targets[0] != "codex" || targets[1] != "kimi" {
-		return false, fmt.Errorf("expected exactly one managed Codex and Kimi agent, found %v", targets)
+	if len(targets) != 3 || targets[0] != "aion" || targets[1] != "codex" || targets[2] != "kimi" {
+		return false, fmt.Errorf("expected exactly one managed Aion, Codex, and Kimi agent, found %v", targets)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE agent_metadata
-SET enabled=CASE WHEN backend IN ('codex','kimi') THEN 1 ELSE 0 END,updated_at=?
+	query := `UPDATE agent_metadata
+SET enabled=CASE WHEN backend IN ('codex','kimi') OR agent_type='aionrs' THEN 1 ELSE 0 END,updated_at=?
 WHERE agent_source IN ('builtin','internal')
-  AND enabled<>CASE WHEN backend IN ('codex','kimi') THEN 1 ELSE 0 END`, now.UnixMilli()); err != nil {
+  AND enabled<>CASE WHEN backend IN ('codex','kimi') OR agent_type='aionrs' THEN 1 ELSE 0 END`
+	if legacyApplied {
+		query = `UPDATE agent_metadata SET enabled=1,updated_at=?
+WHERE agent_source='internal' AND agent_type='aionrs' AND enabled=0`
+	}
+	if _, err := tx.ExecContext(ctx, query, now.UnixMilli()); err != nil {
 		return false, fmt.Errorf("set initial AionUi agent defaults: %w", err)
 	}
-	enabled, err := enabledManagedAgentBackends(ctx, tx, `enabled<>0`)
+	enabled, err := managedAgentTargets(ctx, tx, `enabled<>0 AND (backend IN ('codex','kimi') OR agent_type='aionrs')`)
 	if err != nil {
 		return false, err
 	}
-	if len(enabled) != 2 || enabled[0] != "codex" || enabled[1] != "kimi" {
+	if len(enabled) != 3 || enabled[0] != "aion" || enabled[1] != "codex" || enabled[2] != "kimi" {
 		return false, fmt.Errorf("verify initial AionUi agent defaults: enabled=%v", enabled)
 	}
 	if err := tx.Commit(); err != nil {
@@ -90,8 +101,9 @@ WHERE agent_source IN ('builtin','internal')
 	return true, nil
 }
 
-func enabledManagedAgentBackends(ctx context.Context, tx *sql.Tx, predicate string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT backend FROM agent_metadata WHERE agent_source IN ('builtin','internal') AND `+predicate)
+func managedAgentTargets(ctx context.Context, tx *sql.Tx, predicate string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT CASE WHEN agent_type='aionrs' THEN 'aion' ELSE backend END
+FROM agent_metadata WHERE agent_source IN ('builtin','internal') AND (`+predicate+`)`)
 	if err != nil {
 		return nil, fmt.Errorf("read managed AionUi agents: %w", err)
 	}
@@ -125,6 +137,10 @@ func containsColumn(columns []string, required string) bool {
 }
 
 func agentDefaultsAlreadyApplied(path string) (bool, error) {
+	return markerHasContent(path, agentDefaultsMarkerContent)
+}
+
+func markerHasContent(path, expected string) (bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -139,7 +155,7 @@ func agentDefaultsAlreadyApplied(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read AionUi agent defaults marker: %w", err)
 	}
-	if string(content) != agentDefaultsMarkerContent {
+	if string(content) != expected {
 		return false, errors.New("AionUi agent defaults marker has unexpected content")
 	}
 	return true, nil
