@@ -60,9 +60,9 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantKimiArgs := []string{"-m", "kimi_cli", "--agent-file", `C:\Users\user-87eba76e\AionUiPortal\profile\.kimi\aion-default-agent.yaml`, "--version"}
+	wantKimiArgs := []string{"-m", "kimi_cli", "--version"}
 	if strings.Join(perUserKimi.Args, "|") != strings.Join(wantKimiArgs, "|") {
-		t.Fatalf("per-user Kimi language agent was not injected: %+v", perUserKimi.Args)
+		t.Fatalf("per-user Kimi arguments were changed: %+v", perUserKimi.Args)
 	}
 	overriddenKimi, err := Spec(filepath.Join(root, "bin", "kimi.exe"), []string{"--agent", "default", "--version"}, perUserKimiEnvironment)
 	if err != nil {
