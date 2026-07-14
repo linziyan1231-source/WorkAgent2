@@ -174,7 +174,7 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	if agentDefaultsApplied {
-		h.log.Printf("Initialized AionUi agents with only Codex and Kimi enabled")
+		h.log.Printf("Initialized AionUi agents with Aion CLI, Codex, and Kimi enabled")
 	}
 	username, password, err := rotateInternalCredentials(ctx, dbPath, time.Now())
 	if err != nil {
