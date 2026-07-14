@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -10,6 +11,13 @@ import (
 
 	"aionuiportal/internal/admin"
 )
+
+func TestKimiOAuthCommandIsDisabled(t *testing.T) {
+	err := dispatch(context.Background(), nil, []string{"kimi-oauth", "seed", "test1"})
+	if err == nil || err.Error() != "native Kimi OAuth has been removed; use model-bootstrap provision --update with the user's CLIProxyAPI keys" {
+		t.Fatalf("disabled Kimi OAuth command returned %v", err)
+	}
+}
 
 func TestCopyFileHashVerifiesDurableBackup(t *testing.T) {
 	root := t.TempDir()

@@ -47,12 +47,7 @@ func run(arguments []string) int {
 		return 1
 	}
 	defer manager.Close()
-	timeout := 10 * time.Minute
-	parsed := global.Args()
-	if len(parsed) >= 2 && parsed[0] == "kimi-oauth" && (parsed[1] == "seed-missing" || parsed[1] == "update-all") {
-		timeout = 60 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	if err := dispatch(ctx, manager, global.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED: %v\n", err)
@@ -75,7 +70,7 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 	case "instance":
 		return instanceCommand(ctx, manager, arguments[1:])
 	case "kimi-oauth":
-		return kimiOAuthCommand(ctx, manager, arguments[1:])
+		return errors.New("native Kimi OAuth has been removed; use model-bootstrap provision --update with the user's CLIProxyAPI keys")
 	case "model-bootstrap":
 		return modelBootstrapCommand(ctx, manager, arguments[1:])
 	case "limits":
@@ -833,5 +828,5 @@ func newFlags(name string) *flag.FlagSet {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|kimi-oauth|model-bootstrap|limits|logs|release|acl|readiness> ...")
+	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|model-bootstrap|limits|logs|release|acl|readiness> ...")
 }
