@@ -43,11 +43,6 @@ func rotateInternalCredentials(ctx context.Context, dbPath string, now time.Time
 	if err != nil {
 		return fail(fmt.Errorf("hash internal AionUi password: %w", err))
 	}
-	jwtSecret, err := randomBase64(64)
-	if err != nil {
-		return fail(err)
-	}
-	defer zero(jwtSecret)
 	dsn := "file:" + filepath.ToSlash(dbPath) + "?mode=rw&_txlock=immediate&_pragma=busy_timeout(0)&_pragma=foreign_keys(1)&_pragma=locking_mode(EXCLUSIVE)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -80,14 +75,21 @@ func rotateInternalCredentials(ctx context.Context, dbPath string, now time.Time
 		return fail(fmt.Errorf("expected exactly one internal AionCore user, found %d", count))
 	}
 	var username string
-	if err := tx.QueryRowContext(ctx, `SELECT username FROM users WHERE id='system_default_user'`).Scan(&username); err != nil {
+	var hasJWTSecret int
+	if err := tx.QueryRowContext(ctx, `SELECT username,CASE WHEN LENGTH(TRIM(COALESCE(jwt_secret,''))) > 0 THEN 1 ELSE 0 END
+FROM users WHERE id='system_default_user'`).Scan(&username, &hasJWTSecret); err != nil {
 		return fail(fmt.Errorf("find system_default_user: %w", err))
 	}
 	if strings.TrimSpace(username) == "" {
 		return fail(errors.New("internal AionCore username is empty"))
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE users SET password_hash=?,jwt_secret=?,updated_at=?,last_login=NULL WHERE id='system_default_user'`,
-		string(hash), string(jwtSecret), now.UnixMilli())
+	if hasJWTSecret != 1 {
+		return fail(errors.New("internal AionCore JWT secret is empty"))
+	}
+	// AionCore also derives persistent provider-credential encryption from
+	// jwt_secret. Preserve it across starts and rotate only the private login.
+	result, err := tx.ExecContext(ctx, `UPDATE users SET password_hash=?,updated_at=?,last_login=NULL WHERE id='system_default_user'`,
+		string(hash), now.UnixMilli())
 	if err != nil {
 		return fail(fmt.Errorf("rotate internal AionCore credentials: %w", err))
 	}

@@ -61,14 +61,52 @@ func TestRotateInternalCredentialsMatchesRealAionCoreSchema(t *testing.T) {
 	if bcrypt.CompareHashAndPassword([]byte(hash), password) != nil || costErr != nil || cost != internalBcryptCost {
 		t.Fatal("stored bcrypt hash does not match returned high-entropy password at cost 12")
 	}
-	if jwt == "old-secret" || len(jwt) < 80 || updated != 1_700_000_000_000 {
-		t.Fatalf("JWT rotation or timestamp mismatch: jwt length=%d updated=%d", len(jwt), updated)
+	if jwt != "old-secret" || updated != 1_700_000_000_000 {
+		t.Fatalf("provider encryption secret or timestamp mismatch: jwt=%q updated=%d", jwt, updated)
 	}
 	if err := db.QueryRow(`SELECT language,updated_at FROM system_settings WHERE id=1`).Scan(&language, &updated); err != nil {
 		t.Fatal(err)
 	}
 	if language != preferredLanguage || updated != 1_700_000_000_000 {
 		t.Fatalf("preferred AionUi language mismatch: language=%q updated=%d", language, updated)
+	}
+}
+
+func TestRotateInternalCredentialsPreservesJWTSecretAcrossStarts(t *testing.T) {
+	path := createAionDB(t, "")
+	_, firstPassword, err := rotateInternalCredentials(context.Background(), path, time.Unix(1_700_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zero(firstPassword)
+	_, secondPassword, err := rotateInternalCredentials(context.Background(), path, time.Unix(1_700_000_001, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zero(secondPassword)
+	if string(firstPassword) == string(secondPassword) {
+		t.Fatal("internal login password was reused")
+	}
+	db, _ := sql.Open("sqlite", path)
+	defer db.Close()
+	var jwt string
+	if err := db.QueryRow(`SELECT jwt_secret FROM users WHERE id='system_default_user'`).Scan(&jwt); err != nil {
+		t.Fatal(err)
+	}
+	if jwt != "old-secret" {
+		t.Fatal("provider encryption secret changed across starts")
+	}
+}
+
+func TestRotateInternalCredentialsRejectsEmptyJWTSecret(t *testing.T) {
+	path := createAionDB(t, "")
+	db, _ := sql.Open("sqlite", path)
+	if _, err := db.Exec(`UPDATE users SET jwt_secret='' WHERE id='system_default_user'`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if _, _, err := rotateInternalCredentials(context.Background(), path, time.Now()); err == nil {
+		t.Fatal("empty provider encryption secret was accepted")
 	}
 }
 
