@@ -1,6 +1,7 @@
 package userhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,11 +9,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"aionuiportal/internal/agentcli"
 )
 
 func TestInitialCodexConfigUpdatesOnlyManagedTopLevelKeys(t *testing.T) {
@@ -46,6 +50,77 @@ web_search = true
 	}
 	if strings.Contains(got, "old-model") || strings.Contains(got, "old.example") || strings.Contains(got, `model_reasoning_effort = "low"`) {
 		t.Fatalf("old managed values survived:\n%s", got)
+	}
+}
+
+func TestKimiAPIKeyScriptReplacesOAuthAndPreservesUnrelatedConfig(t *testing.T) {
+	root := filepath.Join(os.Getenv("ProgramFiles"), agentcli.RootDirectoryName)
+	verified, err := agentcli.VerifyCurrent(root)
+	if err != nil {
+		t.Skipf("shared Kimi runtime is unavailable: %v", err)
+	}
+	kimiDirectory := filepath.Join(t.TempDir(), ".kimi")
+	credentials := filepath.Join(kimiDirectory, "credentials")
+	if err := os.MkdirAll(credentials, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(kimiDirectory, "config.toml")
+	fixture := `# preserve this comment
+default_model = "kimi-code/kimi-for-coding"
+theme = "light"
+
+[models."kimi-code/kimi-for-coding"]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+max_context_size = 262144
+
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1"
+api_key = ""
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code"
+
+[providers.custom]
+type = "kimi"
+base_url = "https://custom.example/v1"
+api_key = "custom-secret"
+`
+	if err := os.WriteFile(configPath, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"kimi-code.json", "kimi-code.lock"} {
+		if err := os.WriteFile(filepath.Join(credentials, name), []byte("oauth-must-be-deleted"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload := []byte(`{"api_key":"cpa_abcdefghijklmnopqrstuvwxyz012345","base_url":"http://203.0.113.52:8317/v1"}`)
+	python := filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath))
+	command := exec.Command(python, "-B", "-c", kimiAPIKeyConfigureScript, configPath)
+	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
+	command.Stdin = bytes.NewReader(payload)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("Kimi API-key helper failed: %v: %s", err, output)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(content)
+	for _, required := range []string{"# preserve this comment", `theme = "light"`, `[providers.custom]`, `base_url = "http://203.0.113.52:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+		if !strings.Contains(got, required) {
+			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
+		}
+	}
+	if strings.Contains(got, "oauth/kimi-code") || strings.Contains(got, "api.kimi.com/coding") {
+		t.Fatalf("Kimi OAuth configuration survived:\n%s", got)
+	}
+	for _, name := range []string{"kimi-code.json", "kimi-code.lock"} {
+		if _, err := os.Stat(filepath.Join(credentials, name)); !os.IsNotExist(err) {
+			t.Fatalf("Kimi OAuth file %s survived: %v", name, err)
+		}
 	}
 }
 

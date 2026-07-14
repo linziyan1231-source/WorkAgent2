@@ -244,7 +244,7 @@ func (h *Host) initialize(ctx context.Context) error {
 	checks = append(checks, "per-user-restricted-token")
 	checks = append(checks, "codex-cli", "kimi-cli")
 	if pendingModels != nil {
-		checks = append(checks, "codex-api-key", "aion-model-providers")
+		checks = append(checks, "codex-api-key", "kimi-api-key", "aion-model-providers")
 	}
 	stats, err := h.job.Stats()
 	if err != nil {
