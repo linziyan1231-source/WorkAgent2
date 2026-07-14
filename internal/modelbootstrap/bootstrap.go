@@ -22,7 +22,7 @@ const (
 	KimiProviderID    = "managed-cliproxy-kimi"
 	maxBootstrapFile  = 256 * 1024
 	CodexProviderName = "ChatGPT (CLIProxyAPI)"
-	KimiProviderName  = "Kimi K2.6 (CLIProxyAPI)"
+	KimiProviderName  = "Kimi K2.7 (CLIProxyAPI)"
 )
 
 var (

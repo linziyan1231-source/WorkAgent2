@@ -131,7 +131,7 @@ func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, argument
 	sshTarget := flags.String("ssh-target", "", "CLIProxyAPI SSH user@host")
 	remoteHelper := flags.String("remote-helper", "", "absolute remote key-policy helper path")
 	baseURL := flags.String("base-url", "", "employee OpenAI-compatible /v1 base URL")
-	codexDefault := flags.String("codex-default-model", "gpt-5.4", "default Codex model alias")
+	codexDefault := flags.String("codex-default-model", "example-reasoning", "default Codex model alias")
 	codexModels := flags.String("codex-models", "", "comma-separated Codex/ChatGPT aliases")
 	kimiModels := flags.String("kimi-models", "", "comma-separated Kimi aliases")
 	rpm := flags.Int("rpm", 0, "requests per minute; zero means unlimited")

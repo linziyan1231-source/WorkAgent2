@@ -20,6 +20,7 @@ func TestInitialCodexConfigUpdatesOnlyManagedTopLevelKeys(t *testing.T) {
 	path := filepath.Join(directory, "config.toml")
 	existing := `model = "old-model"
 openai_base_url = "https://old.example/v1"
+model_reasoning_effort = "low"
 approval_policy = "on-request"
 
 [features]
@@ -29,7 +30,7 @@ web_search = true
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeInitialCodexConfig(path, "http://203.0.113.52:8317/v1", "gpt-5.4"); err != nil {
+	if err := writeInitialCodexConfig(path, "http://203.0.113.52:8317/v1", "example-reasoning"); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(path)
@@ -37,20 +38,20 @@ web_search = true
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{`openai_base_url = "http://203.0.113.52:8317/v1"`, `model = "gpt-5.4"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `model = "table-value-must-survive"`} {
+	for _, required := range []string{`openai_base_url = "http://203.0.113.52:8317/v1"`, `model = "example-reasoning"`, `model_reasoning_effort = "xhigh"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `model = "table-value-must-survive"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("managed config is missing %q:\n%s", required, got)
 		}
 	}
-	if strings.Contains(got, "old-model") || strings.Contains(got, "old.example") {
+	if strings.Contains(got, "old-model") || strings.Contains(got, "old.example") || strings.Contains(got, `model_reasoning_effort = "low"`) {
 		t.Fatalf("old managed values survived:\n%s", got)
 	}
 }
 
 func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testing.T) {
 	desired := []aionProvider{
-		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"gpt-5.4", "gpt-5.4-mini"}, Enabled: true},
-		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "Kimi K2.6 (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-k2.6"}, Enabled: true},
+		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"example-reasoning", "gpt-5.4-mini"}, Enabled: true},
+		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "Kimi K2.7 (CLIProxyAPI)", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-k2.7"}, Enabled: true},
 	}
 	providers := []aionProvider{{ID: "custom-user-provider", Platform: "custom", Name: "Keep me", BaseURL: "https://example.test/v1", APIKey: "user-secret", Models: []string{"model"}, Enabled: true},
 		{ID: desired[0].ID, Platform: "custom", Name: "stale", BaseURL: "https://stale.test/v1", APIKey: "stale", Models: []string{"stale"}, Enabled: false}}

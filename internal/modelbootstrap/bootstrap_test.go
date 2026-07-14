@@ -9,7 +9,7 @@ import (
 
 func realBundle() Bundle {
 	return Bundle{State: State{FormatVersion: 1, BaseURL: "http://203.0.113.52:8317/v1", CodexKeyID: "aionui-0123456789abcdef-chatgpt",
-		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "gpt-5.4", CodexModels: []string{"gpt-5.4", "gpt-5.4-mini"}, KimiModels: []string{"kimi-k2.6"}},
+		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-k2.7"}},
 		CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
 }
 
@@ -49,7 +49,7 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 		func(bundle *Bundle) { bundle.BaseURL = "http://203.0.113.52:8317/v1/" },
 		func(bundle *Bundle) { bundle.KimiKeyID = bundle.CodexKeyID },
 		func(bundle *Bundle) { bundle.KimiAPIKey = bundle.CodexAPIKey },
-		func(bundle *Bundle) { bundle.CodexModels = append(bundle.CodexModels, "gpt-5.4") },
+		func(bundle *Bundle) { bundle.CodexModels = append(bundle.CodexModels, "example-reasoning") },
 		func(bundle *Bundle) { bundle.CodexDefaultModel = "not-allowed" },
 	}
 	for index, mutate := range tests {
