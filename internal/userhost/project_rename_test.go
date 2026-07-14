@@ -31,7 +31,7 @@ func TestRenameProjectUpdatesDirectoryAndMatchingConversationPaths(t *testing.T)
 	if info, err := os.Stat(target); err != nil || !info.IsDir() {
 		t.Fatalf("renamed directory is unavailable: info=%v err=%v", info, err)
 	}
-	if err := winutil.VerifyACL(target, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
+	if err := winutil.VerifyDescendantACL(target, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
 		t.Fatalf("renamed directory ACL is invalid: %v", err)
 	}
 	workspaces := readConversationWorkspaces(t, dbPath)
@@ -86,15 +86,15 @@ func projectRenameFixture(t *testing.T) (workspace, dbPath, source string) {
 	t.Helper()
 	root := t.TempDir()
 	workspace = filepath.Join(root, "workspace")
-	source = filepath.Join(workspace, "old-project")
-	if err := os.MkdirAll(source, 0o700); err != nil {
+	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	policy := winutil.PrivateTreePolicy(projectRenameTestSID)
 	if err := winutil.ApplyACL(workspace, policy); err != nil {
 		t.Fatal(err)
 	}
-	if err := winutil.ApplyACL(source, policy); err != nil {
+	source = filepath.Join(workspace, "old-project")
+	if err := os.Mkdir(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	dbPath = filepath.Join(root, "aionui-backend.db")

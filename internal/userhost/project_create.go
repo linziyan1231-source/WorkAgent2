@@ -32,8 +32,8 @@ func createProjectState(workspaceRoot, sid, name string) (ipc.ProjectCreateResul
 		}
 		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", fmt.Errorf("create project directory: %w", err)
 	}
-	if err := errors.Join(winutil.ApplyACL(target, policy), winutil.VerifyACL(target, policy)); err != nil {
-		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", errors.Join(fmt.Errorf("protect project directory: %w", err), os.Remove(target))
+	if err := winutil.VerifyDescendantACL(target, policy); err != nil {
+		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", errors.Join(fmt.Errorf("verify inherited project ACL: %w", err), os.Remove(target))
 	}
 	return ipc.ProjectCreateResult{Path: target}, "", nil
 }

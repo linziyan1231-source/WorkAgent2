@@ -100,6 +100,21 @@ func VerifyACL(path string, policy ACLPolicy) error {
 	return verifyPathACL(path, policy, true)
 }
 
+func VerifyDescendantACL(path string, policy ACLPolicy) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("ACL path must be absolute")
+	}
+	if err := validateACLPolicy(policy); err != nil {
+		return err
+	}
+	if reparse, err := isReparsePoint(path); err != nil {
+		return err
+	} else if reparse {
+		return fmt.Errorf("ACL path is a reparse point: %s", path)
+	}
+	return verifyPathACL(path, policy, false)
+}
+
 func ApplyTreeACL(root string, policy ACLPolicy) error {
 	if !filepath.IsAbs(root) {
 		return errors.New("ACL root must be absolute")

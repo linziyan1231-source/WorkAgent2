@@ -55,7 +55,7 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("inspect project directory: %w", err)
 	}
-	if err := winutil.VerifyACL(source, policy); err != nil {
+	if err := winutil.VerifyDescendantACL(source, policy); err != nil {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("verify project directory ACL: %w", err)
 	}
 	if !strings.EqualFold(source, target) {
@@ -108,7 +108,7 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 		}
 		return cause
 	}
-	if err := winutil.VerifyACL(target, policy); err != nil {
+	if err := winutil.VerifyDescendantACL(target, policy); err != nil {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", rollbackDirectory(fmt.Errorf("verify renamed project ACL: %w", err))
 	}
 	if err := tx.Commit(); err != nil {

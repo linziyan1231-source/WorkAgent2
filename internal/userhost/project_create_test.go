@@ -21,7 +21,7 @@ func TestCreateProjectCreatesProtectedDirectory(t *testing.T) {
 	if info, err := os.Stat(target); err != nil || !info.IsDir() {
 		t.Fatalf("created directory is unavailable: info=%v err=%v", info, err)
 	}
-	if err := winutil.VerifyACL(target, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
+	if err := winutil.VerifyDescendantACL(target, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
 		t.Fatalf("created directory ACL is invalid: %v", err)
 	}
 }
