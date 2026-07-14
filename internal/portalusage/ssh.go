@@ -7,18 +7,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"aionuiportal/internal/modelbootstrap"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const (
-	maxSSHOutput = 64 * 1024
-	maxSSHError  = 8 * 1024
+	maxSSHOutput       = 64 * 1024
+	maxSSHError        = 8 * 1024
+	maxSSHIdentityFile = 16 * 1024
+	maxSSHKnownHosts   = 64 * 1024
+	sshConnectTimeout  = 10 * time.Second
+	sshIOTimeout       = 25 * time.Second
 )
 
 var (
@@ -31,10 +38,9 @@ type SSHOptions struct {
 	HelperPath     string
 	IdentityFile   string
 	KnownHostsFile string
-	Executable     string
 }
 
-type commandRunner func(context.Context, string, []string, []byte, io.Writer, io.Writer) error
+type commandRunner func(context.Context, string, []byte, io.Writer, io.Writer) error
 
 type SSHClient struct {
 	options SSHOptions
@@ -57,10 +63,26 @@ func NewSSHClient(options SSHOptions) (*SSHClient, error) {
 			return nil, fmt.Errorf("Portal usage SSH %s file must be a regular non-symlink file", name)
 		}
 	}
-	if options.Executable == "" {
-		options.Executable = "ssh.exe"
+	identity, err := readBoundedFile(options.IdentityFile, maxSSHIdentityFile)
+	if err != nil {
+		return nil, errors.New("Portal usage SSH identity could not be read")
 	}
-	return &SSHClient{options: options, run: runCommand}, nil
+	signer, err := ssh.ParsePrivateKey(identity)
+	clear(identity)
+	if err != nil || signer.PublicKey().Type() != ssh.KeyAlgoED25519 {
+		return nil, errors.New("Portal usage SSH identity must be an unencrypted Ed25519 key")
+	}
+	if info, err := os.Stat(options.KnownHostsFile); err != nil || info.Size() == 0 || info.Size() > maxSSHKnownHosts {
+		return nil, errors.New("Portal usage SSH known-hosts file is empty or oversized")
+	}
+	hostKeyCallback, err := knownhosts.New(options.KnownHostsFile)
+	if err != nil {
+		return nil, errors.New("Portal usage SSH known-hosts file is invalid")
+	}
+	user, host, _ := strings.Cut(options.Target, "@")
+	address := net.JoinHostPort(host, "22")
+	config := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: hostKeyCallback, Timeout: sshConnectTimeout}
+	return &SSHClient{options: options, run: nativeSSHRunner(address, config)}, nil
 }
 
 func (c *SSHClient) Query(ctx context.Context, ids modelbootstrap.KeyIDs) (RawSnapshot, error) {
@@ -85,15 +107,9 @@ func (c *SSHClient) Query(ctx context.Context, ids modelbootstrap.KeyIDs) (RawSn
 	if err != nil {
 		return RawSnapshot{}, errors.New("encode remote usage request")
 	}
-	args := []string{
-		"-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ConnectionAttempts=1",
-		"-o", "IdentitiesOnly=yes", "-o", "IdentityFile=" + c.options.IdentityFile,
-		"-o", "UserKnownHostsFile=" + c.options.KnownHostsFile, "-o", "GlobalKnownHostsFile=NUL",
-		"-o", "StrictHostKeyChecking=yes", "-o", "LogLevel=ERROR", "--", c.options.Target, c.options.HelperPath, "usage",
-	}
 	stdout := &cappedBuffer{limit: maxSSHOutput}
 	stderr := &cappedBuffer{limit: maxSSHError}
-	if err := c.run(ctx, c.options.Executable, args, payload, stdout, stderr); err != nil {
+	if err := c.run(ctx, c.options.HelperPath+" usage", payload, stdout, stderr); err != nil {
 		if ctx.Err() != nil {
 			return RawSnapshot{}, ctx.Err()
 		}
@@ -105,12 +121,63 @@ func (c *SSHClient) Query(ctx context.Context, ids modelbootstrap.KeyIDs) (RawSn
 	return parseRemoteResponse(stdout.Bytes())
 }
 
-func runCommand(ctx context.Context, executable string, args []string, stdin []byte, stdout, stderr io.Writer) error {
-	command := exec.CommandContext(ctx, executable, args...)
-	command.Stdin = bytes.NewReader(stdin)
-	command.Stdout = stdout
-	command.Stderr = stderr
-	return command.Run()
+func readBoundedFile(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, errors.New("file exceeds the permitted size")
+	}
+	return data, nil
+}
+
+func nativeSSHRunner(address string, config *ssh.ClientConfig) commandRunner {
+	return func(ctx context.Context, command string, stdin []byte, stdout, stderr io.Writer) error {
+		dialer := net.Dialer{Timeout: sshConnectTimeout}
+		connection, err := dialer.DialContext(ctx, "tcp", address)
+		if err != nil {
+			return err
+		}
+		defer connection.Close()
+		if err := connection.SetDeadline(boundedDeadline(ctx, sshConnectTimeout)); err != nil {
+			return err
+		}
+		clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, config)
+		if err != nil {
+			return err
+		}
+		client := ssh.NewClient(clientConnection, channels, requests)
+		defer client.Close()
+		if err := connection.SetDeadline(boundedDeadline(ctx, sshIOTimeout)); err != nil {
+			return err
+		}
+		session, err := client.NewSession()
+		if err != nil {
+			return err
+		}
+		defer session.Close()
+		session.Stdin = bytes.NewReader(stdin)
+		session.Stdout = stdout
+		session.Stderr = stderr
+		if err := session.Run(command); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func boundedDeadline(ctx context.Context, maximum time.Duration) time.Time {
+	deadline := time.Now().Add(maximum)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		return contextDeadline
+	}
+	return deadline
 }
 
 func parseRemoteResponse(data []byte) (RawSnapshot, error) {

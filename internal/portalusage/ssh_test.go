@@ -2,6 +2,9 @@ package portalusage
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
@@ -11,24 +14,13 @@ import (
 	"time"
 
 	"aionuiportal/internal/modelbootstrap"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 func testSSHClient(t *testing.T) *SSHClient {
 	t.Helper()
-	root := t.TempDir()
-	identity := filepath.Join(root, "usage_ed25519")
-	knownHosts := filepath.Join(root, "known_hosts")
-	for _, path := range []string{identity, knownHosts} {
-		if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	client, err := NewSSHClient(SSHOptions{Target: "contact@example.invalid", HelperPath: "/root/cliproxyapi/cpa-key-policy-admin.py",
-		IdentityFile: identity, KnownHostsFile: knownHosts, Executable: "ssh-test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client
+	return &SSHClient{options: SSHOptions{Target: "contact@example.invalid", HelperPath: "/root/cliproxyapi/cpa-key-policy-admin.py"}}
 }
 
 func validRemoteJSON() string {
@@ -37,14 +29,12 @@ func validRemoteJSON() string {
 		`{"kind":"kimi","daily":{"limit_usd":"5","used_usd":"0.4"},"weekly":{"limit_usd":"10","used_usd":"1.1"}}]}`
 }
 
-func TestSSHQueryUsesFixedHelperCommandAndDoesNotPutIDsInArguments(t *testing.T) {
+func TestSSHQueryUsesFixedHelperCommandAndKeepsIDsInStdin(t *testing.T) {
 	client := testSSHClient(t)
 	ids := modelbootstrap.KeyIDsForSID(testSID1)
-	client.run = func(_ context.Context, executable string, args []string, stdin []byte, stdout, _ io.Writer) error {
-		joined := strings.Join(args, " ")
-		if executable != "ssh-test" || !strings.Contains(joined, client.options.HelperPath+" usage") ||
-			strings.Contains(joined, ids.CodexKeyID) || strings.Contains(joined, ids.KimiKeyID) {
-			t.Fatalf("unsafe SSH invocation: executable=%q args=%q", executable, joined)
+	client.run = func(_ context.Context, command string, stdin []byte, stdout, _ io.Writer) error {
+		if command != client.options.HelperPath+" usage" || strings.Contains(command, ids.CodexKeyID) || strings.Contains(command, ids.KimiKeyID) {
+			t.Fatalf("unsafe SSH command: %q", command)
 		}
 		payload := string(stdin)
 		if !strings.Contains(payload, ids.CodexKeyID) || !strings.Contains(payload, ids.KimiKeyID) {
@@ -56,6 +46,44 @@ func TestSSHQueryUsesFixedHelperCommandAndDoesNotPutIDsInArguments(t *testing.T)
 	got, err := client.Query(context.Background(), ids)
 	if err != nil || len(got.Providers) != 2 {
 		t.Fatalf("valid remote response failed: got=%+v err=%v", got, err)
+	}
+}
+
+func TestNewSSHClientLoadsEd25519IdentityAndKnownHost(t *testing.T) {
+	root := t.TempDir()
+	identity := filepath.Join(root, "usage_ed25519")
+	knownHosts := filepath.Join(root, "known_hosts")
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(privateKey, "aionui-portal-usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(identity, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostKey, err := ssh.NewPublicKey(hostPublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(knownHosts, []byte(knownhosts.Line([]string{"example.test"}, hostKey)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewSSHClient(SSHOptions{Target: "contact@example.invalid", HelperPath: "/root/cliproxyapi/cpa-key-policy-admin.py", IdentityFile: identity, KnownHostsFile: knownHosts})
+	if err != nil || client.run == nil {
+		t.Fatalf("valid native SSH configuration failed: client=%v err=%v", client, err)
+	}
+	if err := os.WriteFile(identity, []byte("not a private key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSSHClient(SSHOptions{Target: "contact@example.invalid", HelperPath: "/root/cliproxyapi/cpa-key-policy-admin.py", IdentityFile: identity, KnownHostsFile: knownHosts}); err == nil {
+		t.Fatal("invalid native SSH identity was accepted")
 	}
 }
 
@@ -78,7 +106,7 @@ func TestSSHQueryFailsOnOutputLimitTimeoutAndSecretBearingDiagnostics(t *testing
 	ids := modelbootstrap.KeyIDsForSID(testSID1)
 	t.Run("output limit", func(t *testing.T) {
 		client := testSSHClient(t)
-		client.run = func(_ context.Context, _ string, _ []string, _ []byte, stdout, _ io.Writer) error {
+		client.run = func(_ context.Context, _ string, _ []byte, stdout, _ io.Writer) error {
 			_, _ = stdout.Write(make([]byte, maxSSHOutput+1))
 			return nil
 		}
@@ -88,7 +116,7 @@ func TestSSHQueryFailsOnOutputLimitTimeoutAndSecretBearingDiagnostics(t *testing
 	})
 	t.Run("timeout", func(t *testing.T) {
 		client := testSSHClient(t)
-		client.run = func(ctx context.Context, _ string, _ []string, _ []byte, _, _ io.Writer) error {
+		client.run = func(ctx context.Context, _ string, _ []byte, _, _ io.Writer) error {
 			<-ctx.Done()
 			return ctx.Err()
 		}
@@ -100,7 +128,7 @@ func TestSSHQueryFailsOnOutputLimitTimeoutAndSecretBearingDiagnostics(t *testing
 	})
 	t.Run("generic failure", func(t *testing.T) {
 		client := testSSHClient(t)
-		client.run = func(_ context.Context, _ string, _ []string, _ []byte, _, stderr io.Writer) error {
+		client.run = func(_ context.Context, _ string, _ []byte, _, stderr io.Writer) error {
 			_, _ = io.WriteString(stderr, "cpa_plaintext-secret "+ids.KimiKeyID+" ManagementKey")
 			return errors.New("ssh failed")
 		}
