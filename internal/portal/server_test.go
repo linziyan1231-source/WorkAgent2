@@ -35,25 +35,28 @@ const (
 )
 
 type fakeInstances struct {
-	mu                 sync.Mutex
-	ensureSIDs         []string
-	routeSIDs          []string
-	beginSIDs          []string
-	route              instance.Route
-	ensureError        error
-	touchError         error
-	touchSIDs          []string
-	oauthStarts        []ipc.OAuthStartRequest
-	oauthCompletes     []ipc.OAuthCompleteRequest
-	oauthCancels       []ipc.OAuthCancelRequest
-	oauthStartError    error
-	oauthCompleteError error
-	oauthCancelError   error
-	requests           int
-	webSockets         int
-	modelKeyIDs        map[string]modelbootstrap.KeyIDs
-	modelKeyIDSError   error
-	modelKeyIDSIDs     []string
+	mu                  sync.Mutex
+	ensureSIDs          []string
+	routeSIDs           []string
+	beginSIDs           []string
+	route               instance.Route
+	ensureError         error
+	touchError          error
+	touchSIDs           []string
+	oauthStarts         []ipc.OAuthStartRequest
+	oauthCompletes      []ipc.OAuthCompleteRequest
+	oauthCancels        []ipc.OAuthCancelRequest
+	projectRename       *ipc.ProjectRenameRequest
+	projectRenameResult ipc.ProjectRenameResult
+	projectRenameError  error
+	oauthStartError     error
+	oauthCompleteError  error
+	oauthCancelError    error
+	requests            int
+	webSockets          int
+	modelKeyIDs         map[string]modelbootstrap.KeyIDs
+	modelKeyIDSError    error
+	modelKeyIDSIDs      []string
 }
 
 func (f *fakeInstances) Ensure(_ context.Context, sid string) (ipc.Status, error) {
@@ -103,6 +106,14 @@ func (f *fakeInstances) OAuthCancel(_ context.Context, _ string, request ipc.OAu
 	defer f.mu.Unlock()
 	f.oauthCancels = append(f.oauthCancels, request)
 	return f.oauthCancelError
+}
+
+func (f *fakeInstances) RenameProject(_ context.Context, sid, oldName, newName string) (ipc.ProjectRenameResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureSIDs = append(f.ensureSIDs, sid)
+	f.projectRename = &ipc.ProjectRenameRequest{OldName: oldName, NewName: newName}
+	return f.projectRenameResult, f.projectRenameError
 }
 
 func (f *fakeInstances) BeginRequest(sid string, webSocket bool) (func(), error) {

@@ -33,6 +33,16 @@ type Route struct {
 	InstanceID string
 }
 
+type UserHostCommandError struct {
+	Command string
+	Code    string
+	Message string
+}
+
+func (e *UserHostCommandError) Error() string {
+	return fmt.Sprintf("UserHost %s failed (%s): %s", e.Command, e.Code, e.Message)
+}
+
 type runtimeState struct {
 	mu             sync.Mutex
 	draining       bool
@@ -257,6 +267,22 @@ func (m *Manager) OAuthCancel(ctx context.Context, sid string, cancel ipc.OAuthC
 	return err
 }
 
+func (m *Manager) RenameProject(ctx context.Context, sid, oldName, newName string) (ipc.ProjectRenameResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.ProjectRenameResult{}, err
+	}
+	request := ipc.ProjectRenameRequest{InstanceID: id(status), OldName: oldName, NewName: newName}
+	response, err := m.request(ctx, sid, ipc.Request{Command: "project_rename", ProjectRename: &request})
+	if err != nil {
+		return ipc.ProjectRenameResult{}, err
+	}
+	if response.ProjectRename == nil || response.ProjectRename.NewPath == "" || response.ProjectRename.OldPath == "" {
+		return ipc.ProjectRenameResult{}, errors.New("UserHost returned an incomplete project rename result")
+	}
+	return *response.ProjectRename, nil
+}
+
 func (m *Manager) Stop(ctx context.Context, sid string) error {
 	state := m.runtime(sid)
 	state.mu.Lock()
@@ -364,7 +390,7 @@ func (m *Manager) request(ctx context.Context, sid string, request ipc.Request) 
 		return ipc.Response{}, err
 	}
 	if !response.OK {
-		return ipc.Response{}, fmt.Errorf("UserHost %s failed (%s): %s", request.Command, response.ErrorCode, response.ErrorMessage)
+		return ipc.Response{}, &UserHostCommandError{Command: request.Command, Code: response.ErrorCode, Message: response.ErrorMessage}
 	}
 	return response, nil
 }

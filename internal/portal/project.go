@@ -7,26 +7,24 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
+	"aionuiportal/internal/instance"
+	"aionuiportal/internal/projectfs"
 	"aionuiportal/internal/winutil"
 )
 
-const maxProjectNameRunes = 100
-
-var reservedWindowsProjectNames = map[string]struct{}{
-	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
-	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {}, "COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
-	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {}, "LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.createProject(w, r)
+	case http.MethodPatch:
+		s.renameProject(w, r)
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w)
-		return
-	}
 	if !s.validBrowserOrigin(r) {
 		writeProjectError(w, http.StatusForbidden, "INVALID_ORIGIN", "Security origin validation failed")
 		return
@@ -51,7 +49,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_REQUEST", "Invalid project creation request")
 		return
 	}
-	if !validProjectName(request.Name) {
+	if !projectfs.ValidName(request.Name) {
 		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project name is invalid")
 		return
 	}
@@ -68,8 +66,8 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target := filepath.Join(workspaceRoot, request.Name)
-	if !strings.EqualFold(filepath.Dir(target), workspaceRoot) {
+	target, ok := projectfs.ResolveChild(workspaceRoot, request.Name)
+	if !ok {
 		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project name is invalid")
 		return
 	}
@@ -91,18 +89,85 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": map[string]string{"path": target}})
 }
 
-func validProjectName(name string) bool {
-	if name == "" || name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > maxProjectNameRunes || strings.HasSuffix(name, ".") {
-		return false
+func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
+	if !s.validBrowserOrigin(r) {
+		writeProjectError(w, http.StatusForbidden, "INVALID_ORIGIN", "Security origin validation failed")
+		return
 	}
-	for _, character := range name {
-		if unicode.IsControl(character) || strings.ContainsRune(`<>:"/\|?*`, character) {
-			return false
+	session, _, err := s.session(r)
+	if err != nil {
+		writeProjectError(w, http.StatusUnauthorized, "SESSION_REQUIRED", "Portal session is required")
+		return
+	}
+	if r.URL.RawQuery != "" {
+		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_REQUEST", "Project rename does not accept query parameters")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+	var request struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !projectfs.ValidName(request.Name) {
+		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project rename request is invalid")
+		return
+	}
+	privateRoot, err := s.userFilesystemRoot(session.User.WindowsSID)
+	if err != nil {
+		s.internalError(w, "resolve project workspace root", err)
+		return
+	}
+	workspaceRoot := filepath.Join(privateRoot, "workspace")
+	policy := winutil.PrivateTreePolicy(session.User.WindowsSID)
+	if err := winutil.VerifyACL(workspaceRoot, policy); err != nil {
+		s.internalError(w, "verify project workspace ACL", err)
+		return
+	}
+	oldName, ok := projectfs.NameFromPath(workspaceRoot, request.Path)
+	if !ok {
+		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_PATH", "Project path is outside the managed workspace")
+		return
+	}
+	source, _ := projectfs.ResolveChild(workspaceRoot, oldName)
+	info, err := os.Lstat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		writeProjectError(w, http.StatusNotFound, "PROJECT_NOT_FOUND", "Project directory does not exist")
+		return
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		s.internalError(w, "inspect project directory", err)
+		return
+	}
+	if err := winutil.VerifyACL(source, policy); err != nil {
+		s.internalError(w, "verify project directory ACL", err)
+		return
+	}
+	result, err := s.instances.RenameProject(r.Context(), session.User.WindowsSID, oldName, request.Name)
+	if err != nil {
+		var commandError *instance.UserHostCommandError
+		if errors.As(err, &commandError) {
+			switch commandError.Code {
+			case "INVALID_PROJECT_NAME":
+				writeProjectError(w, http.StatusBadRequest, commandError.Code, "Project name is invalid")
+			case "PROJECT_EXISTS", "PROJECT_IN_USE":
+				writeProjectError(w, http.StatusConflict, commandError.Code, "Project could not be renamed")
+			case "PROJECT_NOT_FOUND":
+				writeProjectError(w, http.StatusNotFound, commandError.Code, "Project directory does not exist")
+			default:
+				writeProjectError(w, http.StatusServiceUnavailable, "PROJECT_RENAME_FAILED", "Project could not be renamed")
+			}
+			return
 		}
+		s.logger.Printf("project rename failed sid=%s: %v", session.User.WindowsSID, err)
+		writeProjectError(w, http.StatusServiceUnavailable, "PROJECT_RENAME_FAILED", "Project could not be renamed")
+		return
 	}
-	base := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
-	_, reserved := reservedWindowsProjectNames[base]
-	return !reserved
+	s.auditBestEffort(r.Context(), "portal.project.rename", "success", session, r, map[string]any{
+		"old_name": oldName, "new_name": request.Name, "updated_conversations": result.UpdatedConversations,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": result})
 }
 
 func writeProjectError(w http.ResponseWriter, status int, code, message string) {

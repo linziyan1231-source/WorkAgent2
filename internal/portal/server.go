@@ -38,6 +38,7 @@ type InstanceManager interface {
 	OAuthStart(context.Context, string, ipc.OAuthStartRequest) (ipc.OAuthResult, error)
 	OAuthComplete(context.Context, string, ipc.OAuthCompleteRequest) error
 	OAuthCancel(context.Context, string, ipc.OAuthCancelRequest) error
+	RenameProject(context.Context, string, string, string) (ipc.ProjectRenameResult, error)
 	BeginRequest(string, bool) (func(), error)
 	ModelKeyIDs(context.Context, string) (modelbootstrap.KeyIDs, error)
 }
@@ -170,7 +171,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.currentUsage(w, r)
 		return
 	case "/api/portal/me/projects":
-		s.createProject(w, r)
+		s.projects(w, r)
 		return
 	case "/api/mcp/oauth/login":
 		s.mcpOAuthLogin(w, r)

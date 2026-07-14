@@ -28,6 +28,7 @@ type Request struct {
 	OAuthStart      *OAuthStartRequest    `json:"oauth_start,omitempty"`
 	OAuthComplete   *OAuthCompleteRequest `json:"oauth_complete,omitempty"`
 	OAuthCancel     *OAuthCancelRequest   `json:"oauth_cancel,omitempty"`
+	ProjectRename   *ProjectRenameRequest `json:"project_rename,omitempty"`
 }
 
 type OAuthStartRequest struct {
@@ -53,6 +54,18 @@ type OAuthCancelRequest struct {
 type OAuthResult struct {
 	AuthorizationURL string `json:"authorization_url,omitempty"`
 	FlowID           string `json:"flow_id,omitempty"`
+}
+
+type ProjectRenameRequest struct {
+	InstanceID string `json:"instance_id"`
+	OldName    string `json:"old_name"`
+	NewName    string `json:"new_name"`
+}
+
+type ProjectRenameResult struct {
+	OldPath              string `json:"old_path"`
+	NewPath              string `json:"new_path"`
+	UpdatedConversations int    `json:"updated_conversations"`
 }
 
 type Activity struct {
@@ -93,15 +106,16 @@ type ModelKeyIDs struct {
 }
 
 type Response struct {
-	ProtocolVersion int           `json:"protocol_version"`
-	Nonce           string        `json:"nonce"`
-	OK              bool          `json:"ok"`
-	ErrorCode       string        `json:"error_code,omitempty"`
-	ErrorMessage    string        `json:"error_message,omitempty"`
-	Status          *Status       `json:"status,omitempty"`
-	Auth            *AuthMaterial `json:"auth,omitempty"`
-	OAuth           *OAuthResult  `json:"oauth,omitempty"`
-	ModelKeyIDs     *ModelKeyIDs  `json:"model_key_ids,omitempty"`
+	ProtocolVersion int                  `json:"protocol_version"`
+	Nonce           string               `json:"nonce"`
+	OK              bool                 `json:"ok"`
+	ErrorCode       string               `json:"error_code,omitempty"`
+	ErrorMessage    string               `json:"error_message,omitempty"`
+	Status          *Status              `json:"status,omitempty"`
+	Auth            *AuthMaterial        `json:"auth,omitempty"`
+	OAuth           *OAuthResult         `json:"oauth,omitempty"`
+	ModelKeyIDs     *ModelKeyIDs         `json:"model_key_ids,omitempty"`
+	ProjectRename   *ProjectRenameResult `json:"project_rename,omitempty"`
 }
 
 type Handler func(context.Context, Request) Response
