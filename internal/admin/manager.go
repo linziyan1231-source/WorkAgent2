@@ -653,7 +653,7 @@ func (m *Manager) usageCredentialFiles() []string {
 	if m.Config.UsageSSHIdentityFile == "" || m.Config.UsageSSHKnownHostsFile == "" {
 		return nil
 	}
-	return []string{m.Config.UsageSSHIdentityFile, m.Config.UsageSSHKnownHostsFile}
+	return []string{m.Config.UsageSSHIdentityFile, m.Config.UsageSSHIdentityFile + ".pub", m.Config.UsageSSHKnownHostsFile}
 }
 
 func (m *Manager) ApplyACLs(ctx context.Context) []error {

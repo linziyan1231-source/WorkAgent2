@@ -104,7 +104,7 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if err := os.MkdirAll(credentialRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{cfg.UsageSSHIdentityFile, cfg.UsageSSHKnownHostsFile} {
+	for _, path := range []string{cfg.UsageSSHIdentityFile, cfg.UsageSSHIdentityFile + ".pub", cfg.UsageSSHKnownHostsFile} {
 		if err := os.WriteFile(path, []byte("credential fixture"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -120,16 +120,28 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if failures := manager.VerifyACLs(context.Background()); len(failures) != 0 {
 		t.Fatalf("ACL verification failures: %v", failures)
 	}
-	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageSSHIdentityFile, cfg.UsageSSHKnownHostsFile} {
+	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageSSHIdentityFile, cfg.UsageSSHIdentityFile + ".pub", cfg.UsageSSHKnownHostsFile} {
 		policy := winutil.SharedReadOnlyPolicy()
 		if path == configPath {
 			policy = winutil.ServicePrivatePolicy(identity.SID)
-		} else if path == credentialRoot || path == cfg.UsageSSHIdentityFile || path == cfg.UsageSSHKnownHostsFile {
+		} else if path == credentialRoot || path == cfg.UsageSSHIdentityFile || path == cfg.UsageSSHIdentityFile+".pub" || path == cfg.UsageSSHKnownHostsFile {
 			policy = winutil.ServiceCredentialPolicy(identity.SID)
 		}
 		if err := winutil.VerifyACL(path, policy); err != nil {
 			t.Fatalf("protected ACL missing on %s: %v", path, err)
 		}
+	}
+	if err := os.Remove(cfg.UsageSSHIdentityFile + ".pub"); err != nil {
+		t.Fatal(err)
+	}
+	if failures := manager.VerifyACLs(context.Background()); len(failures) == 0 {
+		t.Fatal("missing Portal usage public key was not reported")
+	}
+	if err := os.WriteFile(cfg.UsageSSHIdentityFile+".pub", []byte("credential fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if failures := manager.ApplyACLs(context.Background()); len(failures) != 0 {
+		t.Fatalf("ACL reapplication failures: %v", failures)
 	}
 	if err := os.Remove(configPath); err != nil {
 		t.Fatal(err)
