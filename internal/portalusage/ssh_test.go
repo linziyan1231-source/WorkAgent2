@@ -25,8 +25,8 @@ func testSSHClient(t *testing.T) *SSHClient {
 
 func validRemoteJSON() string {
 	return `{"version":1,"as_of":"2026-07-14T05:00:00Z","providers":[` +
-		`{"kind":"chatgpt","daily":{"limit_usd":"20","used_usd":"1.25"},"weekly":{"limit_usd":"40","used_usd":"3.5"}},` +
-		`{"kind":"kimi","daily":{"limit_usd":"5","used_usd":"0.4"},"weekly":{"limit_usd":"10","used_usd":"1.1"}}]}`
+		`{"kind":"chatgpt","daily":{"limit_usd":"20","used_usd":"1.25","reset_at":"2026-07-15T00:00:00Z"},"weekly":{"limit_usd":"40","used_usd":"3.5","reset_at":"2026-07-21T00:00:00Z"}},` +
+		`{"kind":"kimi","daily":{"limit_usd":"5","used_usd":"0.4","reset_at":"2026-07-15T00:00:00Z"},"weekly":{"limit_usd":"10","used_usd":"1.1","reset_at":"2026-07-21T00:00:00Z"}}]}`
 }
 
 func TestSSHQueryUsesFixedHelperCommandAndKeepsIDsInStdin(t *testing.T) {

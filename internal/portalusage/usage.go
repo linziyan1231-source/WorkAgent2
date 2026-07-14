@@ -24,6 +24,7 @@ type Window struct {
 	LimitUSD     string `json:"limit_usd"`
 	UsedUSD      string `json:"used_usd"`
 	RemainingUSD string `json:"remaining_usd"`
+	ResetAt      string `json:"reset_at"`
 }
 
 type Provider struct {
@@ -41,6 +42,7 @@ type Summary struct {
 type RawWindow struct {
 	LimitUSD string `json:"limit_usd"`
 	UsedUSD  string `json:"used_usd"`
+	ResetAt  string `json:"reset_at"`
 }
 
 type RawProvider struct {
@@ -158,7 +160,11 @@ func normalizeWindow(raw RawWindow) (Window, error) {
 	if remaining.Sign() < 0 {
 		remaining.SetInt64(0)
 	}
-	return Window{LimitUSD: formatUSD(limit), UsedUSD: formatUSD(used), RemainingUSD: formatUSD(remaining)}, nil
+	resetAt, err := time.Parse(time.RFC3339, raw.ResetAt)
+	if err != nil {
+		return Window{}, errors.New("reset time must be RFC3339")
+	}
+	return Window{LimitUSD: formatUSD(limit), UsedUSD: formatUSD(used), RemainingUSD: formatUSD(remaining), ResetAt: resetAt.UTC().Format(time.RFC3339)}, nil
 }
 
 func parseDecimal(value string) (*big.Rat, error) {

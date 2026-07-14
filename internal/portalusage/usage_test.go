@@ -26,8 +26,8 @@ func (f *fakeRemote) Query(_ context.Context, ids modelbootstrap.KeyIDs) (RawSna
 
 func rawUsage() RawSnapshot {
 	return RawSnapshot{AsOf: "2026-07-14T05:00:00Z", Providers: []RawProvider{
-		{Kind: KindChatGPT, Daily: RawWindow{LimitUSD: "20", UsedUSD: "1.255"}, Weekly: RawWindow{LimitUSD: "40.00", UsedUSD: "41"}},
-		{Kind: KindKimi, Daily: RawWindow{LimitUSD: "5.00", UsedUSD: "0.4"}, Weekly: RawWindow{LimitUSD: "10", UsedUSD: "1.1"}},
+		{Kind: KindChatGPT, Daily: RawWindow{LimitUSD: "20", UsedUSD: "1.255", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: RawWindow{LimitUSD: "40.00", UsedUSD: "41", ResetAt: "2026-07-21T00:00:00Z"}},
+		{Kind: KindKimi, Daily: RawWindow{LimitUSD: "5.00", UsedUSD: "0.4", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: RawWindow{LimitUSD: "10", UsedUSD: "1.1", ResetAt: "2026-07-21T00:00:00Z"}},
 	}}
 }
 
@@ -42,8 +42,8 @@ func TestCurrentCalculatesFixedPrecisionRemainingWithoutGoingNegative(t *testing
 		t.Fatal(err)
 	}
 	want := []Provider{
-		{Kind: KindChatGPT, Label: "ChatGPT", Daily: Window{LimitUSD: "20.00", UsedUSD: "1.26", RemainingUSD: "18.75"}, Weekly: Window{LimitUSD: "40.00", UsedUSD: "41.00", RemainingUSD: "0.00"}},
-		{Kind: KindKimi, Label: "Kimi", Daily: Window{LimitUSD: "5.00", UsedUSD: "0.40", RemainingUSD: "4.60"}, Weekly: Window{LimitUSD: "10.00", UsedUSD: "1.10", RemainingUSD: "8.90"}},
+		{Kind: KindChatGPT, Label: "ChatGPT", Daily: Window{LimitUSD: "20.00", UsedUSD: "1.26", RemainingUSD: "18.75", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: Window{LimitUSD: "40.00", UsedUSD: "41.00", RemainingUSD: "0.00", ResetAt: "2026-07-21T00:00:00Z"}},
+		{Kind: KindKimi, Label: "Kimi", Daily: Window{LimitUSD: "5.00", UsedUSD: "0.40", RemainingUSD: "4.60", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: Window{LimitUSD: "10.00", UsedUSD: "1.10", RemainingUSD: "8.90", ResetAt: "2026-07-21T00:00:00Z"}},
 	}
 	if got.AsOf != "2026-07-14T05:00:00Z" || len(got.Providers) != len(want) {
 		t.Fatalf("unexpected summary: %+v", got)
@@ -57,8 +57,8 @@ func TestCurrentCalculatesFixedPrecisionRemainingWithoutGoingNegative(t *testing
 
 func TestCurrentAcceptsProductionPrecisionAndRoundsDeterministically(t *testing.T) {
 	raw := RawSnapshot{AsOf: "2026-07-14T07:00:00Z", Providers: []RawProvider{
-		{Kind: KindChatGPT, Daily: RawWindow{LimitUSD: "20", UsedUSD: "0.0759127000000000047"}, Weekly: RawWindow{LimitUSD: "40", UsedUSD: "0.0780622000000000049"}},
-		{Kind: KindKimi, Daily: RawWindow{LimitUSD: "5", UsedUSD: "0.0162894000000000014"}, Weekly: RawWindow{LimitUSD: "10", UsedUSD: "0.0188000000000000014"}},
+		{Kind: KindChatGPT, Daily: RawWindow{LimitUSD: "20", UsedUSD: "0.0759127000000000047", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: RawWindow{LimitUSD: "40", UsedUSD: "0.0780622000000000049", ResetAt: "2026-07-21T00:00:00Z"}},
+		{Kind: KindKimi, Daily: RawWindow{LimitUSD: "5", UsedUSD: "0.0162894000000000014", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: RawWindow{LimitUSD: "10", UsedUSD: "0.0188000000000000014", ResetAt: "2026-07-21T00:00:00Z"}},
 	}}
 	service, err := NewService(&fakeRemote{raw: raw}, 30*time.Second, time.Now)
 	if err != nil {
@@ -69,8 +69,8 @@ func TestCurrentAcceptsProductionPrecisionAndRoundsDeterministically(t *testing.
 		t.Fatal(err)
 	}
 	want := []Provider{
-		{Kind: KindChatGPT, Label: "ChatGPT", Daily: Window{LimitUSD: "20.00", UsedUSD: "0.08", RemainingUSD: "19.92"}, Weekly: Window{LimitUSD: "40.00", UsedUSD: "0.08", RemainingUSD: "39.92"}},
-		{Kind: KindKimi, Label: "Kimi", Daily: Window{LimitUSD: "5.00", UsedUSD: "0.02", RemainingUSD: "4.98"}, Weekly: Window{LimitUSD: "10.00", UsedUSD: "0.02", RemainingUSD: "9.98"}},
+		{Kind: KindChatGPT, Label: "ChatGPT", Daily: Window{LimitUSD: "20.00", UsedUSD: "0.08", RemainingUSD: "19.92", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: Window{LimitUSD: "40.00", UsedUSD: "0.08", RemainingUSD: "39.92", ResetAt: "2026-07-21T00:00:00Z"}},
+		{Kind: KindKimi, Label: "Kimi", Daily: Window{LimitUSD: "5.00", UsedUSD: "0.02", RemainingUSD: "4.98", ResetAt: "2026-07-15T00:00:00Z"}, Weekly: Window{LimitUSD: "10.00", UsedUSD: "0.02", RemainingUSD: "9.98", ResetAt: "2026-07-21T00:00:00Z"}},
 	}
 	for index := range want {
 		if got.Providers[index] != want[index] {
@@ -134,6 +134,7 @@ func TestCurrentRejectsMalformedRemoteProviders(t *testing.T) {
 		"bad timestamp":  func(raw *RawSnapshot) { raw.AsOf = "not-a-time" },
 		"bad decimal":    func(raw *RawSnapshot) { raw.Providers[0].Daily.UsedUSD = "NaN" },
 		"zero limit":     func(raw *RawSnapshot) { raw.Providers[0].Daily.LimitUSD = "0" },
+		"bad reset time": func(raw *RawSnapshot) { raw.Providers[0].Daily.ResetAt = "not-a-time" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw := rawUsage()
