@@ -55,6 +55,30 @@ func TestCurrentCalculatesFixedPrecisionRemainingWithoutGoingNegative(t *testing
 	}
 }
 
+func TestCurrentAcceptsProductionPrecisionAndRoundsDeterministically(t *testing.T) {
+	raw := RawSnapshot{AsOf: "2026-07-14T07:00:00Z", Providers: []RawProvider{
+		{Kind: KindChatGPT, Daily: RawWindow{LimitUSD: "20", UsedUSD: "0.0759127000000000047"}, Weekly: RawWindow{LimitUSD: "40", UsedUSD: "0.0780622000000000049"}},
+		{Kind: KindKimi, Daily: RawWindow{LimitUSD: "5", UsedUSD: "0.0162894000000000014"}, Weekly: RawWindow{LimitUSD: "10", UsedUSD: "0.0188000000000000014"}},
+	}}
+	service, err := NewService(&fakeRemote{raw: raw}, 30*time.Second, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.Current(context.Background(), testSID1, modelbootstrap.KeyIDsForSID(testSID1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Provider{
+		{Kind: KindChatGPT, Label: "ChatGPT", Daily: Window{LimitUSD: "20.00", UsedUSD: "0.08", RemainingUSD: "19.92"}, Weekly: Window{LimitUSD: "40.00", UsedUSD: "0.08", RemainingUSD: "39.92"}},
+		{Kind: KindKimi, Label: "Kimi", Daily: Window{LimitUSD: "5.00", UsedUSD: "0.02", RemainingUSD: "4.98"}, Weekly: Window{LimitUSD: "10.00", UsedUSD: "0.02", RemainingUSD: "9.98"}},
+	}
+	for index := range want {
+		if got.Providers[index] != want[index] {
+			t.Fatalf("provider %d=%+v, want %+v", index, got.Providers[index], want[index])
+		}
+	}
+}
+
 func TestCacheIsBoundToSIDAndReturnsDefensiveCopies(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	remote := &fakeRemote{raw: rawUsage()}

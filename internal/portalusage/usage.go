@@ -18,7 +18,7 @@ const (
 	KindKimi    = "kimi"
 )
 
-var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$`)
+var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,17})(\.[0-9]{1,24})?$`)
 
 type Window struct {
 	LimitUSD     string `json:"limit_usd"`
