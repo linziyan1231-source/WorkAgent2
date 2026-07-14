@@ -46,6 +46,9 @@ type fakeInstances struct {
 	oauthStarts         []ipc.OAuthStartRequest
 	oauthCompletes      []ipc.OAuthCompleteRequest
 	oauthCancels        []ipc.OAuthCancelRequest
+	projectCreate       *ipc.ProjectCreateRequest
+	projectCreateResult ipc.ProjectCreateResult
+	projectCreateError  error
 	projectRename       *ipc.ProjectRenameRequest
 	projectRenameResult ipc.ProjectRenameResult
 	projectRenameError  error
@@ -106,6 +109,14 @@ func (f *fakeInstances) OAuthCancel(_ context.Context, _ string, request ipc.OAu
 	defer f.mu.Unlock()
 	f.oauthCancels = append(f.oauthCancels, request)
 	return f.oauthCancelError
+}
+
+func (f *fakeInstances) CreateProject(_ context.Context, sid, name string) (ipc.ProjectCreateResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureSIDs = append(f.ensureSIDs, sid)
+	f.projectCreate = &ipc.ProjectCreateRequest{Name: name}
+	return f.projectCreateResult, f.projectCreateError
 }
 
 func (f *fakeInstances) RenameProject(_ context.Context, sid, oldName, newName string) (ipc.ProjectRenameResult, error) {

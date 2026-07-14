@@ -28,6 +28,7 @@ type Request struct {
 	OAuthStart      *OAuthStartRequest    `json:"oauth_start,omitempty"`
 	OAuthComplete   *OAuthCompleteRequest `json:"oauth_complete,omitempty"`
 	OAuthCancel     *OAuthCancelRequest   `json:"oauth_cancel,omitempty"`
+	ProjectCreate   *ProjectCreateRequest `json:"project_create,omitempty"`
 	ProjectRename   *ProjectRenameRequest `json:"project_rename,omitempty"`
 }
 
@@ -54,6 +55,15 @@ type OAuthCancelRequest struct {
 type OAuthResult struct {
 	AuthorizationURL string `json:"authorization_url,omitempty"`
 	FlowID           string `json:"flow_id,omitempty"`
+}
+
+type ProjectCreateRequest struct {
+	InstanceID string `json:"instance_id"`
+	Name       string `json:"name"`
+}
+
+type ProjectCreateResult struct {
+	Path string `json:"path"`
 }
 
 type ProjectRenameRequest struct {
@@ -115,6 +125,7 @@ type Response struct {
 	Auth            *AuthMaterial        `json:"auth,omitempty"`
 	OAuth           *OAuthResult         `json:"oauth,omitempty"`
 	ModelKeyIDs     *ModelKeyIDs         `json:"model_key_ids,omitempty"`
+	ProjectCreate   *ProjectCreateResult `json:"project_create,omitempty"`
 	ProjectRename   *ProjectRenameResult `json:"project_rename,omitempty"`
 }
 

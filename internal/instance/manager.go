@@ -267,6 +267,22 @@ func (m *Manager) OAuthCancel(ctx context.Context, sid string, cancel ipc.OAuthC
 	return err
 }
 
+func (m *Manager) CreateProject(ctx context.Context, sid, name string) (ipc.ProjectCreateResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.ProjectCreateResult{}, err
+	}
+	request := ipc.ProjectCreateRequest{InstanceID: id(status), Name: name}
+	response, err := m.request(ctx, sid, ipc.Request{Command: "project_create", ProjectCreate: &request})
+	if err != nil {
+		return ipc.ProjectCreateResult{}, err
+	}
+	if response.ProjectCreate == nil || response.ProjectCreate.Path == "" {
+		return ipc.ProjectCreateResult{}, errors.New("UserHost returned an incomplete project creation result")
+	}
+	return *response.ProjectCreate, nil
+}
+
 func (m *Manager) RenameProject(ctx context.Context, sid, oldName, newName string) (ipc.ProjectRenameResult, error) {
 	status, err := m.Ensure(ctx, sid)
 	if err != nil {

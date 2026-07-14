@@ -568,6 +568,16 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 			return ipc.Response{OK: false, ErrorCode: "OAUTH_CANCEL_FAILED", ErrorMessage: err.Error()}
 		}
 		return ipc.Response{OK: true}
+	case "project_create":
+		if request.ProjectCreate == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_PROJECT_REQUEST", ErrorMessage: "project creation request is missing"}
+		}
+		result, code, err := h.createProject(*request.ProjectCreate)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		h.touchActivity()
+		return ipc.Response{OK: true, ProjectCreate: &result}
 	case "project_rename":
 		if request.ProjectRename == nil {
 			return ipc.Response{OK: false, ErrorCode: "INVALID_PROJECT_REQUEST", ErrorMessage: "project rename request is missing"}

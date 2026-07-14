@@ -5,12 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/projectfs"
-	"aionuiportal/internal/winutil"
 )
 
 func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
@@ -54,39 +52,27 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	privateRoot, err := s.userFilesystemRoot(session.User.WindowsSID)
+	result, err := s.instances.CreateProject(r.Context(), session.User.WindowsSID, request.Name)
 	if err != nil {
-		s.internalError(w, "resolve project workspace root", err)
-		return
-	}
-	workspaceRoot := filepath.Join(privateRoot, "workspace")
-	policy := winutil.PrivateTreePolicy(session.User.WindowsSID)
-	if err := winutil.VerifyACL(workspaceRoot, policy); err != nil {
-		s.internalError(w, "verify project workspace ACL", err)
-		return
-	}
-
-	target, ok := projectfs.ResolveChild(workspaceRoot, request.Name)
-	if !ok {
-		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project name is invalid")
-		return
-	}
-	if err := os.Mkdir(target, 0o700); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			writeProjectError(w, http.StatusConflict, "PROJECT_EXISTS", "A project with this name already exists")
+		var commandError *instance.UserHostCommandError
+		if errors.As(err, &commandError) {
+			switch commandError.Code {
+			case "INVALID_PROJECT_NAME":
+				writeProjectError(w, http.StatusBadRequest, commandError.Code, "Project name is invalid")
+			case "PROJECT_EXISTS":
+				writeProjectError(w, http.StatusConflict, commandError.Code, "A project with this name already exists")
+			default:
+				writeProjectError(w, http.StatusServiceUnavailable, "PROJECT_CREATE_FAILED", "Project could not be created")
+			}
 			return
 		}
-		s.internalError(w, "create project directory", err)
-		return
-	}
-	if err := errors.Join(winutil.ApplyACL(target, policy), winutil.VerifyACL(target, policy)); err != nil {
-		rollbackErr := os.Remove(target)
-		s.internalError(w, "protect project directory", errors.Join(err, rollbackErr))
+		s.logger.Printf("project creation failed sid=%s: %v", session.User.WindowsSID, err)
+		writeProjectError(w, http.StatusServiceUnavailable, "PROJECT_CREATE_FAILED", "Project could not be created")
 		return
 	}
 
 	s.auditBestEffort(r.Context(), "portal.project.create", "success", session, r, map[string]any{"name": request.Name})
-	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": map[string]string{"path": target}})
+	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": result})
 }
 
 func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
@@ -120,28 +106,9 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceRoot := filepath.Join(privateRoot, "workspace")
-	policy := winutil.PrivateTreePolicy(session.User.WindowsSID)
-	if err := winutil.VerifyACL(workspaceRoot, policy); err != nil {
-		s.internalError(w, "verify project workspace ACL", err)
-		return
-	}
 	oldName, ok := projectfs.NameFromPath(workspaceRoot, request.Path)
 	if !ok {
 		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_PATH", "Project path is outside the managed workspace")
-		return
-	}
-	source, _ := projectfs.ResolveChild(workspaceRoot, oldName)
-	info, err := os.Lstat(source)
-	if errors.Is(err, os.ErrNotExist) {
-		writeProjectError(w, http.StatusNotFound, "PROJECT_NOT_FOUND", "Project directory does not exist")
-		return
-	}
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		s.internalError(w, "inspect project directory", err)
-		return
-	}
-	if err := winutil.VerifyACL(source, policy); err != nil {
-		s.internalError(w, "verify project directory ACL", err)
 		return
 	}
 	result, err := s.instances.RenameProject(r.Context(), session.User.WindowsSID, oldName, request.Name)

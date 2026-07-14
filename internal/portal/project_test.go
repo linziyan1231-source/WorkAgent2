@@ -3,7 +3,6 @@ package portal
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,43 +13,36 @@ import (
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/projectfs"
 	"aionuiportal/internal/store"
-	"aionuiportal/internal/winutil"
 )
 
-func TestCreateProjectCreatesProtectedDirectoryForAuthenticatedUser(t *testing.T) {
-	server, data, _ := testServer(t)
+func TestCreateProjectRoutesToUserHostWithoutReadingPrivateWorkspace(t *testing.T) {
+	server, data, instances := testServer(t)
 	profile := prepareProjectProfile(t, server, testSID1, "test1")
 	token := createPortalSession(t, data)
+	target := filepath.Join(profile, config.UserDataDirectoryName, "workspace", "网站项目")
+	instances.projectCreateResult = ipc.ProjectCreateResult{Path: target}
 
 	response := createProjectRequest(server, token, `{"name":"网站项目"}`)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	target := filepath.Join(profile, config.UserDataDirectoryName, "workspace", "网站项目")
-	if info, err := os.Stat(target); err != nil || !info.IsDir() {
-		t.Fatalf("created project directory is unavailable: info=%v err=%v", info, err)
+	if instances.projectCreate == nil || instances.projectCreate.Name != "网站项目" {
+		t.Fatalf("wrong creation request: %+v", instances.projectCreate)
 	}
-	if err := winutil.VerifyACL(target, winutil.PrivateTreePolicy(testSID1)); err != nil {
-		t.Fatalf("created project ACL is invalid: %v", err)
+	if !strings.Contains(response.Body.String(), strconv.Quote(target)) {
+		t.Fatalf("creation result is incomplete: %s", response.Body.String())
 	}
 }
 
-func TestCreateProjectRejectsExistingProjectWithoutChangingIt(t *testing.T) {
-	server, data, _ := testServer(t)
-	profile := prepareProjectProfile(t, server, testSID1, "test1")
+func TestCreateProjectMapsExistingUserHostDirectory(t *testing.T) {
+	server, data, instances := testServer(t)
+	prepareProjectProfile(t, server, testSID1, "test1")
 	token := createPortalSession(t, data)
-	first := createProjectRequest(server, token, `{"name":"existing"}`)
-	if first.Code != http.StatusCreated {
-		t.Fatalf("first create status=%d body=%s", first.Code, first.Body.String())
-	}
+	instances.projectCreateError = &instance.UserHostCommandError{Command: "project_create", Code: "PROJECT_EXISTS", Message: "exists"}
 
-	second := createProjectRequest(server, token, `{"name":"existing"}`)
-	if second.Code != http.StatusConflict || !strings.Contains(second.Body.String(), `"code":"PROJECT_EXISTS"`) {
-		t.Fatalf("duplicate status=%d body=%s", second.Code, second.Body.String())
-	}
-	entries, err := os.ReadDir(filepath.Join(profile, config.UserDataDirectoryName, "workspace"))
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("duplicate create changed workspace: entries=%v err=%v", entries, err)
+	response := createProjectRequest(server, token, `{"name":"existing"}`)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"PROJECT_EXISTS"`) {
+		t.Fatalf("duplicate status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -91,12 +83,6 @@ func TestRenameProjectRoutesOnlyManagedProtectedDirectory(t *testing.T) {
 	profile := prepareProjectProfile(t, server, testSID1, "test1")
 	token := createPortalSession(t, data)
 	source := filepath.Join(profile, config.UserDataDirectoryName, "workspace", "old-project")
-	if err := os.Mkdir(source, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := winutil.ApplyACL(source, winutil.PrivateTreePolicy(testSID1)); err != nil {
-		t.Fatal(err)
-	}
 	instances.projectRenameResult = ipc.ProjectRenameResult{OldPath: source, NewPath: filepath.Join(filepath.Dir(source), "new-project"), UpdatedConversations: 2}
 
 	response := renameProjectRequest(server, token, source, "new-project")
@@ -125,12 +111,6 @@ func TestRenameProjectRejectsOutsidePathAndMapsOccupiedDirectory(t *testing.T) {
 	}
 
 	source := filepath.Join(profile, config.UserDataDirectoryName, "workspace", "old-project")
-	if err := os.Mkdir(source, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := winutil.ApplyACL(source, winutil.PrivateTreePolicy(testSID1)); err != nil {
-		t.Fatal(err)
-	}
 	instances.projectRenameError = &instance.UserHostCommandError{Command: "project_rename", Code: "PROJECT_IN_USE", Message: "occupied"}
 	occupied := renameProjectRequest(server, token, source, "new-project")
 	if occupied.Code != http.StatusConflict || !strings.Contains(occupied.Body.String(), `"code":"PROJECT_IN_USE"`) {
@@ -142,13 +122,6 @@ func prepareProjectProfile(t *testing.T, server *Server, sid, profileName string
 	t.Helper()
 	profilesRoot := t.TempDir()
 	profile := filepath.Join(profilesRoot, profileName)
-	workspace := filepath.Join(profile, config.UserDataDirectoryName, "workspace")
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := winutil.ApplyACL(workspace, winutil.PrivateTreePolicy(sid)); err != nil {
-		t.Fatal(err)
-	}
 	server.cfg.UserProfilesRoot = profilesRoot
 	server.profilePath = func(requestedSID string) (string, error) {
 		if requestedSID == sid {
