@@ -96,7 +96,16 @@ func VerifyReleasePath(releasePath, expectedVersion string, supportedAionCore []
 	if manifest.FormatVersion != 1 || manifest.Version != expectedVersion || !contains(supportedAionCore, manifest.AionCoreVersion) || len(manifest.Files) == 0 {
 		return Verified{}, errors.New("release manifest metadata is invalid or unsupported")
 	}
-	for _, critical := range []string{"aionui-web.exe", "package.json", "static/index.html", "bundled-aioncore/win32-x64/aioncore.exe"} {
+	for _, critical := range []string{
+		"aionui-web.exe",
+		"package.json",
+		"static/index.html",
+		"bundled-aioncore/win32-x64/aioncore.exe",
+		"workagent-builtin-assistants/assistants.json",
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md",
+	} {
 		if _, ok := manifest.Files[critical]; !ok {
 			return Verified{}, fmt.Errorf("release manifest is missing critical file %s", critical)
 		}
