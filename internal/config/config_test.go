@@ -72,6 +72,31 @@ func TestProductionConfigAcceptsExplicitHTTPAndRejectsUnsafeOrigins(t *testing.T
 	}
 }
 
+func TestProductionConfigAcceptsOnlyExactAdditionalBrowserOrigins(t *testing.T) {
+	c := validPortal(t)
+	c.PublicBaseURL = "http://portal.example.test"
+	c.TLSCertificateFile = ""
+	c.TLSPrivateKeyFile = ""
+	c.BrowserOrigins = []string{"http://203.0.113.79:25808", "http://127.0.0.1:25808"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("exact additional browser origins rejected: %v", err)
+	}
+	for _, invalid := range []string{
+		"http://portal.example.test",
+		"http://127.0.0.1:25808/",
+		"http://127.0.0.1:25808/path",
+		"http://127.0.0.1:25808?query",
+		"http://user@127.0.0.1:25808",
+		"ws://127.0.0.1:25808",
+	} {
+		candidate := c
+		candidate.BrowserOrigins = []string{invalid}
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("invalid additional browser origin accepted: %q", invalid)
+		}
+	}
+}
+
 func TestPortalUsageSSHConfigRejectsBroadOrAmbiguousPaths(t *testing.T) {
 	for name, mutate := range map[string]func(*Portal){
 		"target":                func(c *Portal) { c.UsageSSHTarget = "root@host;command" },

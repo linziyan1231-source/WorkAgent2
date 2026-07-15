@@ -55,6 +55,7 @@ type Server struct {
 	usage        UsageService
 	static       http.Handler
 	public       *url.URL
+	origins      map[string]struct{}
 	dummyHash    string
 	logger       *log.Logger
 	now          func() time.Time
@@ -71,6 +72,14 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if err != nil {
 		return nil, err
 	}
+	browserOrigins := map[string]struct{}{browserOriginKey(public): {}}
+	for _, value := range cfg.BrowserOrigins {
+		origin, err := url.Parse(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse additional browser origin: %w", err)
+		}
+		browserOrigins[browserOriginKey(origin)] = struct{}{}
+	}
 	dummy, err := auth.HashPassword([]byte("disabled-account-dummy-password"))
 	if err != nil {
 		return nil, fmt.Errorf("create constant-time login verifier: %w", err)
@@ -86,7 +95,7 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if cfg.UsesTLS() {
 		cookieName = sessionCookie
 	}
-	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, dummyHash: dummy, logger: logger, now: time.Now,
+	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, logger: logger, now: time.Now,
 		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID}, nil
 }
 
@@ -390,8 +399,15 @@ func (s *Server) validBrowserOrigin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return parsed.User == nil && parsed.Opaque == "" && strings.EqualFold(parsed.Scheme, s.public.Scheme) &&
-		strings.EqualFold(parsed.Host, s.public.Host) && parsed.Path == "" && parsed.RawPath == "" && parsed.RawQuery == "" && parsed.Fragment == ""
+	if parsed.User != nil || parsed.Opaque != "" || parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	_, allowed := s.origins[browserOriginKey(parsed)]
+	return allowed
+}
+
+func browserOriginKey(origin *url.URL) string {
+	return strings.ToLower(origin.Scheme + "://" + origin.Host)
 }
 
 func (s *Server) security(next http.Handler) http.Handler {

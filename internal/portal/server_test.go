@@ -307,6 +307,48 @@ func TestRendererServesRealFileAndRejectsWindowsSeparator(t *testing.T) {
 	}
 }
 
+func TestRendererCachesOnlyFingerprintedStaticAssets(t *testing.T) {
+	server, _, _ := testServer(t)
+	for target, want := range map[string]string{
+		"https://portal.example.test/assets/index-AbCdEf12.js": "public, max-age=31536000, immutable",
+		"https://portal.example.test/app.js":                   "no-store",
+		"https://portal.example.test/":                         "no-store",
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != want {
+			t.Fatalf("cache policy for %s: status=%d Cache-Control=%q, want %q", target, response.Code, response.Header().Get("Cache-Control"), want)
+		}
+	}
+}
+
+func TestAdditionalBrowserOriginsAreExactAndDoNotChangeOAuthOrigin(t *testing.T) {
+	server, _, _ := testServerWithPublicURLAndOrigins(t, "http://portal.example.test", []string{
+		"http://203.0.113.79:25808",
+		"http://127.0.0.1:25808",
+	})
+	for _, origin := range []string{"http://portal.example.test", "http://203.0.113.79:25808", "http://127.0.0.1:25808"} {
+		request := httptest.NewRequest(http.MethodPost, "http://portal.example.test/login", strings.NewReader("{"))
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("allowed origin %s returned status=%d body=%s", origin, response.Code, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://portal.example.test/login", strings.NewReader("{"))
+	request.Header.Set("Origin", "http://attacker.example.test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unlisted origin returned status=%d body=%s", response.Code, response.Body.String())
+	}
+	if server.public.String() != "http://portal.example.test" {
+		t.Fatalf("additional origins changed canonical public URL: %s", server.public)
+	}
+}
+
 func TestUnauthenticatedRendererReceivesChineseLanguageOnly(t *testing.T) {
 	server, _, instances := testServer(t)
 	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/settings/client", nil)
@@ -1121,7 +1163,12 @@ func testServer(t *testing.T) (*Server, *store.Store, *fakeInstances) {
 
 func testServerWithPublicURL(t *testing.T, publicURL string) (*Server, *store.Store, *fakeInstances) {
 	t.Helper()
-	return testServerAtRootWithPublicURL(t, t.TempDir(), publicURL)
+	return testServerWithPublicURLAndOrigins(t, publicURL, nil)
+}
+
+func testServerWithPublicURLAndOrigins(t *testing.T, publicURL string, origins []string) (*Server, *store.Store, *fakeInstances) {
+	t.Helper()
+	return testServerAtRootWithPublicURLAndOrigins(t, t.TempDir(), publicURL, origins)
 }
 
 func testServerAtRoot(t *testing.T, root string) (*Server, *store.Store, *fakeInstances) {
@@ -1130,6 +1177,11 @@ func testServerAtRoot(t *testing.T, root string) (*Server, *store.Store, *fakeIn
 }
 
 func testServerAtRootWithPublicURL(t *testing.T, root, publicURL string) (*Server, *store.Store, *fakeInstances) {
+	t.Helper()
+	return testServerAtRootWithPublicURLAndOrigins(t, root, publicURL, nil)
+}
+
+func testServerAtRootWithPublicURLAndOrigins(t *testing.T, root, publicURL string, origins []string) (*Server, *store.Store, *fakeInstances) {
 	t.Helper()
 	staticDir := filepath.Join(root, "static")
 	if err := os.Mkdir(staticDir, 0o700); err != nil {
@@ -1141,6 +1193,12 @@ func testServerAtRootWithPublicURL(t *testing.T, root, publicURL string) (*Serve
 	if err := os.WriteFile(filepath.Join(staticDir, "app.js"), []byte("real static asset"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(staticDir, "assets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "index-AbCdEf12.js"), []byte("fingerprinted static asset"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	data, err := store.Open(filepath.Join(root, "portal.db"), filepath.Join(root, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -1150,6 +1208,7 @@ func testServerAtRootWithPublicURL(t *testing.T, root, publicURL string) (*Serve
 	cfg.Mode = "test"
 	cfg.ListenAddress = "127.0.0.1:0"
 	cfg.PublicBaseURL = publicURL
+	cfg.BrowserOrigins = append([]string(nil), origins...)
 	cfg.LoginAccountFailures = 5
 	cfg.LoginIPFailures = 20
 	instances := &fakeInstances{route: instance.Route{Status: ipc.Status{WindowsSID: testSID1, Healthy: true, WebPort: 31001, AionCorePort: 32001,

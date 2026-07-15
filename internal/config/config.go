@@ -30,6 +30,7 @@ type Portal struct {
 	Mode                   string   `json:"mode"`
 	ListenAddress          string   `json:"listen_address"`
 	PublicBaseURL          string   `json:"public_base_url"`
+	BrowserOrigins         []string `json:"additional_browser_origins,omitempty"`
 	TLSCertificateFile     string   `json:"tls_certificate_file"`
 	TLSPrivateKeyFile      string   `json:"tls_private_key_file"`
 	DatabasePath           string   `json:"database_path"`
@@ -122,6 +123,19 @@ func (c Portal) Validate() error {
 	}
 	if c.Mode == "production" && base.Port() != "25808" && !(base.Scheme == "http" && (base.Port() == "" || base.Port() == "80")) {
 		return errors.New("production public_base_url must use port 25808 or standard HTTP port 80")
+	}
+	browserOrigins := map[string]struct{}{strings.ToLower(base.Scheme + "://" + base.Host): {}}
+	for _, value := range c.BrowserOrigins {
+		origin, err := url.Parse(value)
+		if err != nil || (origin.Scheme != "http" && origin.Scheme != "https") || origin.Hostname() == "" || origin.User != nil || origin.Opaque != "" ||
+			origin.Path != "" || origin.RawPath != "" || origin.RawQuery != "" || origin.Fragment != "" {
+			return fmt.Errorf("additional_browser_origins contains invalid origin %q", value)
+		}
+		key := strings.ToLower(origin.Scheme + "://" + origin.Host)
+		if _, exists := browserOrigins[key]; exists {
+			return fmt.Errorf("additional_browser_origins contains duplicate origin %q", value)
+		}
+		browserOrigins[key] = struct{}{}
 	}
 	if c.UsesTLS() {
 		if !filepath.IsAbs(c.TLSCertificateFile) || !filepath.IsAbs(c.TLSPrivateKeyFile) {

@@ -7,8 +7,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var fingerprintedStaticAsset = regexp.MustCompile(`^/assets/(?:[^/]+/)*[^/]+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$`)
 
 func newStaticHandler(root string) (http.Handler, error) {
 	root, err := filepath.Abs(root)
@@ -35,6 +38,9 @@ func newStaticHandler(root string) (http.Handler, error) {
 		rel := strings.TrimPrefix(clean, "/")
 		candidate := filepath.Join(root, filepath.FromSlash(rel))
 		if candidateInfo, err := os.Stat(candidate); err == nil && candidateInfo.Mode().IsRegular() && !sameStaticPath(candidate, indexPath) {
+			if fingerprintedStaticAsset.MatchString(clean) {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			copy := r.Clone(r.Context())
 			copy.URL.Path = clean
 			files.ServeHTTP(w, copy)
