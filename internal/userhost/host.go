@@ -245,6 +245,14 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	h.client, h.auth = client, material
+	brandingApplied, err := applyWorkAgentBranding(startupCtx, dbPath, h.dirs.Data, filepath.Join(h.dirs.Config, workagentBrandingMarkerName), time.Now())
+	if err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
+	if brandingApplied {
+		h.log.Printf("Branded the built-in assistant, prompt, and product skills as WorkAgent AI")
+	}
 	if err := h.applyPendingModelBootstrap(startupCtx, pendingModels); err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
