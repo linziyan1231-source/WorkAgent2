@@ -9,11 +9,11 @@ import (
 
 func testOptions() ProvisionOptions {
 	return ProvisionOptions{Username: "test1", WindowsSID: "S-1-5-21-1335169958-1819941586-1322872941-1322", BaseURL: "http://203.0.113.52:8317/v1",
-		CodexDefaultModel: "example-reasoning", CodexModels: []string{"gpt-5.3-codex-spark", "example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"},
+		CodexDefaultModel: "example-reasoning", CodexModels: []string{"gpt-5.3-codex-spark", "example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding", "kimi-for-coding-highspeed"},
 		RPM: 0, CodexDailyUSD: 20, CodexWeeklyUSD: 40, KimiDailyUSD: 5, KimiWeeklyUSD: 10}
 }
 
-func TestProvisionRequestEnablesGlobalModelsEndpoint(t *testing.T) {
+func TestProvisionRequestEnablesPerKeyModelsEndpoint(t *testing.T) {
 	options := testOptions()
 	state, err := stateFor(options)
 	if err != nil {
@@ -23,7 +23,7 @@ func TestProvisionRequestEnablesGlobalModelsEndpoint(t *testing.T) {
 	for index, key := range payload.Keys {
 		want := [][]string{state.CodexModels, state.KimiModels}[index]
 		if !key.AllowModelsEndpoint || !reflect.DeepEqual(key.Aliases, want) {
-			t.Fatalf("employee key does not enable the global model catalog with its exact aliases: %+v", key)
+			t.Fatalf("employee key does not enable its per-key model catalog with exact aliases: %+v", key)
 		}
 	}
 }

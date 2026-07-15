@@ -10,7 +10,7 @@ import (
 
 func realBundle() Bundle {
 	return Bundle{State: State{FormatVersion: 1, BaseURL: "http://203.0.113.52:8317/v1", CodexKeyID: "aionui-0123456789abcdef-chatgpt",
-		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding"}},
+		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: ManagedKimiModels()},
 		CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
 }
 
@@ -52,6 +52,8 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 		func(bundle *Bundle) { bundle.KimiAPIKey = bundle.CodexAPIKey },
 		func(bundle *Bundle) { bundle.CodexModels = append(bundle.CodexModels, "example-reasoning") },
 		func(bundle *Bundle) { bundle.CodexDefaultModel = "not-allowed" },
+		func(bundle *Bundle) { bundle.KimiModels = []string{"kimi-for-coding"} },
+		func(bundle *Bundle) { bundle.KimiModels = append(bundle.KimiModels, "kimi-other") },
 	}
 	for index, mutate := range tests {
 		bundle := realBundle()
@@ -65,7 +67,7 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 func TestManagedModelPolicyIsExactAndReturnsCopies(t *testing.T) {
 	codex := ManagedCodexModels()
 	kimi := ManagedKimiModels()
-	if !reflect.DeepEqual(codex, []string{"example-reasoning", "example-balanced", "example-fast"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding"}) {
+	if !reflect.DeepEqual(codex, []string{"example-reasoning", "example-balanced", "example-fast"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding", "kimi-for-coding-highspeed"}) {
 		t.Fatalf("unexpected managed model policy: codex=%v kimi=%v", codex, kimi)
 	}
 	codex[0] = "changed"

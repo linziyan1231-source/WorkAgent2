@@ -33,7 +33,6 @@ const (
 )
 
 var managedCodexAssignment = regexp.MustCompile(`^\s*(?:["']?(openai_base_url|model_reasoning_effort|model|cli_auth_credentials_store)["']?)\s*=`)
-var managedCodexLanguageAssignment = regexp.MustCompile(`^\s*(?:["']?(developer_instructions)["']?)\s*=`)
 
 type pendingModelBootstrap struct {
 	bundle modelbootstrap.Bundle
@@ -152,6 +151,8 @@ from kimi_cli.config import load_config
 PROVIDER_KEY = "managed:kimi-code"
 MODEL_KEY = "kimi-code/kimi-for-coding"
 MODEL_NAME = "kimi-for-coding"
+HIGHSPEED_MODEL_KEY = "kimi-code/kimi-for-coding-highspeed"
+HIGHSPEED_MODEL_NAME = "kimi-for-coding-highspeed"
 OAUTH_KEY = "oauth/kimi-code"
 MAX_CONFIG_BYTES = 1024 * 1024
 
@@ -198,18 +199,27 @@ models = document.get("models")
 if not isinstance(models, dict):
     models = tomlkit.table()
     document["models"] = models
-model = models.get(MODEL_KEY)
-if not isinstance(model, dict):
-    model = tomlkit.table()
-model["provider"] = PROVIDER_KEY
-model["model"] = MODEL_NAME
-model["max_context_size"] = 262144
-if "capabilities" not in model:
-    model["capabilities"] = ["video_in", "image_in", "thinking"]
-if "display_name" not in model:
-    model["display_name"] = "Kimi for Coding"
-models[MODEL_KEY] = model
+def upsert_model(key, name, display_name):
+    model = models.get(key)
+    if not isinstance(model, dict):
+        model = tomlkit.table()
+    model["provider"] = PROVIDER_KEY
+    model["model"] = name
+    model["max_context_size"] = 262144
+    capabilities = model.get("capabilities")
+    if not isinstance(capabilities, list):
+        capabilities = ["video_in", "image_in", "thinking"]
+    elif "thinking" not in capabilities:
+        capabilities.append("thinking")
+    model["capabilities"] = capabilities
+    if "display_name" not in model:
+        model["display_name"] = display_name
+    models[key] = model
+
+upsert_model(MODEL_KEY, MODEL_NAME, "Kimi for Coding")
+upsert_model(HIGHSPEED_MODEL_KEY, HIGHSPEED_MODEL_NAME, "Kimi for Coding HighSpeed")
 document["default_model"] = MODEL_KEY
+document["default_thinking"] = True
 document["default_yolo"] = True
 
 def remove_kimi_oauth(section):
@@ -236,8 +246,10 @@ try:
     candidate = load_config(temporary_path)
     candidate_provider = candidate.providers.get(PROVIDER_KEY)
     candidate_model = candidate.models.get(MODEL_KEY)
+    candidate_highspeed_model = candidate.models.get(HIGHSPEED_MODEL_KEY)
     if (
         candidate.default_model != MODEL_KEY
+        or candidate.default_thinking is not True
         or candidate.default_yolo is not True
         or candidate_provider is None
         or candidate_provider.type != "kimi"
@@ -247,6 +259,13 @@ try:
         or candidate_model is None
         or candidate_model.provider != PROVIDER_KEY
         or candidate_model.model != MODEL_NAME
+        or candidate_model.capabilities is None
+        or "thinking" not in candidate_model.capabilities
+        or candidate_highspeed_model is None
+        or candidate_highspeed_model.provider != PROVIDER_KEY
+        or candidate_highspeed_model.model != HIGHSPEED_MODEL_NAME
+        or candidate_highspeed_model.capabilities is None
+        or "thinking" not in candidate_highspeed_model.capabilities
     ):
         raise RuntimeError("Kimi API-key configuration verification failed")
     for service in (candidate.services.moonshot_search, candidate.services.moonshot_fetch):
@@ -268,7 +287,7 @@ for path in oauth_paths:
 
 verified = load_config(config_path)
 verified_provider = verified.providers.get(PROVIDER_KEY)
-if verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
+if verified.default_thinking is not True or verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
     raise RuntimeError("persisted Kimi API-key configuration verification failed")
 `
 
@@ -313,15 +332,6 @@ func writeInitialCodexConfig(path, baseURL, model string) error {
 		"",
 	}
 	return rewriteCodexConfig(path, managedCodexAssignment, managed)
-}
-
-func writeInitialCodexLanguageDefault(path string) error {
-	managed := []string{
-		"# Initial response-language default managed once by AionUiPortal.",
-		"developer_instructions = " + strconv.Quote(cliChineseLanguageInstruction),
-		"",
-	}
-	return rewriteCodexConfig(path, managedCodexLanguageAssignment, managed)
 }
 
 func rewriteCodexConfig(path string, assignment *regexp.Regexp, managed []string) error {

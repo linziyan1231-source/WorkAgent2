@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestInitialCLILanguageDefaultsApplyOnceAndPreserveLaterUserChoice(t *testing.T) {
+func TestCLILanguageDefaultsDoNotCreateManagedPrompts(t *testing.T) {
 	dirs, err := ensurePrivateDirs(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -22,8 +22,8 @@ func TestInitialCLILanguageDefaultsApplyOnceAndPreserveLaterUserChoice(t *testin
 		t.Fatalf("first application applied=%t err=%v", applied, err)
 	}
 	codex, err := os.ReadFile(codexPath)
-	if err != nil || !strings.Contains(string(codex), "developer_instructions = "+strconv.Quote(cliChineseLanguageInstruction)) || !strings.Contains(string(codex), `model = "existing-model"`) {
-		t.Fatalf("Codex language default or preserved model is missing: %q err=%v", codex, err)
+	if err != nil || string(codex) != "model = \"existing-model\"\n" {
+		t.Fatalf("Codex config was changed: %q err=%v", codex, err)
 	}
 	agentPath := filepath.Join(dirs.Profile, filepath.FromSlash(legacyKimiLanguageAgentPath))
 	if _, err := os.Stat(agentPath); !os.IsNotExist(err) {
@@ -42,20 +42,54 @@ func TestInitialCLILanguageDefaultsApplyOnceAndPreserveLaterUserChoice(t *testin
 	}
 }
 
-func TestCLILanguageDefaultsMigrateV1WithoutOverwritingCodexChoice(t *testing.T) {
+func TestCLILanguageDefaultsMigrateV2RemovingOnlyManagedCodexPrompt(t *testing.T) {
 	dirs, err := ensurePrivateDirs(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	codexPath := filepath.Join(dirs.Config, "codex", "config.toml")
-	if err := os.WriteFile(codexPath, []byte("developer_instructions = \"用户后来选择英文\"\n"), 0o600); err != nil {
+	managed := codexLanguageDefaultComment + "\n" +
+		"developer_instructions = " + strconv.Quote(cliChineseLanguageInstruction) + "\n\n" +
+		"model = \"existing-model\"\n"
+	if err := os.WriteFile(codexPath, []byte(managed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousMarker := filepath.Join(dirs.Config, previousCLILanguageMarkerName)
+	if err := os.WriteFile(previousMarker, []byte(previousCLILanguageMarkerContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := applyInitialCLILanguageDefaults(dirs); err != nil || !applied {
+		t.Fatalf("v2 migration applied=%t err=%v", applied, err)
+	}
+	codex, _ := os.ReadFile(codexPath)
+	if string(codex) != "model = \"existing-model\"\n" {
+		t.Fatalf("v2 migration did not remove only the managed prompt: %q", codex)
+	}
+	if _, err := os.Stat(previousMarker); !os.IsNotExist(err) {
+		t.Fatalf("previous marker survived migration: %s err=%v", previousMarker, err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs.Config, cliLanguageMarkerName)); err != nil {
+		t.Fatalf("v3 marker is missing: %v", err)
+	}
+}
+
+func TestCLILanguageDefaultsMigrateV1RemovingManagedCodexAndKimiPrompts(t *testing.T) {
+	dirs, err := ensurePrivateDirs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(dirs.Config, "codex", "config.toml")
+	managed := codexLanguageDefaultComment + "\n" +
+		"developer_instructions = " + strconv.Quote(cliChineseLanguageInstruction) + "\n\n" +
+		"model = \"existing-model\"\n"
+	if err := os.WriteFile(codexPath, []byte(managed), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	kimiDirectory := filepath.Join(dirs.Profile, ".kimi")
 	if err := os.Mkdir(kimiDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	agentPath := filepath.Join(dirs.Profile, filepath.FromSlash(legacyKimiLanguageAgentPath))
+	agentPath := filepath.Join(kimiDirectory, "aion-default-agent.yaml")
 	if err := os.WriteFile(agentPath, []byte(kimiLanguageAgentContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -67,16 +101,35 @@ func TestCLILanguageDefaultsMigrateV1WithoutOverwritingCodexChoice(t *testing.T)
 		t.Fatalf("v1 migration applied=%t err=%v", applied, err)
 	}
 	codex, _ := os.ReadFile(codexPath)
-	if string(codex) != "developer_instructions = \"用户后来选择英文\"\n" {
-		t.Fatalf("v1 migration overwrote later Codex choice: %q", codex)
+	if string(codex) != "model = \"existing-model\"\n" {
+		t.Fatalf("v1 migration did not remove only the managed Codex prompt: %q", codex)
 	}
 	for _, path := range []string{agentPath, legacyMarker} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("legacy file survived migration: %s err=%v", path, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dirs.Config, cliLanguageMarkerName)); err != nil {
-		t.Fatalf("v2 marker is missing: %v", err)
+}
+
+func TestCLILanguageDefaultsPreserveUserDeveloperInstructions(t *testing.T) {
+	dirs, err := ensurePrivateDirs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(dirs.Config, "codex", "config.toml")
+	if err := os.WriteFile(codexPath, []byte("developer_instructions = \"用户自己的指令\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousMarker := filepath.Join(dirs.Config, previousCLILanguageMarkerName)
+	if err := os.WriteFile(previousMarker, []byte(previousCLILanguageMarkerContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := applyInitialCLILanguageDefaults(dirs); err != nil || !applied {
+		t.Fatalf("migration applied=%t err=%v", applied, err)
+	}
+	codex, _ := os.ReadFile(codexPath)
+	if string(codex) != "developer_instructions = \"用户自己的指令\"\n" {
+		t.Fatalf("user instruction was changed: %q", codex)
 	}
 }
 

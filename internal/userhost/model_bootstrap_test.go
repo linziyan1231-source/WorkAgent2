@@ -110,7 +110,7 @@ api_key = "custom-secret"
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{"# preserve this comment", `theme = "light"`, `default_yolo = true`, `[providers.custom]`, `base_url = "http://203.0.113.52:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+	for _, required := range []string{"# preserve this comment", `theme = "light"`, `default_thinking = true`, `default_yolo = true`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi for Coding HighSpeed"`, `[providers.custom]`, `base_url = "http://203.0.113.52:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
 		}
@@ -128,7 +128,7 @@ api_key = "custom-secret"
 func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testing.T) {
 	desired := []aionProvider{
 		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"example-reasoning", "example-balanced", "example-fast"}, Enabled: true},
-		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "KIMI", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding"}, Enabled: true},
+		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "KIMI", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding", "kimi-for-coding-highspeed"}, Enabled: true},
 	}
 	providers := []aionProvider{{ID: "custom-user-provider", Platform: "custom", Name: "Keep me", BaseURL: "https://example.test/v1", APIKey: "user-secret", Models: []string{"model"}, Enabled: true},
 		{ID: desired[0].ID, Platform: "custom", Name: "stale", BaseURL: "https://stale.test/v1", APIKey: "stale", Models: []string{"stale"}, Enabled: false}}

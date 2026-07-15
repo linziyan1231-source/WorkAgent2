@@ -1,0 +1,352 @@
+package userhost
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"aionuiportal/internal/agentcli"
+	"aionuiportal/internal/modelbootstrap"
+	"golang.org/x/sys/windows"
+)
+
+const maxManagedCodexCatalog = 1024 * 1024
+
+var (
+	managedCodexCatalogVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	managedCodexCatalogSetting = regexp.MustCompile(`^\s*(?:["']?(model_catalog_json)["']?)\s*=`)
+	managedCodexAPIKeyPattern  = regexp.MustCompile(`^cpa_[A-Za-z0-9_-]{20,256}$`)
+)
+
+type managedCodexCatalog struct {
+	Models []json.RawMessage `json:"models"`
+}
+
+type managedCodexModelMetadata struct {
+	Slug                     string `json:"slug"`
+	DisplayName              string `json:"display_name"`
+	BaseInstructions         string `json:"base_instructions"`
+	Visibility               string `json:"visibility"`
+	SupportedInAPI           bool   `json:"supported_in_api"`
+	Priority                 int    `json:"priority"`
+	ContextWindow            int64  `json:"context_window"`
+	MaxContextWindow         int64  `json:"max_context_window"`
+	SupportedReasoningLevels []struct {
+		Effort      string `json:"effort"`
+		Description string `json:"description"`
+	} `json:"supported_reasoning_levels"`
+}
+
+func (h *Host) applyManagedCodexModelCatalog(ctx context.Context, env []string, codexVersion string) (bool, error) {
+	state, managed, err := managedCodexCatalogBootstrapState(h.cfg.DataRoot)
+	if err != nil {
+		return false, err
+	}
+	if !managed {
+		return false, nil
+	}
+	if !managedCodexCatalogVersion.MatchString(codexVersion) {
+		return false, fmt.Errorf("unsupported Codex catalog version %q", codexVersion)
+	}
+
+	codexHome := filepath.Join(h.dirs.Config, "codex")
+	catalogPath := filepath.Join(codexHome, "managed-model-catalog-"+codexVersion+".json")
+	applied := false
+	info, statErr := os.Lstat(catalogPath)
+	switch {
+	case statErr == nil:
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxManagedCodexCatalog {
+			return false, errors.New("managed Codex model catalog must be a bounded regular non-symlink file")
+		}
+		data, readErr := os.ReadFile(catalogPath)
+		if readErr != nil {
+			return false, readErr
+		}
+		if validateErr := validateManagedCodexCatalog(data); validateErr != nil {
+			return false, fmt.Errorf("validate existing managed Codex model catalog: %w", validateErr)
+		}
+	case errors.Is(statErr, os.ErrNotExist):
+		apiKey, keyErr := loadCodexAPIKey(filepath.Join(codexHome, "auth.json"))
+		if keyErr != nil {
+			return false, fmt.Errorf("load managed Codex API-key login: %w", keyErr)
+		}
+		defer zero(apiKey)
+		data, fetchErr := fetchManagedCodexCatalog(ctx, state.BaseURL, codexVersion, apiKey)
+		if fetchErr != nil {
+			return false, fetchErr
+		}
+		if writeErr := writePrivateFileAtomic(catalogPath, data); writeErr != nil {
+			return false, fmt.Errorf("write managed Codex model catalog: %w", writeErr)
+		}
+		applied = true
+	case statErr != nil:
+		return false, fmt.Errorf("inspect managed Codex model catalog: %w", statErr)
+	}
+
+	if err := writeManagedCodexCatalogSetting(filepath.Join(codexHome, "config.toml"), catalogPath); err != nil {
+		return false, fmt.Errorf("configure managed Codex model catalog: %w", err)
+	}
+	if err := h.verifyManagedCodexModelList(ctx, env); err != nil {
+		return false, err
+	}
+	return applied, nil
+}
+
+func managedCodexCatalogBootstrapState(dataRoot string) (modelbootstrap.State, bool, error) {
+	status, err := modelbootstrap.Inspect(dataRoot)
+	if err != nil {
+		return modelbootstrap.State{}, false, fmt.Errorf("inspect managed Codex model state: %w", err)
+	}
+	if !status.Applied && !status.Pending {
+		return modelbootstrap.State{}, false, nil
+	}
+	if !sameStringSet(status.State.CodexModels, modelbootstrap.ManagedCodexModels()) {
+		return modelbootstrap.State{}, false, errors.New("managed Codex model state does not contain the exact supported catalog")
+	}
+	return status.State, true, nil
+}
+
+func fetchManagedCodexCatalog(ctx context.Context, baseURL, codexVersion string, apiKey []byte) ([]byte, error) {
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return nil, errors.New("managed Codex catalog base URL is invalid")
+	}
+	endpoint.Path = strings.TrimSuffix(endpoint.Path, "/") + "/models"
+	query := endpoint.Query()
+	query.Set("client_version", codexVersion)
+	endpoint.RawQuery = query.Encode()
+
+	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, errors.New("create managed Codex catalog request")
+	}
+	request.Header.Set("Authorization", "Bearer "+string(apiKey))
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		Timeout:   30 * time.Second,
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("fetch managed Codex model catalog: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch managed Codex model catalog returned HTTP %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxManagedCodexCatalog+1))
+	if err != nil {
+		return nil, errors.New("read managed Codex model catalog")
+	}
+	if len(data) > maxManagedCodexCatalog {
+		return nil, errors.New("managed Codex model catalog exceeded its size limit")
+	}
+	if err := validateManagedCodexCatalog(data); err != nil {
+		return nil, fmt.Errorf("validate fetched managed Codex model catalog: %w", err)
+	}
+	return append(bytes.TrimSpace(data), '\n'), nil
+}
+
+func validateManagedCodexCatalog(data []byte) error {
+	if len(data) == 0 || len(data) > maxManagedCodexCatalog {
+		return errors.New("managed Codex model catalog has an invalid size")
+	}
+	var catalog managedCodexCatalog
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
+		return errors.New("managed Codex model catalog is invalid JSON")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("managed Codex model catalog has a trailing JSON value")
+	}
+	want := modelbootstrap.ManagedCodexModels()
+	if len(catalog.Models) != len(want) {
+		return fmt.Errorf("managed Codex model catalog has %d models instead of %d", len(catalog.Models), len(want))
+	}
+	seen := make([]string, 0, len(catalog.Models))
+	for _, raw := range catalog.Models {
+		var model managedCodexModelMetadata
+		if err := json.Unmarshal(raw, &model); err != nil {
+			return errors.New("managed Codex model metadata is invalid")
+		}
+		if model.Slug == "" || model.DisplayName == "" || model.BaseInstructions == "" || model.Visibility != "list" || !model.SupportedInAPI || model.Priority <= 0 || model.ContextWindow <= 0 || model.MaxContextWindow < model.ContextWindow || len(model.SupportedReasoningLevels) == 0 {
+			return fmt.Errorf("managed Codex model %q has incomplete runtime metadata", model.Slug)
+		}
+		for _, effort := range model.SupportedReasoningLevels {
+			if effort.Effort == "" || effort.Description == "" {
+				return fmt.Errorf("managed Codex model %q has incomplete reasoning metadata", model.Slug)
+			}
+		}
+		seen = append(seen, model.Slug)
+	}
+	if !sameStringSet(seen, want) {
+		return errors.New("managed Codex model catalog does not contain the exact supported models")
+	}
+	return nil
+}
+
+func writeManagedCodexCatalogSetting(configPath, catalogPath string) error {
+	managed := []string{
+		"# Managed Codex model catalog: only the authorized GPT-5.6 models are displayed.",
+		"model_catalog_json = " + strconv.Quote(catalogPath),
+		"",
+	}
+	return rewriteCodexConfig(configPath, managedCodexCatalogSetting, managed)
+}
+
+func loadCodexAPIKey(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 64*1024 {
+		return nil, errors.New("Codex auth.json must be a bounded regular non-symlink file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer zero(data)
+	var auth struct {
+		AuthMode string `json:"auth_mode"`
+		APIKey   string `json:"OPENAI_API_KEY"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&auth); err != nil {
+		return nil, errors.New("Codex auth.json is invalid")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF || auth.AuthMode != "apikey" || !managedCodexAPIKeyPattern.MatchString(auth.APIKey) {
+		return nil, errors.New("Codex auth.json did not contain a managed API-key login")
+	}
+	return []byte(auth.APIKey), nil
+}
+
+func (h *Host) verifyManagedCodexModelList(ctx context.Context, env []string) error {
+	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	executable := filepath.Join(agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), "codex.exe")
+	cmd := exec.CommandContext(verifyCtx, executable, "app-server", "--listen", "stdio://")
+	cmd.Dir = h.dirs.Workspace
+	cmd.Env = env
+	cmd.Stderr = io.Discard
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := h.sandbox.Apply(cmd); err != nil {
+		return fmt.Errorf("sandbox Codex model catalog verification: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start Codex model catalog verification: %w", err)
+	}
+	defer func() {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+	if err := h.sandbox.VerifyProcess(uint32(cmd.Process.Pid), h.cfg.WindowsSID); err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 4096), maxManagedCodexCatalog)
+	type responseEnvelope struct {
+		ID     int `json:"id"`
+		Result struct {
+			Data []struct {
+				Model string `json:"model"`
+			} `json:"data"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	readResponse := func(requestID int) (responseEnvelope, error) {
+		for lines := 0; lines < 100 && scanner.Scan(); lines++ {
+			var envelope responseEnvelope
+			if json.Unmarshal(scanner.Bytes(), &envelope) == nil && envelope.ID == requestID {
+				return envelope, nil
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return responseEnvelope{}, fmt.Errorf("read Codex model catalog verification: %w", err)
+		}
+		if errors.Is(verifyCtx.Err(), context.DeadlineExceeded) {
+			return responseEnvelope{}, errors.New("Codex model catalog verification exceeded 30 seconds")
+		}
+		return responseEnvelope{}, fmt.Errorf("Codex model catalog verification returned no response for request %d", requestID)
+	}
+	send := func(request string) error {
+		if _, err := io.WriteString(stdin, request+"\n"); err != nil {
+			return errors.New("write Codex model catalog verification request")
+		}
+		return nil
+	}
+
+	if err := send(`{"id":1,"method":"initialize","params":{"clientInfo":{"name":"aionui-portal","title":"AionUi Portal","version":"1.0.0"}}}`); err != nil {
+		return err
+	}
+	initialized, err := readResponse(1)
+	if err != nil {
+		return err
+	}
+	if len(initialized.Error) != 0 && string(initialized.Error) != "null" {
+		return errors.New("Codex app-server rejected model catalog verification initialization")
+	}
+	if err := send(`{"method":"initialized","params":{}}`); err != nil {
+		return err
+	}
+	if err := send(`{"id":2,"method":"model/list","params":{"limit":100}}`); err != nil {
+		return err
+	}
+	envelope, err := readResponse(2)
+	if err != nil {
+		return err
+	}
+	if len(envelope.Error) != 0 && string(envelope.Error) != "null" {
+		return errors.New("Codex model/list rejected the managed catalog")
+	}
+	models := make([]string, 0, len(envelope.Result.Data))
+	for _, item := range envelope.Result.Data {
+		models = append(models, item.Model)
+	}
+	if !sameStringSet(models, modelbootstrap.ManagedCodexModels()) {
+		return fmt.Errorf("Codex model/list returned %v instead of the exact managed catalog", models)
+	}
+	return nil
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftCopy := append([]string(nil), left...)
+	rightCopy := append([]string(nil), right...)
+	sort.Strings(leftCopy)
+	sort.Strings(rightCopy)
+	for index := range leftCopy {
+		if leftCopy[index] != rightCopy[index] {
+			return false
+		}
+	}
+	return true
+}

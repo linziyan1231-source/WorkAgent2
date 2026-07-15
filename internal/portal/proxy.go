@@ -98,7 +98,7 @@ func constrainFilesystemBrowse(request *http.Request, root string) error {
 	}
 	requested := strings.TrimSpace(values[0])
 	if requested == "" {
-		query.Set("path", filepath.Clean(root))
+		query.Set("path", filepath.Join(filepath.Clean(root), "workspace"))
 		request.URL.RawQuery = query.Encode()
 		return nil
 	}

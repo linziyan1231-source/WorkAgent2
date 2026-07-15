@@ -224,14 +224,15 @@ func TestWrongPasswordNeverStartsInstance(t *testing.T) {
 	}
 }
 
-func TestFilesystemBrowseStartsAtPrivateRootAndRejectsEscape(t *testing.T) {
+func TestFilesystemBrowseStartsAtWorkspaceAndRejectsEscape(t *testing.T) {
 	root := `C:\Users\user-1b4f0e98\AionUiPortal`
 	initial := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path=&showFiles=true", nil)
 	if err := constrainFilesystemBrowse(initial, root); err != nil {
 		t.Fatal(err)
 	}
-	if got := initial.URL.Query().Get("path"); !strings.EqualFold(got, root) {
-		t.Fatalf("initial browse path=%q, want %q", got, root)
+	want := filepath.Join(root, "workspace")
+	if got := initial.URL.Query().Get("path"); !strings.EqualFold(got, want) {
+		t.Fatalf("initial browse path=%q, want %q", got, want)
 	}
 
 	allowed := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`\\?\C:\Users\user-1b4f0e98\AionUiPortal\workspace`), nil)

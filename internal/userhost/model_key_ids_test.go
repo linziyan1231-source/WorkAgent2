@@ -101,7 +101,7 @@ func modelKeyIDsTestState(sid string) modelbootstrap.State {
 	ids := modelbootstrap.KeyIDsForSID(sid)
 	return modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: "http://203.0.113.52:8317/v1",
 		CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID, CodexDefaultModel: "example-reasoning",
-		CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding"}}
+		CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: modelbootstrap.ManagedKimiModels()}
 }
 
 func writeModelKeyIDsMarker(t *testing.T, root string, state modelbootstrap.State) {

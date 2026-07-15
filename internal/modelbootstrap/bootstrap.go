@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -29,7 +30,7 @@ const (
 
 var (
 	managedCodexModels = []string{"example-reasoning", "example-balanced", "example-fast"}
-	managedKimiModels  = []string{"kimi-for-coding"}
+	managedKimiModels  = []string{"kimi-for-coding", "kimi-for-coding-highspeed"}
 )
 
 func ManagedCodexModels() []string { return append([]string(nil), managedCodexModels...) }
@@ -90,6 +91,9 @@ func (s State) Validate() error {
 	}
 	if err := validateModels("Kimi", s.KimiModels); err != nil {
 		return err
+	}
+	if !slices.Equal(s.KimiModels, managedKimiModels) {
+		return errors.New("Kimi models must match the managed model policy")
 	}
 	if !modelPattern.MatchString(s.CodexDefaultModel) || !contains(s.CodexModels, s.CodexDefaultModel) {
 		return errors.New("Codex default model must be one of the configured Codex models")

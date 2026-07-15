@@ -162,6 +162,22 @@ func (h *Host) initialize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Keep catalog setup after the pending API-key login and before the bundle is
+	// completed so a first-start user follows the same exact picker policy.
+	codexCatalogApplied, err := h.applyManagedCodexModelCatalog(ctx, env, agentVersions.Codex)
+	if err != nil {
+		return err
+	}
+	if codexCatalogApplied {
+		h.log.Printf("Initialized Codex CLI with the exact three-model GPT-5.6 catalog")
+	}
+	kimiThinkingApplied, err := h.applyKimiThinkingDefault(ctx, env)
+	if err != nil {
+		return err
+	}
+	if kimiThinkingApplied {
+		h.log.Printf("Initialized Kimi for Coding with thinking enabled")
+	}
 	migrationPort, err := selectLoopbackPort(h.cfg.MigrationPortStart, h.cfg.MigrationPortTries)
 	if err != nil {
 		return fmt.Errorf("select migration port: %w", err)
