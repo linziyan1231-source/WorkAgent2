@@ -1,17 +1,37 @@
 package userhost
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"aionuiportal/internal/modelbootstrap"
 )
+
+func TestReadCodexResponseHonorsContextWhileOutputIsBlocked(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	results := scanCodexResponses(ctx, bufio.NewScanner(reader))
+	_, err := readCodexResponse(ctx, results, 1)
+	if err == nil || !strings.Contains(err.Error(), "exceeded 30 seconds") {
+		t.Fatalf("blocked response error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked response ignored context for %v", elapsed)
+	}
+}
 
 func TestNewUserPendingBootstrapRequiresExactCodexCatalogBeforeCompletion(t *testing.T) {
 	root := t.TempDir()

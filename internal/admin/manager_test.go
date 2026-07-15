@@ -217,6 +217,7 @@ func TestProvisionUserFilesUsesResolvedWindowsProfileChild(t *testing.T) {
 		CurrentReleaseFile:     filepath.Join(root, "shared", "current.json"),
 		PortalServiceSID:       identity.SID,
 		InstanceStartupSeconds: 90,
+		OutboundProxyURL:       "http://127.0.0.1:7897",
 		SupportedAionCore:      []string{"v0.1.42"},
 	}, ProfileDirectory: func(requestedSID string) (string, error) {
 		if requestedSID != identity.SID {
@@ -231,6 +232,9 @@ func TestProvisionUserFilesUsesResolvedWindowsProfileChild(t *testing.T) {
 	want := filepath.Join(profile, config.UserDataDirectoryName)
 	if !filepath.IsAbs(got.DataRoot) || !equalPath(got.WindowsProfile, profile) || !equalPath(got.DataRoot, want) {
 		t.Fatalf("wrong profile layout: profile=%s data=%s want=%s", got.WindowsProfile, got.DataRoot, want)
+	}
+	if got.OutboundProxyURL != manager.Config.OutboundProxyURL {
+		t.Fatalf("UserHost proxy = %q, want %q", got.OutboundProxyURL, manager.Config.OutboundProxyURL)
 	}
 	if err := winutil.VerifyTreeACL(want, winutil.PrivateTreePolicy(identity.SID)); err != nil {
 		t.Fatalf("private product subtree ACL: %v", err)

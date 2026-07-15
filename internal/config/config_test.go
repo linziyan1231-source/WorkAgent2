@@ -97,6 +97,33 @@ func TestProductionConfigAcceptsOnlyExactAdditionalBrowserOrigins(t *testing.T) 
 	}
 }
 
+func TestOutboundProxyURLIsOptionalAndStrictlyValidated(t *testing.T) {
+	portal := validPortal(t)
+	portal.OutboundProxyURL = "http://127.0.0.1:7897"
+	if err := portal.Validate(); err != nil {
+		t.Fatalf("valid Portal proxy rejected: %v", err)
+	}
+	for _, invalid := range []string{"socks5://127.0.0.1:7897", "http://user@127.0.0.1:7897", "http://127.0.0.1:7897/path", "//127.0.0.1:7897"} {
+		candidate := portal
+		candidate.OutboundProxyURL = invalid
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("invalid Portal proxy accepted: %q", invalid)
+		}
+	}
+
+	sid := "S-1-5-21-1244944357-1781978532-1838913594-2042"
+	profile := filepath.Join(`C:\Users`, "worker")
+	userHost := UserHost{ConfigVersion: 1, WindowsSID: sid, WindowsUsername: `SERVER\worker`, WindowsProfile: profile,
+		DataRoot: filepath.Join(profile, UserDataDirectoryName), ReleasesRoot: `C:\Program Files\AionUiWebShared\releases`,
+		CurrentReleaseFile: `C:\Program Files\AionUiWebShared\current.json`, PortalServiceSID: "S-1-5-80-123", PipeName: PipeNameForSID(sid),
+		WebPort: 35001, WebPortTries: 16, MigrationPortStart: 40000, MigrationPortTries: 16, StartupSeconds: 90, ShutdownSeconds: 20,
+		OutboundProxyURL: "https://proxy.example.test:8443", SupportedAionCore: []string{"v0.1.42"},
+		Limits: ResourceLimits{MemoryBytes: 1024 * 1024 * 1024, CPUPercent: 50, ActiveProcesses: 20}}
+	if err := userHost.Validate(); err != nil {
+		t.Fatalf("valid UserHost proxy rejected: %v", err)
+	}
+}
+
 func TestPortalUsageSSHConfigRejectsBroadOrAmbiguousPaths(t *testing.T) {
 	for name, mutate := range map[string]func(*Portal){
 		"target":                func(c *Portal) { c.UsageSSHTarget = "root@host;command" },

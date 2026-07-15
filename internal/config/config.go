@@ -57,6 +57,7 @@ type Portal struct {
 	UsageSSHKnownHostsFile string   `json:"usage_ssh_known_hosts_file"`
 	UsageQueryTimeoutSecs  int      `json:"usage_query_timeout_seconds"`
 	UsageCacheSeconds      int      `json:"usage_cache_seconds"`
+	OutboundProxyURL       string   `json:"outbound_proxy_url,omitempty"`
 	SupportedAionCore      []string `json:"supported_aioncore_versions"`
 }
 
@@ -208,6 +209,9 @@ func (c Portal) Validate() error {
 	if c.UsageCacheSeconds < 1 || c.UsageCacheSeconds > 60 {
 		return errors.New("usage_cache_seconds must be between 1 and 60")
 	}
+	if err := validateOutboundProxyURL(c.OutboundProxyURL); err != nil {
+		return err
+	}
 	if len(c.SupportedAionCore) == 0 {
 		return errors.New("supported_aioncore_versions must not be empty")
 	}
@@ -246,6 +250,7 @@ type UserHost struct {
 	MigrationPortTries int            `json:"migration_port_tries"`
 	StartupSeconds     int            `json:"startup_seconds"`
 	ShutdownSeconds    int            `json:"shutdown_seconds"`
+	OutboundProxyURL   string         `json:"outbound_proxy_url,omitempty"`
 	SupportedAionCore  []string       `json:"supported_aioncore_versions"`
 	Limits             ResourceLimits `json:"limits"`
 }
@@ -305,11 +310,26 @@ func (c UserHost) Validate() error {
 	if c.StartupSeconds < 10 || c.StartupSeconds > 300 || c.ShutdownSeconds < 5 || c.ShutdownSeconds > 120 {
 		return errors.New("invalid startup or shutdown timeout")
 	}
+	if err := validateOutboundProxyURL(c.OutboundProxyURL); err != nil {
+		return err
+	}
 	if len(c.SupportedAionCore) == 0 {
 		return errors.New("supported_aioncore_versions must not be empty")
 	}
 	if c.Limits.MemoryBytes < 256*1024*1024 || c.Limits.CPUPercent < 1 || c.Limits.CPUPercent > 100 || c.Limits.ActiveProcesses < 3 {
 		return errors.New("invalid resource limits")
+	}
+	return nil
+}
+
+func validateOutboundProxyURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	proxy, err := url.Parse(value)
+	if err != nil || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.Hostname() == "" || proxy.User != nil ||
+		proxy.Opaque != "" || (proxy.Path != "" && proxy.Path != "/") || proxy.RawQuery != "" || proxy.Fragment != "" {
+		return errors.New("outbound_proxy_url must be an absolute HTTP or HTTPS proxy URL without credentials, path, query, or fragment")
 	}
 	return nil
 }

@@ -676,6 +676,11 @@ func (h *Host) environment() []string {
 		"XDG_CONFIG_HOME": h.dirs.Config, "XDG_CACHE_HOME": h.dirs.Cache, "XDG_DATA_HOME": h.dirs.Data,
 		"npm_config_cache": filepath.Join(h.dirs.Cache, "npm"), "BUN_INSTALL_CACHE_DIR": filepath.Join(h.dirs.Cache, "bun"),
 	}
+	if h.cfg.OutboundProxyURL != "" {
+		overrides["HTTP_PROXY"] = h.cfg.OutboundProxyURL
+		overrides["HTTPS_PROXY"] = h.cfg.OutboundProxyURL
+		overrides["NO_PROXY"] = "127.0.0.1,localhost,::1"
+	}
 	result := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		key := entry
@@ -683,7 +688,7 @@ func (h *Host) environment() []string {
 			key = entry[:index]
 		}
 		upperKey := strings.ToUpper(key)
-		if isSensitiveEnvironmentName(upperKey) {
+		if isSensitiveEnvironmentName(upperKey) || isOutboundProxyEnvironmentName(upperKey) {
 			continue
 		}
 		replaced := false
@@ -701,6 +706,15 @@ func (h *Host) environment() []string {
 		result = append(result, key+"="+value)
 	}
 	return agentcli.PrependPath(result, agentcli.BinFromAionReleases(h.cfg.ReleasesRoot))
+}
+
+func isOutboundProxyEnvironmentName(name string) bool {
+	switch name {
+	case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
+		return true
+	default:
+		return false
+	}
 }
 
 func isSensitiveEnvironmentName(name string) bool {

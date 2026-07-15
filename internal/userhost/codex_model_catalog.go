@@ -52,6 +52,21 @@ type managedCodexModelMetadata struct {
 	} `json:"supported_reasoning_levels"`
 }
 
+type codexResponseEnvelope struct {
+	ID     int `json:"id"`
+	Result struct {
+		Data []struct {
+			Model string `json:"model"`
+		} `json:"data"`
+	} `json:"result"`
+	Error json.RawMessage `json:"error"`
+}
+
+type codexScanResult struct {
+	line []byte
+	err  error
+}
+
 func (h *Host) applyManagedCodexModelCatalog(ctx context.Context, env []string, codexVersion string) (bool, error) {
 	state, managed, err := managedCodexCatalogBootstrapState(h.cfg.DataRoot)
 	if err != nil {
@@ -271,29 +286,9 @@ func (h *Host) verifyManagedCodexModelList(ctx context.Context, env []string) er
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 4096), maxManagedCodexCatalog)
-	type responseEnvelope struct {
-		ID     int `json:"id"`
-		Result struct {
-			Data []struct {
-				Model string `json:"model"`
-			} `json:"data"`
-		} `json:"result"`
-		Error json.RawMessage `json:"error"`
-	}
-	readResponse := func(requestID int) (responseEnvelope, error) {
-		for lines := 0; lines < 100 && scanner.Scan(); lines++ {
-			var envelope responseEnvelope
-			if json.Unmarshal(scanner.Bytes(), &envelope) == nil && envelope.ID == requestID {
-				return envelope, nil
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return responseEnvelope{}, fmt.Errorf("read Codex model catalog verification: %w", err)
-		}
-		if errors.Is(verifyCtx.Err(), context.DeadlineExceeded) {
-			return responseEnvelope{}, errors.New("Codex model catalog verification exceeded 30 seconds")
-		}
-		return responseEnvelope{}, fmt.Errorf("Codex model catalog verification returned no response for request %d", requestID)
+	results := scanCodexResponses(verifyCtx, scanner)
+	readResponse := func(requestID int) (codexResponseEnvelope, error) {
+		return readCodexResponse(verifyCtx, results, requestID)
 	}
 	send := func(request string) error {
 		if _, err := io.WriteString(stdin, request+"\n"); err != nil {
@@ -333,6 +328,50 @@ func (h *Host) verifyManagedCodexModelList(ctx context.Context, env []string) er
 		return fmt.Errorf("Codex model/list returned %v instead of the exact managed catalog", models)
 	}
 	return nil
+}
+
+func scanCodexResponses(ctx context.Context, scanner *bufio.Scanner) <-chan codexScanResult {
+	results := make(chan codexScanResult)
+	go func() {
+		defer close(results)
+		for scanner.Scan() {
+			line := append([]byte(nil), scanner.Bytes()...)
+			select {
+			case results <- codexScanResult{line: line}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		select {
+		case results <- codexScanResult{err: scanner.Err()}:
+		case <-ctx.Done():
+		}
+	}()
+	return results
+}
+
+func readCodexResponse(ctx context.Context, results <-chan codexScanResult, requestID int) (codexResponseEnvelope, error) {
+	for lines := 0; lines < 100; lines++ {
+		select {
+		case <-ctx.Done():
+			return codexResponseEnvelope{}, errors.New("Codex model catalog verification exceeded 30 seconds")
+		case result, open := <-results:
+			if !open {
+				return codexResponseEnvelope{}, fmt.Errorf("Codex model catalog verification returned no response for request %d", requestID)
+			}
+			if result.err != nil {
+				return codexResponseEnvelope{}, fmt.Errorf("read Codex model catalog verification: %w", result.err)
+			}
+			if result.line == nil {
+				return codexResponseEnvelope{}, fmt.Errorf("Codex model catalog verification returned no response for request %d", requestID)
+			}
+			var envelope codexResponseEnvelope
+			if json.Unmarshal(result.line, &envelope) == nil && envelope.ID == requestID {
+				return envelope, nil
+			}
+		}
+	}
+	return codexResponseEnvelope{}, fmt.Errorf("Codex model catalog verification returned no response for request %d", requestID)
 }
 
 func sameStringSet(left, right []string) bool {

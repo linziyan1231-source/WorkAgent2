@@ -104,11 +104,18 @@ func TestSensitiveEnvironmentNamesAreRemoved(t *testing.T) {
 	if isSensitiveEnvironmentName("PATH") {
 		t.Fatal("PATH was classified as sensitive")
 	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"} {
+		if !isOutboundProxyEnvironmentName(name) {
+			t.Fatalf("%s was not classified as a controlled proxy variable", name)
+		}
+	}
 }
 
 func TestEnvironmentPrependsSharedAgentCLIsAndKeepsPrivateCodexHome(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://untrusted.example:8080")
+	t.Setenv("NO_PROXY", "untrusted.example")
 	root := t.TempDir()
-	host := Host{cfg: config.UserHost{ReleasesRoot: filepath.Join(root, "AionUiWebShared", "releases")}, release: release.Verified{Path: filepath.Join(root, "release")}, dirs: privateDirs{
+	host := Host{cfg: config.UserHost{ReleasesRoot: filepath.Join(root, "AionUiWebShared", "releases"), OutboundProxyURL: "http://127.0.0.1:7897"}, release: release.Verified{Path: filepath.Join(root, "release")}, dirs: privateDirs{
 		Profile: filepath.Join(root, "profile"), AppData: filepath.Join(root, "profile", "AppData", "Roaming"),
 		LocalAppData: filepath.Join(root, "profile", "AppData", "Local"), Temp: filepath.Join(root, "temp"), Data: filepath.Join(root, "data"),
 		Logs: filepath.Join(root, "logs"), Cache: filepath.Join(root, "cache"), Workspace: filepath.Join(root, "workspace"), Config: filepath.Join(root, "config"),
@@ -129,5 +136,11 @@ func TestEnvironmentPrependsSharedAgentCLIsAndKeepsPrivateCodexHome(t *testing.T
 	}
 	if values["AIONUI_BUILTIN_ASSISTANTS_PATH"] != filepath.Join(host.release.Path, "workagent-builtin-assistants") {
 		t.Fatalf("builtin assistant override is not release-bound: %q", values["AIONUI_BUILTIN_ASSISTANTS_PATH"])
+	}
+	if values["HTTP_PROXY"] != host.cfg.OutboundProxyURL || values["HTTPS_PROXY"] != host.cfg.OutboundProxyURL {
+		t.Fatalf("fixed outbound proxy was not applied: HTTP=%q HTTPS=%q", values["HTTP_PROXY"], values["HTTPS_PROXY"])
+	}
+	if values["NO_PROXY"] != "127.0.0.1,localhost,::1" {
+		t.Fatalf("loopback proxy bypass was not fixed: %q", values["NO_PROXY"])
 	}
 }

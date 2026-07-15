@@ -906,8 +906,9 @@ func (m *Manager) provisionUserFiles(sid, canonical string) (config.UserHost, er
 	userConfig := config.UserHost{ConfigVersion: 1, WindowsSID: sid, WindowsUsername: canonical, WindowsProfile: profile, DataRoot: dataRoot,
 		ReleasesRoot: m.Config.ReleasesRoot, CurrentReleaseFile: m.Config.CurrentReleaseFile, PortalServiceSID: m.Config.PortalServiceSID,
 		PipeName: config.PipeNameForSID(sid), WebPort: webPort, WebPortTries: 32, MigrationPortStart: migrationPort, MigrationPortTries: 16,
-		StartupSeconds: m.Config.InstanceStartupSeconds, ShutdownSeconds: 30, SupportedAionCore: append([]string(nil), m.Config.SupportedAionCore...),
-		Limits: config.ResourceLimits{MemoryBytes: 4 * 1024 * 1024 * 1024, CPUPercent: 50, ActiveProcesses: 64}}
+		StartupSeconds: m.Config.InstanceStartupSeconds, ShutdownSeconds: 30, OutboundProxyURL: m.Config.OutboundProxyURL,
+		SupportedAionCore: append([]string(nil), m.Config.SupportedAionCore...),
+		Limits:            config.ResourceLimits{MemoryBytes: 4 * 1024 * 1024 * 1024, CPUPercent: 50, ActiveProcesses: 64}}
 	if err := userConfig.Validate(); err != nil {
 		return config.UserHost{}, err
 	}
