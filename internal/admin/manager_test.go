@@ -23,7 +23,11 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	packed := filepath.Join(root, "packed")
 	for name, body := range map[string]string{
 		"aionui-web.exe": "web", "package.json": `{"version":"test"}`, "static/index.html": "renderer",
-		"bundled-aioncore/win32-x64/aioncore.exe": "core",
+		"bundled-aioncore/win32-x64/aioncore.exe":                  "core",
+		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent AI 管家",
 	} {
 		path := filepath.Join(packed, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
