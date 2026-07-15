@@ -40,9 +40,20 @@ func TestProductionConfigAcceptsExplicitHTTPAndRejectsUnsafeOrigins(t *testing.T
 	if err := c.Validate(); err != nil {
 		t.Fatalf("explicit HTTP config rejected: %v", err)
 	}
+	c.PublicBaseURL = "http://portal.example.test"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("standard HTTP origin rejected: %v", err)
+	}
 	c.TLSCertificateFile = filepath.Join(`C:\ProgramData\AionUiPortal`, "tls", "unused.pem")
 	if err := c.Validate(); err == nil {
 		t.Fatal("HTTP config accepted an unused TLS path")
+	}
+	c = validPortal(t)
+	c.PublicBaseURL = "http://portal.example.test:8080"
+	c.TLSCertificateFile = ""
+	c.TLSPrivateKeyFile = ""
+	if err := c.Validate(); err == nil {
+		t.Fatal("alternate HTTP public port accepted")
 	}
 	c = validPortal(t)
 	c.PublicBaseURL = "https://portal.example.test:443"

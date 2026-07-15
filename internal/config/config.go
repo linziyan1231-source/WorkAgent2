@@ -120,8 +120,8 @@ func (c Portal) Validate() error {
 	if base.Path != "" && base.Path != "/" {
 		return errors.New("public_base_url must not contain a path")
 	}
-	if c.Mode == "production" && base.Port() != "25808" {
-		return errors.New("production public_base_url must explicitly use port 25808")
+	if c.Mode == "production" && base.Port() != "25808" && !(base.Scheme == "http" && (base.Port() == "" || base.Port() == "80")) {
+		return errors.New("production public_base_url must use port 25808 or standard HTTP port 80")
 	}
 	if c.UsesTLS() {
 		if !filepath.IsAbs(c.TLSCertificateFile) || !filepath.IsAbs(c.TLSPrivateKeyFile) {
