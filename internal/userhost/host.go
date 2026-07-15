@@ -668,7 +668,9 @@ func (h *Host) environment() []string {
 	overrides := map[string]string{
 		"HOME": h.dirs.Profile, "USERPROFILE": h.dirs.Profile, "APPDATA": h.dirs.AppData, "LOCALAPPDATA": h.dirs.LocalAppData,
 		"TEMP": h.dirs.Temp, "TMP": h.dirs.Temp, "AIONUI_DATA_DIR": h.dirs.Data, "AIONUI_LOG_DIR": h.dirs.Logs,
-		"AIONUI_CACHE_DIR": h.dirs.Cache, "AIONUI_WORK_DIR": h.dirs.Workspace, "CODEX_HOME": filepath.Join(h.dirs.Config, "codex"),
+		"AIONUI_CACHE_DIR": h.dirs.Cache, "AIONUI_WORK_DIR": h.dirs.Workspace,
+		"AIONUI_BUILTIN_ASSISTANTS_PATH":   filepath.Join(h.release.Path, "workagent-builtin-assistants"),
+		"CODEX_HOME":                       filepath.Join(h.dirs.Config, "codex"),
 		agentcli.PerUserSandboxEnvironment: "1",
 		"CLAUDE_CONFIG_DIR":                filepath.Join(h.dirs.Config, "claude"), "GEMINI_CLI_HOME": filepath.Join(h.dirs.Config, "gemini"),
 		"XDG_CONFIG_HOME": h.dirs.Config, "XDG_CACHE_HOME": h.dirs.Cache, "XDG_DATA_HOME": h.dirs.Data,

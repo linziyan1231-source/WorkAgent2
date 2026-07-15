@@ -84,7 +84,16 @@ func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string)
 	if !contains(supportedAionCore, manifest.AionCoreVersion) {
 		return Verified{}, fmt.Errorf("unsupported aioncore version %q", manifest.AionCoreVersion)
 	}
-	for _, critical := range []string{"aionui-web.exe", "package.json", "static/index.html", "bundled-aioncore/win32-x64/aioncore.exe"} {
+	for _, critical := range []string{
+		"aionui-web.exe",
+		"package.json",
+		"static/index.html",
+		"bundled-aioncore/win32-x64/aioncore.exe",
+		"workagent-builtin-assistants/assistants.json",
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md",
+	} {
 		if _, ok := manifest.Files[critical]; !ok {
 			return Verified{}, fmt.Errorf("release manifest is missing critical file %s", critical)
 		}

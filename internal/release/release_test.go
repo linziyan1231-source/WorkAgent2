@@ -17,6 +17,10 @@ func makeRelease(t *testing.T) (string, string) {
 	for name, body := range map[string]string{
 		"aionui-web.exe": "web-binary", "package.json": `{"version":"2.1.29"}`,
 		"static/index.html": "<html></html>", "bundled-aioncore/win32-x64/aioncore.exe": "core-binary",
+		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent AI 管家",
 	} {
 		path := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -8,6 +8,7 @@ import (
 
 	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/config"
+	"aionuiportal/internal/release"
 )
 
 func TestInspectAgentActivityAcceptsCapturedEmptyResponse(t *testing.T) {
@@ -107,7 +108,7 @@ func TestSensitiveEnvironmentNamesAreRemoved(t *testing.T) {
 
 func TestEnvironmentPrependsSharedAgentCLIsAndKeepsPrivateCodexHome(t *testing.T) {
 	root := t.TempDir()
-	host := Host{cfg: config.UserHost{ReleasesRoot: filepath.Join(root, "AionUiWebShared", "releases")}, dirs: privateDirs{
+	host := Host{cfg: config.UserHost{ReleasesRoot: filepath.Join(root, "AionUiWebShared", "releases")}, release: release.Verified{Path: filepath.Join(root, "release")}, dirs: privateDirs{
 		Profile: filepath.Join(root, "profile"), AppData: filepath.Join(root, "profile", "AppData", "Roaming"),
 		LocalAppData: filepath.Join(root, "profile", "AppData", "Local"), Temp: filepath.Join(root, "temp"), Data: filepath.Join(root, "data"),
 		Logs: filepath.Join(root, "logs"), Cache: filepath.Join(root, "cache"), Workspace: filepath.Join(root, "workspace"), Config: filepath.Join(root, "config"),
@@ -125,5 +126,8 @@ func TestEnvironmentPrependsSharedAgentCLIsAndKeepsPrivateCodexHome(t *testing.T
 	}
 	if values["CODEX_HOME"] != filepath.Join(host.dirs.Config, "codex") {
 		t.Fatalf("CODEX_HOME is not private: %q", values["CODEX_HOME"])
+	}
+	if values["AIONUI_BUILTIN_ASSISTANTS_PATH"] != filepath.Join(host.release.Path, "workagent-builtin-assistants") {
+		t.Fatalf("builtin assistant override is not release-bound: %q", values["AIONUI_BUILTIN_ASSISTANTS_PATH"])
 	}
 }
