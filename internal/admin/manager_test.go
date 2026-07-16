@@ -240,6 +240,10 @@ func TestProvisionUserFilesUsesResolvedWindowsProfileChild(t *testing.T) {
 	if got.OutboundProxyURL != manager.Config.OutboundProxyURL {
 		t.Fatalf("UserHost proxy = %q, want %q", got.OutboundProxyURL, manager.Config.OutboundProxyURL)
 	}
+	wantLimits := config.ResourceLimits{MemoryBytes: 6 * 1024 * 1024 * 1024, CPUPercent: 50, ActiveProcesses: 64}
+	if got.Limits != wantLimits {
+		t.Fatalf("new-user limits = %+v, want %+v", got.Limits, wantLimits)
+	}
 	if err := winutil.VerifyTreeACL(want, winutil.PrivateTreePolicy(identity.SID)); err != nil {
 		t.Fatalf("private product subtree ACL: %v", err)
 	}
