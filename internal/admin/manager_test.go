@@ -48,7 +48,7 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	agentRoot := agentcli.RootFromAionReleases(releases)
 	agentReleaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
 	agentRelease := filepath.Join(agentRoot, "releases", agentReleaseID)
-	for name, body := range map[string]string{agentcli.CodexRelativePath: "codex", agentcli.KimiRelativePath: "python", agentcli.KimiModuleRelativePath: "kimi"} {
+	for name, body := range map[string]string{agentcli.CodexRelativePath: "codex", agentcli.KimiRelativePath: "python", agentcli.KimiModuleRelativePath: "kimi", agentcli.PythonRelativePath: "python-runtime"} {
 		path := filepath.Join(agentRelease, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)

@@ -25,7 +25,7 @@ func TestBuildActivateAndVerifyRealShapedAgentCLIRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.Manifest.CodexVersion != "0.142.5" || verified.Manifest.KimiVersion != "1.38.0" || len(verified.Manifest.Files) != 4 {
+	if verified.Manifest.CodexVersion != "0.142.5" || verified.Manifest.KimiVersion != "1.38.0" || len(verified.Manifest.Files) != 5 {
 		t.Fatalf("unexpected verified release: %+v", verified.Manifest)
 	}
 
@@ -106,6 +106,7 @@ func makeRelease(t *testing.T, root, releaseID string) string {
 		"codex/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe": "sandbox-helper",
 		KimiRelativePath: "real-shaped-kimi-entrypoint",
 		"kimi-tool/Lib/site-packages/kimi_cli/__main__.py": "def main(): pass",
+		PythonRelativePath: "real-shaped-python-entrypoint",
 	}
 	for name, body := range files {
 		path := filepath.Join(releasePath, filepath.FromSlash(name))

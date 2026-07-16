@@ -22,8 +22,9 @@ type LauncherSpec struct {
 }
 
 type Versions struct {
-	Codex string
-	Kimi  string
+	Codex  string
+	Kimi   string
+	Python string
 }
 
 func Spec(executablePath string, arguments, environment []string) (LauncherSpec, error) {
@@ -49,6 +50,8 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiRelativePath))
 		spec.Args = append([]string{"-m", "kimi_cli"}, spec.Args...)
 		spec.Env = setEnvironment(spec.Env, "PYTHONDONTWRITEBYTECODE", "1")
+	case "python":
+		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(PythonRelativePath))
 	default:
 		return LauncherSpec{}, fmt.Errorf("unsupported shared agent CLI launcher name %q", name)
 	}
@@ -83,8 +86,9 @@ func Probe(ctx context.Context, binDirectory string, environment []string, prepa
 	}{
 		{name: "Codex", path: filepath.Join(binDirectory, "codex.exe"), expected: "codex-cli " + verified.Manifest.CodexVersion},
 		{name: "Kimi", path: filepath.Join(binDirectory, "kimi.exe"), expected: "kimi, version " + verified.Manifest.KimiVersion},
+		{name: "Python", path: filepath.Join(binDirectory, "python.exe"), expected: "Python " + verified.Manifest.PythonVersion},
 	}
-	versions := Versions{Codex: verified.Manifest.CodexVersion, Kimi: verified.Manifest.KimiVersion}
+	versions := Versions{Codex: verified.Manifest.CodexVersion, Kimi: verified.Manifest.KimiVersion, Python: verified.Manifest.PythonVersion}
 	for _, check := range checks {
 		resolved, err := executableFromPath(environment, filepath.Base(check.path))
 		if err != nil {

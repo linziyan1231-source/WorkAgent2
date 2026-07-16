@@ -71,6 +71,16 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if strings.Join(overriddenKimi.Args, "|") != "-m|kimi_cli|--agent|default|--version" {
 		t.Fatalf("explicit Kimi agent override was not preserved: %+v", overriddenKimi.Args)
 	}
+	python, err := Spec(filepath.Join(root, "bin", "python.exe"), []string{"script.py", "argument"}, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if python.Target != filepath.Join(releasePath, filepath.FromSlash(PythonRelativePath)) || strings.Join(python.Args, "|") != "script.py|argument" {
+		t.Fatalf("unexpected Python launcher spec: %+v", python)
+	}
+	if environmentValue(python.Env, "PATH") != environmentValue(environment, "PATH") {
+		t.Fatalf("Python launcher changed PATH: %s", environmentValue(python.Env, "PATH"))
+	}
 	if _, err := Spec(filepath.Join(root, "bin", "unknown.exe"), nil, environment); err == nil {
 		t.Fatal("unknown launcher name was accepted")
 	}

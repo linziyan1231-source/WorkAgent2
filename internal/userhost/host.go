@@ -157,7 +157,7 @@ func (h *Host) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("verify shared agent CLIs: %w", err)
 	}
-	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s", agentVersions.Codex, agentVersions.Kimi)
+	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s python=%s", agentVersions.Codex, agentVersions.Kimi, agentVersions.Python)
 	pendingModels, err := h.preparePendingModelBootstrap(ctx, env)
 	if err != nil {
 		return err

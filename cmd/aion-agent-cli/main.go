@@ -24,7 +24,7 @@ func run(arguments []string) int {
 		return 1
 	}
 	name := strings.ToLower(strings.TrimSuffix(filepath.Base(executable), filepath.Ext(executable)))
-	if name == "codex" || name == "kimi" {
+	if name == "codex" || name == "kimi" || name == "python" {
 		if err := agentcli.RunLauncher(executable, arguments); err != nil {
 			var exitError *exec.ExitError
 			if errors.As(err, &exitError) && exitError.ExitCode() >= 0 {
