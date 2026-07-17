@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	kimiThinkingMarkerName    = "kimi-model-defaults-v2.applied"
-	kimiThinkingMarkerContent = "default_thinking=true\nmodels=kimi-for-coding,kimi-for-coding-highspeed\n"
+	kimiThinkingMarkerName    = "kimi-model-defaults-v3.applied"
+	kimiThinkingMarkerContent = "default_thinking=true\nmodels=kimi-for-coding,kimi-for-coding-highspeed\nruntime-aware-config=true\n"
 )
 
 const kimiThinkingDefaultScript = `
@@ -100,7 +100,7 @@ func (h *Host) applyKimiThinkingDefault(ctx context.Context, env []string) (bool
 	applyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	python := filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath))
-	configPath := filepath.Join(h.dirs.Profile, filepath.FromSlash(kimiConfigRelativePath))
+	configPath := kimiConfigPath(h.dirs.Profile, verified.Manifest)
 	cmd := exec.CommandContext(applyCtx, python, "-B", "-c", kimiThinkingDefaultScript, configPath)
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = append(append([]string(nil), env...), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
@@ -126,6 +126,9 @@ func (h *Host) applyKimiThinkingDefault(ctx context.Context, env []string) (bool
 	}
 	if _, err := agentcli.VerifyCurrent(root); err != nil {
 		return false, fmt.Errorf("verify shared agent CLI release after Kimi thinking initialization: %w", err)
+	}
+	if err := h.validateKimiCodeConfig(ctx, env, verified, configPath); err != nil {
+		return false, err
 	}
 	if err := writePrivateFileAtomic(markerPath, []byte(kimiThinkingMarkerContent)); err != nil {
 		return false, fmt.Errorf("write Kimi thinking default marker: %w", err)

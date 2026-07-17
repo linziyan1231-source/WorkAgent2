@@ -24,6 +24,7 @@ const (
 	CodexRelativePath      = "codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
 	KimiRelativePath       = "kimi-tool/Scripts/python.exe"
 	KimiModuleRelativePath = "kimi-tool/Lib/site-packages/kimi_cli/__main__.py"
+	KimiCodeRelativePath   = "kimi-code/kimi.exe"
 	PythonRelativePath     = "python/python.exe"
 )
 
@@ -266,7 +267,7 @@ func loadCurrentFast(root string) (Verified, error) {
 	if err := pointerMatchesManifest(pointer, manifest, filepath.Join(releasePath, ManifestName)); err != nil {
 		return Verified{}, err
 	}
-	for _, name := range []string{CodexRelativePath, KimiRelativePath, KimiModuleRelativePath, PythonRelativePath} {
+	for _, name := range criticalFiles(manifest) {
 		entry := manifest.Files[name]
 		path := filepath.Join(releasePath, filepath.FromSlash(name))
 		info, err := os.Lstat(path)
@@ -334,7 +335,7 @@ func validateManifest(manifest Manifest) error {
 		!validVersion(manifest.KimiVersion) || !validVersion(manifest.PythonVersion) || len(manifest.Files) == 0 {
 		return errors.New("agent CLI release manifest metadata is invalid")
 	}
-	for _, critical := range []string{CodexRelativePath, KimiRelativePath, KimiModuleRelativePath, PythonRelativePath} {
+	for _, critical := range criticalFiles(manifest) {
 		if _, ok := manifest.Files[critical]; !ok {
 			return fmt.Errorf("agent CLI release manifest is missing critical file %s", critical)
 		}
@@ -348,6 +349,14 @@ func validateManifest(manifest Manifest) error {
 		}
 	}
 	return nil
+}
+
+func criticalFiles(manifest Manifest) []string {
+	files := []string{CodexRelativePath, KimiRelativePath, KimiModuleRelativePath, PythonRelativePath}
+	if _, ok := manifest.Files[KimiCodeRelativePath]; ok {
+		files = append(files, KimiCodeRelativePath)
+	}
+	return files
 }
 
 func pointerMatchesManifest(pointer Pointer, manifest Manifest, manifestPath string) error {

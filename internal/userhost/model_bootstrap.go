@@ -28,8 +28,9 @@ import (
 const maxCodexConfig = 1024 * 1024
 
 const (
-	kimiConfigRelativePath = ".kimi/config.toml"
-	kimiDefaultModelKey    = "kimi-code/kimi-for-coding"
+	legacyKimiConfigRelativePath = ".kimi/config.toml"
+	kimiCodeConfigRelativePath   = ".kimi-code/config.toml"
+	kimiDefaultModelKey          = "kimi-code/kimi-for-coding"
 )
 
 var managedCodexAssignment = regexp.MustCompile(`^\s*(?:["']?(openai_base_url|model_reasoning_effort|model|cli_auth_credentials_store)["']?)\s*=`)
@@ -78,7 +79,7 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 	if err != nil {
 		return fmt.Errorf("verify shared agent CLI release before Kimi API-key configuration: %w", err)
 	}
-	kimiDirectory := filepath.Join(h.dirs.Profile, ".kimi")
+	kimiDirectory := filepath.Dir(kimiConfigPath(h.dirs.Profile, verified.Manifest))
 	if err := ensureNormalKimiDirectory(kimiDirectory); err != nil {
 		return err
 	}
@@ -91,7 +92,7 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 	configureCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	python := filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath))
-	configPath := filepath.Join(h.dirs.Profile, filepath.FromSlash(kimiConfigRelativePath))
+	configPath := kimiConfigPath(h.dirs.Profile, verified.Manifest)
 	cmd := exec.CommandContext(configureCtx, python, "-B", "-c", kimiAPIKeyConfigureScript, configPath)
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = append(append([]string(nil), env...), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
@@ -119,7 +120,18 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 	if _, err := agentcli.VerifyCurrent(root); err != nil {
 		return fmt.Errorf("verify shared agent CLI release after Kimi API-key configuration: %w", err)
 	}
+	if err := h.validateKimiCodeConfig(ctx, env, verified, configPath); err != nil {
+		return err
+	}
 	return nil
+}
+
+func kimiConfigPath(profile string, manifest agentcli.Manifest) string {
+	relative := legacyKimiConfigRelativePath
+	if _, ok := manifest.Files[agentcli.KimiCodeRelativePath]; ok {
+		relative = kimiCodeConfigRelativePath
+	}
+	return filepath.Join(profile, filepath.FromSlash(relative))
 }
 
 func ensureNormalKimiDirectory(path string) error {

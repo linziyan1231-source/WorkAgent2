@@ -47,9 +47,14 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 		spec.Env = setEnvironment(spec.Env, "CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(verified.Path, "codex"))
 		spec.Env = prependEnvironmentPath(spec.Env, filepath.Join(verified.Path, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-path"))
 	case "kimi":
-		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiRelativePath))
-		spec.Args = append([]string{"-m", "kimi_cli"}, spec.Args...)
-		spec.Env = setEnvironment(spec.Env, "PYTHONDONTWRITEBYTECODE", "1")
+		if _, ok := verified.Manifest.Files[KimiCodeRelativePath]; ok {
+			spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiCodeRelativePath))
+			spec.Env = setEnvironment(spec.Env, "KIMI_CODE_NO_AUTO_UPDATE", "1")
+		} else {
+			spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiRelativePath))
+			spec.Args = append([]string{"-m", "kimi_cli"}, spec.Args...)
+			spec.Env = setEnvironment(spec.Env, "PYTHONDONTWRITEBYTECODE", "1")
+		}
 	case "python":
 		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(PythonRelativePath))
 	default:
@@ -85,7 +90,7 @@ func Probe(ctx context.Context, binDirectory string, environment []string, prepa
 		expected string
 	}{
 		{name: "Codex", path: filepath.Join(binDirectory, "codex.exe"), expected: "codex-cli " + verified.Manifest.CodexVersion},
-		{name: "Kimi", path: filepath.Join(binDirectory, "kimi.exe"), expected: "kimi, version " + verified.Manifest.KimiVersion},
+		{name: "Kimi", path: filepath.Join(binDirectory, "kimi.exe"), expected: expectedKimiVersion(verified.Manifest)},
 		{name: "Python", path: filepath.Join(binDirectory, "python.exe"), expected: "Python " + verified.Manifest.PythonVersion},
 	}
 	versions := Versions{Codex: verified.Manifest.CodexVersion, Kimi: verified.Manifest.KimiVersion, Python: verified.Manifest.PythonVersion}
@@ -116,6 +121,13 @@ func Probe(ctx context.Context, binDirectory string, environment []string, prepa
 		}
 	}
 	return versions, nil
+}
+
+func expectedKimiVersion(manifest Manifest) string {
+	if _, ok := manifest.Files[KimiCodeRelativePath]; ok {
+		return manifest.KimiVersion
+	}
+	return "kimi, version " + manifest.KimiVersion
 }
 
 func executableFromPath(environment []string, name string) (string, error) {

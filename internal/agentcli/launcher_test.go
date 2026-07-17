@@ -95,6 +95,41 @@ func TestPrependPathIsCaseInsensitiveAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestLauncherSpecUsesKimiCodeWhenReleaseContainsOfficialBinary(t *testing.T) {
+	root := t.TempDir()
+	releaseID := "codex-0.142.5_kimi-code-0.26.0_python-3.13.13"
+	releasePath := makeRelease(t, root, releaseID)
+	kimiCode := filepath.Join(releasePath, filepath.FromSlash(KimiCodeRelativePath))
+	if err := os.MkdirAll(filepath.Dir(kimiCode), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kimiCode, []byte("official-kimi-code"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(releasePath, releaseID, "0.142.5", "0.26.0", "3.13.13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(releasePath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(root, releaseID); err != nil {
+		t.Fatal(err)
+	}
+
+	arguments := []string{"acp", "--trace"}
+	spec, err := Spec(filepath.Join(root, "bin", "kimi.exe"), arguments, []string{"PATH=" + filepath.Join(root, "bin")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Target != kimiCode || strings.Join(spec.Args, "|") != "acp|--trace" {
+		t.Fatalf("unexpected Kimi Code launcher spec: %+v", spec)
+	}
+	if environmentValue(spec.Env, "KIMI_CODE_NO_AUTO_UPDATE") != "1" || environmentValue(spec.Env, "PYTHONDONTWRITEBYTECODE") != "" {
+		t.Fatalf("unexpected Kimi Code environment: %+v", spec.Env)
+	}
+}
+
 func TestExecutableFromPathUsesFirstRealExecutable(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first")

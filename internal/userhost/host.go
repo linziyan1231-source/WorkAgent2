@@ -158,6 +158,13 @@ func (h *Host) initialize(ctx context.Context) error {
 		return fmt.Errorf("verify shared agent CLIs: %w", err)
 	}
 	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s python=%s", agentVersions.Codex, agentVersions.Kimi, agentVersions.Python)
+	kimiConfigMigrated, err := h.initializeKimiCodeConfig(ctx, env)
+	if err != nil {
+		return err
+	}
+	if kimiConfigMigrated {
+		h.log.Printf("Copied the legacy Kimi configuration to the private Kimi Code home; the legacy configuration was preserved for rollback")
+	}
 	pendingModels, err := h.preparePendingModelBootstrap(ctx, env)
 	if err != nil {
 		return err
@@ -671,6 +678,8 @@ func (h *Host) environment() []string {
 		"AIONUI_CACHE_DIR": h.dirs.Cache, "AIONUI_WORK_DIR": h.dirs.Workspace,
 		"AIONUI_BUILTIN_ASSISTANTS_PATH":   filepath.Join(h.release.Path, "workagent-builtin-assistants"),
 		"CODEX_HOME":                       filepath.Join(h.dirs.Config, "codex"),
+		"KIMI_CODE_HOME":                   filepath.Join(h.dirs.Profile, ".kimi-code"),
+		"KIMI_CODE_NO_AUTO_UPDATE":         "1",
 		agentcli.PerUserSandboxEnvironment: "1",
 		"CLAUDE_CONFIG_DIR":                filepath.Join(h.dirs.Config, "claude"), "GEMINI_CLI_HOME": filepath.Join(h.dirs.Config, "gemini"),
 		"XDG_CONFIG_HOME": h.dirs.Config, "XDG_CACHE_HOME": h.dirs.Cache, "XDG_DATA_HOME": h.dirs.Data,

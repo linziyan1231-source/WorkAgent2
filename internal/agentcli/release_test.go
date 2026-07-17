@@ -87,6 +87,35 @@ func TestCurrentPointerRejectsTraversalAndManifestMismatch(t *testing.T) {
 	}
 }
 
+func TestKimiCodeBinaryBecomesCriticalWithoutChangingManifestSchema(t *testing.T) {
+	root := t.TempDir()
+	releaseID := "codex-0.142.5_kimi-code-0.26.0_python-3.13.13"
+	releasePath := makeRelease(t, root, releaseID)
+	kimiCode := filepath.Join(releasePath, filepath.FromSlash(KimiCodeRelativePath))
+	if err := os.MkdirAll(filepath.Dir(kimiCode), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kimiCode, []byte("official-kimi-code"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildManifest(releasePath, releaseID, "0.142.5", "0.26.0", "3.13.13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(releasePath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(root, releaseID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(kimiCode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyCurrent(root); err == nil {
+		t.Fatal("missing Kimi Code binary passed current release verification")
+	}
+}
+
 func TestRootAndBinAreFixedSiblingsOfAionSharedRoot(t *testing.T) {
 	aionReleases := filepath.Join(t.TempDir(), "AionUiWebShared", "releases")
 	wantRoot := filepath.Join(filepath.Dir(filepath.Dir(aionReleases)), RootDirectoryName)
