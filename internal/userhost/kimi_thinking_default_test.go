@@ -51,7 +51,7 @@ api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{"# user comment must survive", `default_thinking = true`, `theme = "light"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi for Coding HighSpeed"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+	for _, required := range []string{"# user comment must survive", `default_thinking = true`, `theme = "light"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi for Coding HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `display_name = "Kimi K3"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
 		}

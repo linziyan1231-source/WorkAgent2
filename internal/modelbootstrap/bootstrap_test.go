@@ -67,7 +67,7 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 func TestManagedModelPolicyIsExactAndReturnsCopies(t *testing.T) {
 	codex := ManagedCodexModels()
 	kimi := ManagedKimiModels()
-	if !reflect.DeepEqual(codex, []string{"example-reasoning", "example-balanced", "example-fast"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding", "kimi-for-coding-highspeed"}) {
+	if !reflect.DeepEqual(codex, []string{"example-reasoning", "example-balanced", "example-fast"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}) {
 		t.Fatalf("unexpected managed model policy: codex=%v kimi=%v", codex, kimi)
 	}
 	codex[0] = "changed"

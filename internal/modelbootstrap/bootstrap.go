@@ -30,7 +30,7 @@ const (
 
 var (
 	managedCodexModels = []string{"example-reasoning", "example-balanced", "example-fast"}
-	managedKimiModels  = []string{"kimi-for-coding", "kimi-for-coding-highspeed"}
+	managedKimiModels  = []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}
 )
 
 func ManagedCodexModels() []string { return append([]string(nil), managedCodexModels...) }

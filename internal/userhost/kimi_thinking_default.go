@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	kimiThinkingMarkerName    = "kimi-model-defaults-v3.applied"
-	kimiThinkingMarkerContent = "default_thinking=true\nmodels=kimi-for-coding,kimi-for-coding-highspeed\nruntime-aware-config=true\n"
+	kimiThinkingMarkerName    = "kimi-model-defaults-v4.applied"
+	kimiThinkingMarkerContent = "default_thinking=true\nmodels=kimi-for-coding,kimi-for-coding-highspeed,kimi-k3\nruntime-aware-config=true\n"
 )
 
 const kimiThinkingDefaultScript = `
@@ -31,6 +31,7 @@ from kimi_cli.config import load_config
 
 MODEL_KEY = "kimi-code/kimi-for-coding"
 HIGHSPEED_MODEL_KEY = "kimi-code/kimi-for-coding-highspeed"
+K3_MODEL_KEY = "kimi-code/kimi-k3"
 PROVIDER_KEY = "managed:kimi-code"
 MAX_CONFIG_BYTES = 1024 * 1024
 
@@ -63,6 +64,21 @@ highspeed["capabilities"] = capabilities
 if "display_name" not in highspeed:
     highspeed["display_name"] = "Kimi for Coding HighSpeed"
 models[HIGHSPEED_MODEL_KEY] = highspeed
+k3 = models.get(K3_MODEL_KEY)
+if not isinstance(k3, dict):
+    k3 = tomlkit.table()
+k3["provider"] = PROVIDER_KEY
+k3["model"] = "kimi-k3"
+k3["max_context_size"] = 1048576
+k3_capabilities = k3.get("capabilities")
+if not isinstance(k3_capabilities, list):
+    k3_capabilities = ["thinking"]
+elif "thinking" not in k3_capabilities:
+    k3_capabilities.append("thinking")
+k3["capabilities"] = k3_capabilities
+if "display_name" not in k3:
+    k3["display_name"] = "Kimi K3"
+models[K3_MODEL_KEY] = k3
 document["default_thinking"] = True
 fd, temporary_name = tempfile.mkstemp(prefix=".config.toml.tmp-", dir=config_path.parent)
 temporary_path = Path(temporary_name)
@@ -75,7 +91,8 @@ try:
     candidate = load_config(temporary_path)
     candidate_model = candidate.models.get(MODEL_KEY)
     candidate_highspeed = candidate.models.get(HIGHSPEED_MODEL_KEY)
-    if candidate.default_model != MODEL_KEY or candidate.default_thinking is not True or candidate_model is None or candidate_model.capabilities is None or "thinking" not in candidate_model.capabilities or candidate_highspeed is None or candidate_highspeed.provider != PROVIDER_KEY or candidate_highspeed.model != "kimi-for-coding-highspeed" or candidate_highspeed.capabilities is None or "thinking" not in candidate_highspeed.capabilities:
+    candidate_k3 = candidate.models.get(K3_MODEL_KEY)
+    if candidate.default_model != MODEL_KEY or candidate.default_thinking is not True or candidate_model is None or candidate_model.capabilities is None or "thinking" not in candidate_model.capabilities or candidate_highspeed is None or candidate_highspeed.provider != PROVIDER_KEY or candidate_highspeed.model != "kimi-for-coding-highspeed" or candidate_highspeed.capabilities is None or "thinking" not in candidate_highspeed.capabilities or candidate_k3 is None or candidate_k3.provider != PROVIDER_KEY or candidate_k3.model != "kimi-k3" or candidate_k3.max_context_size != 1048576 or candidate_k3.capabilities is None or "thinking" not in candidate_k3.capabilities:
         raise RuntimeError("Kimi thinking default verification failed")
     os.replace(temporary_path, config_path)
 finally:

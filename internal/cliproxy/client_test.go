@@ -9,7 +9,7 @@ import (
 
 func testOptions() ProvisionOptions {
 	return ProvisionOptions{Username: "test1", WindowsSID: "S-1-5-21-1335169958-1819941586-1322872941-1322", BaseURL: "http://203.0.113.52:8317/v1",
-		CodexDefaultModel: "example-reasoning", CodexModels: []string{"gpt-5.3-codex-spark", "example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding", "kimi-for-coding-highspeed"},
+		CodexDefaultModel: "example-reasoning", CodexModels: []string{"gpt-5.3-codex-spark", "example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"},
 		RPM: 0, CodexDailyUSD: 20, CodexWeeklyUSD: 40, KimiDailyUSD: 5, KimiWeeklyUSD: 10}
 }
 
