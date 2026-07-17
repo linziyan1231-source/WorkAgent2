@@ -291,16 +291,9 @@ func StageRebase(dataRoot, baseURL string) (Rebase, error) {
 	if !status.Applied || status.Pending || status.RebasePending {
 		return Rebase{}, errors.New("model bootstrap must be applied without another pending operation")
 	}
-	target := status.State
-	target.BaseURL = baseURL
-	if slices.Equal(target.KimiModels, previousManagedKimiModels) {
-		target.KimiModels = ManagedKimiModels()
-	}
-	if err := target.Validate(); err != nil {
+	target, err := PrepareRebaseTarget(status.State, baseURL)
+	if err != nil {
 		return Rebase{}, err
-	}
-	if target.BaseURL == status.State.BaseURL {
-		return Rebase{}, errors.New("model bootstrap base_url is already set to the requested value")
 	}
 	rebase := Rebase{FormatVersion: FormatVersion, Previous: status.State, Target: target}
 	path, _ := rebasePath(dataRoot)
@@ -308,6 +301,21 @@ func StageRebase(dataRoot, baseURL string) (Rebase, error) {
 		return Rebase{}, fmt.Errorf("stage model bootstrap rebase: %w", err)
 	}
 	return rebase, nil
+}
+
+func PrepareRebaseTarget(previous State, baseURL string) (State, error) {
+	target := previous
+	target.BaseURL = baseURL
+	if slices.Equal(target.KimiModels, previousManagedKimiModels) {
+		target.KimiModels = ManagedKimiModels()
+	}
+	if err := target.Validate(); err != nil {
+		return State{}, err
+	}
+	if target.BaseURL == previous.BaseURL {
+		return State{}, errors.New("model bootstrap base_url is already set to the requested value")
+	}
+	return target, nil
 }
 
 func LoadPendingRebase(dataRoot string) (Rebase, bool, error) {

@@ -363,9 +363,7 @@ func (m *Manager) RebaseModelBootstrap(ctx context.Context, username, baseURL st
 	if !current.Applied || current.Pending || current.RebasePending {
 		return ModelBootstrapResult{}, errors.New("model bootstrap must be applied without another pending operation before Base URL rebase")
 	}
-	target := current.State
-	target.BaseURL = baseURL
-	if err := target.Validate(); err != nil {
+	if _, err := modelbootstrap.PrepareRebaseTarget(current.State, baseURL); err != nil {
 		return ModelBootstrapResult{}, err
 	}
 	wasRunning := false
