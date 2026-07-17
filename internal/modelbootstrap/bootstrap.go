@@ -30,8 +30,9 @@ const (
 )
 
 var (
-	managedCodexModels = []string{"example-reasoning", "example-balanced", "example-fast"}
-	managedKimiModels  = []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}
+	managedCodexModels        = []string{"example-reasoning", "example-balanced", "example-fast"}
+	managedKimiModels         = []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}
+	previousManagedKimiModels = []string{"kimi-for-coding", "kimi-for-coding-highspeed"}
 )
 
 func ManagedCodexModels() []string { return append([]string(nil), managedCodexModels...) }
@@ -132,6 +133,22 @@ func (s State) ValidateForSID(windowsSID string) error {
 	return (KeyIDs{CodexKeyID: s.CodexKeyID, KimiKeyID: s.KimiKeyID}).ValidateForSID(windowsSID)
 }
 
+func (s State) validateApplied() error {
+	if slices.Equal(s.KimiModels, previousManagedKimiModels) {
+		current := s
+		current.KimiModels = managedKimiModels
+		return current.Validate()
+	}
+	return s.Validate()
+}
+
+func (s State) validateAppliedForSID(windowsSID string) error {
+	if err := s.validateApplied(); err != nil {
+		return err
+	}
+	return (KeyIDs{CodexKeyID: s.CodexKeyID, KimiKeyID: s.KimiKeyID}).ValidateForSID(windowsSID)
+}
+
 func AppliedKeyIDs(dataRoot, windowsSID string) (KeyIDs, error) {
 	_, markerPath, err := Paths(dataRoot)
 	if err != nil {
@@ -148,7 +165,7 @@ func AppliedKeyIDs(dataRoot, windowsSID string) (KeyIDs, error) {
 	if err := readStrictJSON(markerPath, &state); err != nil {
 		return KeyIDs{}, fmt.Errorf("read applied model bootstrap marker: %w", err)
 	}
-	if err := state.ValidateForSID(windowsSID); err != nil {
+	if err := state.validateAppliedForSID(windowsSID); err != nil {
 		return KeyIDs{}, fmt.Errorf("validate applied model bootstrap marker: %w", err)
 	}
 	return KeyIDs{CodexKeyID: state.CodexKeyID, KimiKeyID: state.KimiKeyID}, nil
@@ -248,7 +265,7 @@ func Inspect(dataRoot string) (Status, error) {
 		if err := readStrictJSON(markerPath, &state); err != nil {
 			return Status{}, fmt.Errorf("read model bootstrap marker: %w", err)
 		}
-		if err := state.Validate(); err != nil {
+		if err := state.validateApplied(); err != nil {
 			return Status{}, fmt.Errorf("validate model bootstrap marker: %w", err)
 		}
 		return Status{Applied: true, State: state}, nil
@@ -276,6 +293,9 @@ func StageRebase(dataRoot, baseURL string) (Rebase, error) {
 	}
 	target := status.State
 	target.BaseURL = baseURL
+	if slices.Equal(target.KimiModels, previousManagedKimiModels) {
+		target.KimiModels = ManagedKimiModels()
+	}
 	if err := target.Validate(); err != nil {
 		return Rebase{}, err
 	}
@@ -336,18 +356,28 @@ func loadRebase(path string) (Rebase, error) {
 	if rebase.FormatVersion != FormatVersion {
 		return Rebase{}, errors.New("unsupported model bootstrap rebase format")
 	}
-	if err := rebase.Previous.Validate(); err != nil {
+	if err := rebase.Previous.validateApplied(); err != nil {
 		return Rebase{}, fmt.Errorf("validate previous model bootstrap state: %w", err)
 	}
 	if err := rebase.Target.Validate(); err != nil {
 		return Rebase{}, fmt.Errorf("validate target model bootstrap state: %w", err)
 	}
-	previous, target := rebase.Previous, rebase.Target
-	previous.BaseURL, target.BaseURL = "", ""
-	if !statesEqual(previous, target) || rebase.Previous.BaseURL == rebase.Target.BaseURL {
-		return Rebase{}, errors.New("model bootstrap rebase may change only base_url")
+	if !validRebaseTransition(rebase.Previous, rebase.Target) || rebase.Previous.BaseURL == rebase.Target.BaseURL {
+		return Rebase{}, errors.New("model bootstrap rebase may change only base_url and the exact managed Kimi catalog upgrade")
 	}
 	return rebase, nil
+}
+
+func validRebaseTransition(previous, target State) bool {
+	previous.BaseURL, target.BaseURL = "", ""
+	if statesEqual(previous, target) {
+		return true
+	}
+	if !slices.Equal(previous.KimiModels, previousManagedKimiModels) || !slices.Equal(target.KimiModels, managedKimiModels) {
+		return false
+	}
+	previous.KimiModels = managedKimiModels
+	return statesEqual(previous, target)
 }
 
 func statesEqual(left, right State) bool {

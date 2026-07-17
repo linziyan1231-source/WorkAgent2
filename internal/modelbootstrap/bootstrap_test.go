@@ -87,6 +87,69 @@ func TestRebaseChangesOnlyBaseURLWithoutStagingKeys(t *testing.T) {
 	}
 }
 
+func TestRebaseMigratesPreviousManagedKimiCatalogWithoutRotatingKeys(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"credentials", "config"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacy := realBundle().State
+	legacy.KimiModels = append([]string(nil), previousManagedKimiModels...)
+	_, markerPath, err := Paths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(markerPath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	status, err := Inspect(root)
+	if err != nil || !status.Applied || !reflect.DeepEqual(status.State, legacy) {
+		t.Fatalf("unexpected legacy applied status: %+v err=%v", status, err)
+	}
+	rebase, err := StageRebase(root, "http://127.0.0.1:8317/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebase.Target.CodexKeyID != legacy.CodexKeyID || rebase.Target.KimiKeyID != legacy.KimiKeyID {
+		t.Fatalf("rebase rotated key ids: previous=%+v target=%+v", rebase.Previous, rebase.Target)
+	}
+	if !reflect.DeepEqual(rebase.Previous.KimiModels, previousManagedKimiModels) || !reflect.DeepEqual(rebase.Target.KimiModels, ManagedKimiModels()) {
+		t.Fatalf("unexpected Kimi catalog migration: previous=%v target=%v", rebase.Previous.KimiModels, rebase.Target.KimiModels)
+	}
+	if _, found, err := LoadPendingRebase(root); err != nil || !found {
+		t.Fatalf("pending migrated rebase was rejected: found=%t err=%v", found, err)
+	}
+	if err := CompleteRebase(root, rebase.Target); err != nil {
+		t.Fatal(err)
+	}
+	status, err = Inspect(root)
+	if err != nil || !status.Applied || status.RebasePending || !reflect.DeepEqual(status.State.KimiModels, ManagedKimiModels()) {
+		t.Fatalf("unexpected completed migrated status: %+v err=%v", status, err)
+	}
+}
+
+func TestInspectRejectsUnmanagedAppliedKimiCatalog(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"credentials", "config"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := realBundle().State
+	state.KimiModels = []string{"kimi-for-coding"}
+	_, markerPath, err := Paths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(markerPath, state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inspect(root); err == nil {
+		t.Fatal("unmanaged applied Kimi catalog was accepted")
+	}
+}
+
 func TestRebaseRejectsAnyNonBaseURLChange(t *testing.T) {
 	rebase := Rebase{FormatVersion: FormatVersion, Previous: realBundle().State, Target: realBundle().State}
 	rebase.Target.BaseURL = "http://127.0.0.1:8317/v1"
