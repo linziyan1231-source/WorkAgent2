@@ -3,6 +3,8 @@ package userhost
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
@@ -17,6 +19,7 @@ import (
 	"testing"
 
 	"aionuiportal/internal/agentcli"
+	"aionuiportal/internal/config"
 	"aionuiportal/internal/modelbootstrap"
 )
 
@@ -123,6 +126,24 @@ api_key = "custom-secret"
 			t.Fatalf("Kimi OAuth file %s survived: %v", name, err)
 		}
 	}
+	rebase := exec.Command(python, "-B", "-c", kimiAPIKeyConfigureScript, configPath)
+	rebase.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
+	rebase.Stdin = strings.NewReader(`{"base_url":"http://127.0.0.1:8317/v1"}`)
+	output, err := rebase.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Kimi Base URL rebase failed: %v: %s", err, output)
+	}
+	digest := sha256.Sum256([]byte("cpa_abcdefghijklmnopqrstuvwxyz012345"))
+	if strings.TrimSpace(string(output)) != hex.EncodeToString(digest[:]) {
+		t.Fatalf("Kimi Base URL rebase returned an unexpected key hash: %q", output)
+	}
+	rebased, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rebased), `base_url = "http://127.0.0.1:8317/v1"`) || !strings.Contains(string(rebased), `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`) {
+		t.Fatalf("Kimi Base URL rebase did not preserve the API key:\n%s", rebased)
+	}
 }
 
 func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testing.T) {
@@ -169,6 +190,72 @@ func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testi
 	defer mu.Unlock()
 	if len(providers) != 3 || providers[0].ID != "custom-user-provider" || !reflect.DeepEqual(providers[1:], desired) {
 		t.Fatalf("provider upsert changed unrelated state or failed exact replacement: %+v", providers)
+	}
+}
+
+func TestPendingModelRebasePreservesProviderKeysAndCompletesMarker(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"credentials", "config"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: "http://203.0.113.52:8317/v1",
+		CodexKeyID: "aionui-0123456789abcdef-chatgpt", KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning",
+		CodexModels: modelbootstrap.ManagedCodexModels(), KimiModels: modelbootstrap.ManagedKimiModels()}
+	bundle := modelbootstrap.Bundle{State: state, CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
+	if err := modelbootstrap.Stage(root, bundle, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelbootstrap.Complete(root, state); err != nil {
+		t.Fatal(err)
+	}
+	rebase, err := modelbootstrap.StageRebase(root, "http://127.0.0.1:8317/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := []aionProvider{
+		{ID: modelbootstrap.CodexProviderID, Platform: "custom", Name: modelbootstrap.CodexProviderName, BaseURL: state.BaseURL, APIKey: bundle.CodexAPIKey, Models: state.CodexModels, Enabled: true},
+		{ID: modelbootstrap.KimiProviderID, Platform: "custom", Name: modelbootstrap.KimiProviderName, BaseURL: state.BaseURL, APIKey: bundle.KimiAPIKey, Models: state.KimiModels, Enabled: true},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/providers" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": providers})
+			return
+		}
+		for index := range providers {
+			if r.Method == http.MethodPut && r.URL.Path == "/api/providers/"+providers[index].ID {
+				if err := json.NewDecoder(r.Body).Decode(&providers[index]); err != nil {
+					http.Error(w, "bad json", http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(providers[index])
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+	jar, _ := cookiejar.New(nil)
+	client := server.Client()
+	client.Jar = jar
+	log, err := openPrivateLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	host := Host{cfg: config.UserHost{DataRoot: root}, client: &aionClient{base: base, client: client}, log: log}
+	pending := &pendingModelBootstrap{rebase: &rebase, codexKeyHash: sha256.Sum256([]byte(bundle.CodexAPIKey)), kimiKeyHash: sha256.Sum256([]byte(bundle.KimiAPIKey))}
+	if err := host.applyPendingModelRebase(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	status, err := modelbootstrap.Inspect(root)
+	if err != nil || !status.Applied || status.RebasePending || status.State.BaseURL != rebase.Target.BaseURL {
+		t.Fatalf("unexpected completed rebase status: %+v err=%v", status, err)
+	}
+	if providers[0].APIKey != bundle.CodexAPIKey || providers[1].APIKey != bundle.KimiAPIKey || providers[0].BaseURL != rebase.Target.BaseURL || providers[1].BaseURL != rebase.Target.BaseURL {
+		t.Fatalf("provider rebase changed keys or missed Base URL: %+v", providers)
 	}
 }
 

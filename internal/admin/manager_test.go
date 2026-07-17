@@ -91,9 +91,8 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	cfg.UserProfilesRoot = filepath.Join(root, "profiles")
 	cfg.UserHostExecutable = userHost
 	cfg.PortalServiceSID = identity.SID
-	credentialRoot := filepath.Join(root, "usage-ssh")
-	cfg.UsageSSHIdentityFile = filepath.Join(credentialRoot, "usage_ed25519")
-	cfg.UsageSSHKnownHostsFile = filepath.Join(credentialRoot, "known_hosts")
+	credentialRoot := filepath.Join(root, "cliproxy")
+	cfg.UsageManagementKeyFile = filepath.Join(credentialRoot, "management.key")
 	configPath := filepath.Join(data, "portal.json")
 	if err := os.MkdirAll(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -108,10 +107,8 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if err := os.MkdirAll(credentialRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{cfg.UsageSSHIdentityFile, cfg.UsageSSHIdentityFile + ".pub", cfg.UsageSSHKnownHostsFile} {
-		if err := os.WriteFile(path, []byte("credential fixture"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(cfg.UsageManagementKeyFile, []byte("windows-native-management-key-0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	manager, err := Open(configPath)
 	if err != nil {
@@ -124,24 +121,24 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if failures := manager.VerifyACLs(context.Background()); len(failures) != 0 {
 		t.Fatalf("ACL verification failures: %v", failures)
 	}
-	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageSSHIdentityFile, cfg.UsageSSHIdentityFile + ".pub", cfg.UsageSSHKnownHostsFile} {
+	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageManagementKeyFile} {
 		policy := winutil.SharedReadOnlyPolicy()
 		if path == configPath {
 			policy = winutil.ServicePrivatePolicy(identity.SID)
-		} else if path == credentialRoot || path == cfg.UsageSSHIdentityFile || path == cfg.UsageSSHIdentityFile+".pub" || path == cfg.UsageSSHKnownHostsFile {
+		} else if path == credentialRoot || path == cfg.UsageManagementKeyFile {
 			policy = winutil.ServiceCredentialPolicy(identity.SID)
 		}
 		if err := winutil.VerifyACL(path, policy); err != nil {
 			t.Fatalf("protected ACL missing on %s: %v", path, err)
 		}
 	}
-	if err := os.Remove(cfg.UsageSSHIdentityFile + ".pub"); err != nil {
+	if err := os.Remove(cfg.UsageManagementKeyFile); err != nil {
 		t.Fatal(err)
 	}
 	if failures := manager.VerifyACLs(context.Background()); len(failures) == 0 {
-		t.Fatal("missing Portal usage public key was not reported")
+		t.Fatal("missing CLIProxyAPI management key was not reported")
 	}
-	if err := os.WriteFile(cfg.UsageSSHIdentityFile+".pub", []byte("credential fixture"), 0o600); err != nil {
+	if err := os.WriteFile(cfg.UsageManagementKeyFile, []byte("windows-native-management-key-0123456789abcdef"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if failures := manager.ApplyACLs(context.Background()); len(failures) != 0 {

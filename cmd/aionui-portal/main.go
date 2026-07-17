@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"aionuiportal/internal/adminipc"
+	"aionuiportal/internal/cliproxy"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/instance"
 	"aionuiportal/internal/ipc"
@@ -120,10 +121,9 @@ func runPortal(ctx context.Context, configPath string) error {
 	}
 	defer data.Close()
 	manager := instance.New(cfg, data, scheduler.Controller{})
-	usageRemote, err := portalusage.NewSSHClient(portalusage.SSHOptions{Target: cfg.UsageSSHTarget, HelperPath: cfg.UsageSSHHelperPath,
-		IdentityFile: cfg.UsageSSHIdentityFile, KnownHostsFile: cfg.UsageSSHKnownHostsFile})
+	usageRemote, err := portalusage.NewManagementRemote(cliproxy.ManagementOptions{BaseURL: cfg.UsageManagementURL, KeyFile: cfg.UsageManagementKeyFile})
 	if err != nil {
-		return fmt.Errorf("initialize Portal quota SSH client: %w", err)
+		return fmt.Errorf("initialize Portal quota Management API client: %w", err)
 	}
 	usage, err := portalusage.NewService(usageRemote, time.Duration(cfg.UsageCacheSeconds)*time.Second, time.Now)
 	if err != nil {

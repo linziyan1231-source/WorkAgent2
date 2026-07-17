@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,66 @@ func TestStageInspectLoadAndCompleteRealShapedBootstrap(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "credentials", BundleFileName)); !os.IsNotExist(err) {
 		t.Fatal("one-time key bundle still exists after completion")
+	}
+}
+
+func TestRebaseChangesOnlyBaseURLWithoutStagingKeys(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"credentials", "config"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bundle := realBundle()
+	if err := Stage(root, bundle, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := Complete(root, bundle.State); err != nil {
+		t.Fatal(err)
+	}
+	rebase, err := StageRebase(root, "http://127.0.0.1:8317/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebase.Previous.BaseURL != bundle.BaseURL || rebase.Target.BaseURL != "http://127.0.0.1:8317/v1" {
+		t.Fatalf("unexpected rebase: %+v", rebase)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "credentials", RebaseFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "cpa_") {
+		t.Fatal("rebase file contains an API key")
+	}
+	status, err := Inspect(root)
+	if err != nil || !status.Applied || !status.RebasePending || status.State.BaseURL != bundle.BaseURL {
+		t.Fatalf("unexpected rebase status: %+v err=%v", status, err)
+	}
+	if err := CompleteRebase(root, rebase.Target); err != nil {
+		t.Fatal(err)
+	}
+	status, err = Inspect(root)
+	if err != nil || !status.Applied || status.RebasePending || status.State.BaseURL != rebase.Target.BaseURL {
+		t.Fatalf("unexpected completed rebase status: %+v err=%v", status, err)
+	}
+}
+
+func TestRebaseRejectsAnyNonBaseURLChange(t *testing.T) {
+	rebase := Rebase{FormatVersion: FormatVersion, Previous: realBundle().State, Target: realBundle().State}
+	rebase.Target.BaseURL = "http://127.0.0.1:8317/v1"
+	rebase.Target.KimiKeyID = "different-kimi-key"
+	root := t.TempDir()
+	for _, name := range []string{"credentials", "config"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(root, "credentials", RebaseFileName)
+	if err := writeJSONAtomic(path, rebase); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadPendingRebase(root); err == nil {
+		t.Fatal("rebase changed a key id without rejection")
 	}
 }
 

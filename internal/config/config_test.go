@@ -22,10 +22,8 @@ func validPortal(t *testing.T) Portal {
 	c.UserConfigRoot = filepath.Join(root, "users")
 	c.UserHostExecutable = filepath.Clean(`C:\Program Files\AionUiPortal\AionUiUserHost.exe`)
 	c.PortalServiceSID = "S-1-5-80-123"
-	c.UsageSSHTarget = "root@203.0.113.52"
-	c.UsageSSHHelperPath = "/root/cliproxyapi/cpa-key-policy-admin.py"
-	c.UsageSSHIdentityFile = filepath.Join(DefaultUsageSSHRoot, "usage_ed25519")
-	c.UsageSSHKnownHostsFile = filepath.Join(DefaultUsageSSHRoot, "known_hosts")
+	c.UsageManagementURL = "http://127.0.0.1:8317/v0/management/plugins/cpa-key-policy"
+	c.UsageManagementKeyFile = filepath.Join(DefaultCLIProxyRoot, ".management-key")
 	return c
 }
 
@@ -124,20 +122,21 @@ func TestOutboundProxyURLIsOptionalAndStrictlyValidated(t *testing.T) {
 	}
 }
 
-func TestPortalUsageSSHConfigRejectsBroadOrAmbiguousPaths(t *testing.T) {
+func TestPortalUsageManagementConfigRejectsNonLocalOrBroadPaths(t *testing.T) {
 	for name, mutate := range map[string]func(*Portal){
-		"target":                func(c *Portal) { c.UsageSSHTarget = "root@host;command" },
-		"helper":                func(c *Portal) { c.UsageSSHHelperPath = "/root/../bin/sh" },
-		"identity outside root": func(c *Portal) { c.UsageSSHIdentityFile = `C:\Users\user-4194d170\.ssh\id_ed25519` },
-		"same file":             func(c *Portal) { c.UsageSSHKnownHostsFile = c.UsageSSHIdentityFile },
-		"long timeout":          func(c *Portal) { c.UsageQueryTimeoutSecs = 61 },
-		"long cache":            func(c *Portal) { c.UsageCacheSeconds = 61 },
+		"remote URL": func(c *Portal) {
+			c.UsageManagementURL = "http://203.0.113.52:8317/v0/management/plugins/cpa-key-policy"
+		},
+		"wrong route":      func(c *Portal) { c.UsageManagementURL = "http://127.0.0.1:8317/v0/management" },
+		"key outside root": func(c *Portal) { c.UsageManagementKeyFile = `C:\Users\user-4194d170\management.key` },
+		"long timeout":     func(c *Portal) { c.UsageQueryTimeoutSecs = 61 },
+		"long cache":       func(c *Portal) { c.UsageCacheSeconds = 61 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := validPortal(t)
 			mutate(&cfg)
 			if err := cfg.Validate(); err == nil {
-				t.Fatal("unsafe usage SSH configuration was accepted")
+				t.Fatal("unsafe usage Management API configuration was accepted")
 			}
 		})
 	}

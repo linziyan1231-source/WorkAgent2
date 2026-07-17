@@ -52,8 +52,8 @@ type KimiOAuthSeedResult struct {
 }
 
 type ModelBootstrapOptions struct {
-	SSHTarget         string
-	RemoteHelperPath  string
+	ManagementURL     string
+	ManagementKeyFile string
 	BaseURL           string
 	CodexDefaultModel string
 	CodexModels       []string
@@ -71,6 +71,10 @@ type ModelBootstrapResult struct {
 	CodexKeyID string
 	KimiKeyID  string
 	Restarted  bool
+}
+
+func (m *Manager) ConvergeManagedKimiCatalog(ctx context.Context, managementURL, managementKeyFile string) (cliproxy.CatalogConvergence, error) {
+	return cliproxy.ConvergeManagedKimiCatalog(ctx, cliproxy.ManagementOptions{BaseURL: managementURL, KeyFile: managementKeyFile})
 }
 
 func Open(configPath string) (*Manager, error) {
@@ -304,7 +308,7 @@ func (m *Manager) ProvisionModelBootstrap(ctx context.Context, username string, 
 		return ModelBootstrapResult{}, fmt.Errorf("stop target UserHost before model bootstrap: %w", stopErr)
 	}
 
-	client := cliproxy.Client{SSHTarget: options.SSHTarget, HelperPath: options.RemoteHelperPath}
+	client := cliproxy.Client{ManagementURL: options.ManagementURL, ManagementKeyFile: options.ManagementKeyFile}
 	bundle, err := client.Provision(ctx, cliproxy.ProvisionOptions{Username: user.Username, WindowsSID: user.WindowsSID, BaseURL: options.BaseURL,
 		CodexDefaultModel: options.CodexDefaultModel, CodexModels: options.CodexModels, KimiModels: options.KimiModels, RPM: options.RPM,
 		CodexDailyUSD: options.CodexDailyUSD, CodexWeeklyUSD: options.CodexWeeklyUSD, KimiDailyUSD: options.KimiDailyUSD, KimiWeeklyUSD: options.KimiWeeklyUSD})
@@ -336,6 +340,69 @@ func (m *Manager) ProvisionModelBootstrap(ctx context.Context, username string, 
 	if err := m.Store.Audit(ctx, "admin.model_bootstrap.provision", "success", user.Username, user.WindowsSID, "local-admin",
 		map[string]any{"codex_key_id": bundle.CodexKeyID, "kimi_key_id": bundle.KimiKeyID, "outcome": result.Outcome, "restarted": result.Restarted}, time.Now()); err != nil {
 		return result, fmt.Errorf("model bootstrap succeeded but its audit event could not be recorded: %w", err)
+	}
+	return result, nil
+}
+
+func (m *Manager) RebaseModelBootstrap(ctx context.Context, username, baseURL string) (ModelBootstrapResult, error) {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	current, err := modelbootstrap.Inspect(dataRoot)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	if current.Applied && !current.RebasePending && current.State.BaseURL == baseURL {
+		return ModelBootstrapResult{Outcome: "SKIP", CodexKeyID: current.State.CodexKeyID, KimiKeyID: current.State.KimiKeyID}, nil
+	}
+	if !current.Applied || current.Pending || current.RebasePending {
+		return ModelBootstrapResult{}, errors.New("model bootstrap must be applied without another pending operation before Base URL rebase")
+	}
+	target := current.State
+	target.BaseURL = baseURL
+	if err := target.Validate(); err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	wasRunning := false
+	if instanceStatus, statusErr := m.Instances.Status(ctx, user.WindowsSID); statusErr == nil {
+		wasRunning = instanceStatus.Healthy || instanceStatus.State == "starting"
+	} else if !isPipeUnavailable(statusErr) {
+		return ModelBootstrapResult{}, fmt.Errorf("inspect target UserHost before model bootstrap rebase: %w", statusErr)
+	}
+	stopErr := m.Instances.Stop(ctx, user.WindowsSID)
+	if stopErr != nil && !isPipeUnavailable(stopErr) {
+		return ModelBootstrapResult{}, fmt.Errorf("stop target UserHost before model bootstrap rebase: %w", stopErr)
+	}
+	rebase, err := modelbootstrap.StageRebase(dataRoot, baseURL)
+	if err != nil {
+		return ModelBootstrapResult{}, err
+	}
+	policy := winutil.PrivateTreePolicy(user.WindowsSID)
+	if err := winutil.ApplyTreeACL(dataRoot, policy); err != nil {
+		return ModelBootstrapResult{}, fmt.Errorf("model bootstrap rebase was staged but its private ACL could not be applied: %w", err)
+	}
+	if err := winutil.VerifyTreeACL(dataRoot, policy); err != nil {
+		return ModelBootstrapResult{}, fmt.Errorf("model bootstrap rebase was staged but its private ACL could not be verified: %w", err)
+	}
+	result := ModelBootstrapResult{Outcome: "REBASE_PENDING", CodexKeyID: rebase.Target.CodexKeyID, KimiKeyID: rebase.Target.KimiKeyID}
+	if wasRunning && user.Enabled {
+		if _, err := m.Instances.Ensure(ctx, user.WindowsSID); err != nil {
+			return result, fmt.Errorf("model bootstrap rebase was staged but the previously running UserHost could not apply it: %w", err)
+		}
+		applied, err := modelbootstrap.Inspect(dataRoot)
+		if err != nil || !applied.Applied || applied.RebasePending || applied.State.BaseURL != baseURL {
+			return result, fmt.Errorf("restarted UserHost did not complete the model bootstrap rebase: %v", err)
+		}
+		result.Outcome, result.Restarted = "APPLIED", true
+	}
+	if err := m.Store.Audit(ctx, "admin.model_bootstrap.rebase", "success", user.Username, user.WindowsSID, "local-admin",
+		map[string]any{"codex_key_id": rebase.Target.CodexKeyID, "kimi_key_id": rebase.Target.KimiKeyID, "base_url": baseURL, "outcome": result.Outcome, "restarted": result.Restarted}, time.Now()); err != nil {
+		return result, fmt.Errorf("model bootstrap rebase succeeded but its audit event could not be recorded: %w", err)
 	}
 	return result, nil
 }
@@ -650,10 +717,10 @@ func (m *Manager) servicePrivateFiles() []string {
 }
 
 func (m *Manager) usageCredentialFiles() []string {
-	if m.Config.UsageSSHIdentityFile == "" || m.Config.UsageSSHKnownHostsFile == "" {
+	if m.Config.UsageManagementKeyFile == "" {
 		return nil
 	}
-	return []string{m.Config.UsageSSHIdentityFile, m.Config.UsageSSHIdentityFile + ".pub", m.Config.UsageSSHKnownHostsFile}
+	return []string{m.Config.UsageManagementKeyFile}
 }
 
 func (m *Manager) ApplyACLs(ctx context.Context) []error {

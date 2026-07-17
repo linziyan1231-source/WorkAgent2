@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,9 +36,34 @@ const (
 )
 
 var managedCodexAssignment = regexp.MustCompile(`^\s*(?:["']?(openai_base_url|model_reasoning_effort|model|cli_auth_credentials_store)["']?)\s*=`)
+var managedAPIKey = regexp.MustCompile(`^cpa_[A-Za-z0-9_-]{20,256}$`)
 
 type pendingModelBootstrap struct {
-	bundle modelbootstrap.Bundle
+	bundle       *modelbootstrap.Bundle
+	rebase       *modelbootstrap.Rebase
+	codexKeyHash [sha256.Size]byte
+	kimiKeyHash  [sha256.Size]byte
+}
+
+type cappedOutput struct {
+	bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (c *cappedOutput) Write(data []byte) (int, error) {
+	original := len(data)
+	remaining := c.limit - c.Len()
+	if remaining > 0 {
+		if len(data) > remaining {
+			data = data[:remaining]
+		}
+		_, _ = c.Buffer.Write(data)
+	}
+	if original > remaining {
+		c.overflow = true
+	}
+	return original, nil
 }
 
 type aionProvider struct {
@@ -54,8 +81,40 @@ func (h *Host) preparePendingModelBootstrap(ctx context.Context, env []string) (
 	if err != nil {
 		return nil, fmt.Errorf("inspect API model bootstrap: %w", err)
 	}
-	if !found {
+	rebase, rebasing, err := modelbootstrap.LoadPendingRebase(h.cfg.DataRoot)
+	if err != nil {
+		return nil, fmt.Errorf("inspect API model bootstrap rebase: %w", err)
+	}
+	if found && rebasing {
+		return nil, errors.New("API model bootstrap and rebase are both pending")
+	}
+	if !found && !rebasing {
 		return nil, nil
+	}
+	if rebasing {
+		codexHome := filepath.Join(h.dirs.Config, "codex")
+		codexKey, err := readCodexAPIKey(filepath.Join(codexHome, "auth.json"))
+		if err != nil {
+			return nil, fmt.Errorf("read existing Codex API-key login for rebase: %w", err)
+		}
+		defer zero(codexKey)
+		if err := writeInitialCodexConfig(filepath.Join(codexHome, "config.toml"), rebase.Target.BaseURL, rebase.Target.CodexDefaultModel); err != nil {
+			return nil, fmt.Errorf("rebase Codex configuration: %w", err)
+		}
+		if err := verifyCodexAPIKey(filepath.Join(codexHome, "auth.json"), string(codexKey)); err != nil {
+			return nil, fmt.Errorf("verify preserved Codex API-key login: %w", err)
+		}
+		kimiHash, err := h.configureKimiAPIKey(ctx, env, rebase.Target.BaseURL, "")
+		if err != nil {
+			return nil, err
+		}
+		pending := &pendingModelBootstrap{rebase: &rebase, codexKeyHash: sha256.Sum256(codexKey)}
+		decoded, err := hex.DecodeString(kimiHash)
+		if err != nil || len(decoded) != sha256.Size {
+			return nil, errors.New("Kimi API-key rebase returned an invalid verification hash")
+		}
+		copy(pending.kimiKeyHash[:], decoded)
+		return pending, nil
 	}
 	codexHome := filepath.Join(h.dirs.Config, "codex")
 	if err := writeInitialCodexConfig(filepath.Join(codexHome, "config.toml"), bundle.BaseURL, bundle.CodexDefaultModel); err != nil {
@@ -67,25 +126,29 @@ func (h *Host) preparePendingModelBootstrap(ctx context.Context, env []string) (
 	if err := verifyCodexAPIKey(filepath.Join(codexHome, "auth.json"), bundle.CodexAPIKey); err != nil {
 		return nil, fmt.Errorf("verify Codex API-key login: %w", err)
 	}
-	if err := h.configureKimiAPIKey(ctx, env, bundle.BaseURL, bundle.KimiAPIKey); err != nil {
+	if _, err := h.configureKimiAPIKey(ctx, env, bundle.BaseURL, bundle.KimiAPIKey); err != nil {
 		return nil, err
 	}
-	return &pendingModelBootstrap{bundle: bundle}, nil
+	return &pendingModelBootstrap{bundle: &bundle}, nil
 }
 
-func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, apiKey string) error {
+func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, apiKey string) (string, error) {
 	root := agentcli.RootFromAionReleases(h.cfg.ReleasesRoot)
 	verified, err := agentcli.VerifyCurrent(root)
 	if err != nil {
-		return fmt.Errorf("verify shared agent CLI release before Kimi API-key configuration: %w", err)
+		return "", fmt.Errorf("verify shared agent CLI release before Kimi API-key configuration: %w", err)
 	}
 	kimiDirectory := filepath.Dir(kimiConfigPath(h.dirs.Profile, verified.Manifest))
 	if err := ensureNormalKimiDirectory(kimiDirectory); err != nil {
-		return err
+		return "", err
 	}
-	payload, err := json.Marshal(map[string]string{"api_key": apiKey, "base_url": baseURL})
+	input := map[string]string{"base_url": baseURL}
+	if apiKey != "" {
+		input["api_key"] = apiKey
+	}
+	payload, err := json.Marshal(input)
 	if err != nil {
-		return errors.New("encode Kimi API-key configuration input")
+		return "", errors.New("encode Kimi API-key configuration input")
 	}
 	defer zero(payload)
 
@@ -97,33 +160,38 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = append(append([]string(nil), env...), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
 	cmd.Stdin = bytes.NewReader(payload)
-	cmd.Stdout = io.Discard
+	stdout := &cappedOutput{limit: 128}
+	cmd.Stdout = stdout
 	cmd.Stderr = io.Discard
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
 	if err := h.sandbox.Apply(cmd); err != nil {
-		return fmt.Errorf("sandbox Kimi API-key configuration: %w", err)
+		return "", fmt.Errorf("sandbox Kimi API-key configuration: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start Kimi API-key configuration: %w", err)
+		return "", fmt.Errorf("start Kimi API-key configuration: %w", err)
 	}
 	if err := h.sandbox.VerifyProcess(uint32(cmd.Process.Pid), h.cfg.WindowsSID); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
-		return err
+		return "", err
 	}
 	if err := cmd.Wait(); err != nil {
 		if errors.Is(configureCtx.Err(), context.DeadlineExceeded) {
-			return errors.New("Kimi API-key configuration exceeded 30 seconds")
+			return "", errors.New("Kimi API-key configuration exceeded 30 seconds")
 		}
-		return errors.New("Kimi API-key configuration failed")
+		return "", errors.New("Kimi API-key configuration failed")
 	}
 	if _, err := agentcli.VerifyCurrent(root); err != nil {
-		return fmt.Errorf("verify shared agent CLI release after Kimi API-key configuration: %w", err)
+		return "", fmt.Errorf("verify shared agent CLI release after Kimi API-key configuration: %w", err)
 	}
 	if err := h.validateKimiCodeConfig(ctx, env, verified, configPath); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	hash := strings.TrimSpace(stdout.String())
+	if stdout.overflow || len(hash) != sha256.Size*2 {
+		return "", errors.New("Kimi API-key configuration verification hash was invalid")
+	}
+	return hash, nil
 }
 
 func kimiConfigPath(profile string, manifest agentcli.Manifest) string {
@@ -150,6 +218,7 @@ func ensureNormalKimiDirectory(path string) error {
 }
 
 const kimiAPIKeyConfigureScript = `
+import hashlib
 import json
 import os
 import stat
@@ -170,9 +239,9 @@ MAX_CONFIG_BYTES = 1024 * 1024
 
 config_path = Path(sys.argv[1])
 payload = json.load(sys.stdin)
-api_key = payload.pop("api_key")
+api_key = payload.pop("api_key", None)
 base_url = payload.pop("base_url")
-if payload or not isinstance(api_key, str) or not api_key.startswith("cpa_") or not isinstance(base_url, str):
+if payload or (api_key is not None and (not isinstance(api_key, str) or not api_key.startswith("cpa_"))) or not isinstance(base_url, str):
     raise RuntimeError("invalid Kimi API-key configuration input")
 
 if config_path.exists():
@@ -201,6 +270,11 @@ providers = document.get("providers")
 if not isinstance(providers, dict):
     providers = tomlkit.table()
     document["providers"] = providers
+existing_provider = providers.get(PROVIDER_KEY)
+if api_key is None:
+    api_key = existing_provider.get("api_key") if isinstance(existing_provider, dict) else None
+    if not isinstance(api_key, str) or not api_key.startswith("cpa_"):
+        raise RuntimeError("existing managed Kimi API key is missing")
 provider = tomlkit.table()
 provider["type"] = "kimi"
 provider["base_url"] = base_url
@@ -301,6 +375,7 @@ verified = load_config(config_path)
 verified_provider = verified.providers.get(PROVIDER_KEY)
 if verified.default_thinking is not True or verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
     raise RuntimeError("persisted Kimi API-key configuration verification failed")
+print(hashlib.sha256(api_key.encode("utf-8")).hexdigest())
 `
 
 func (h *Host) loginCodexAPIKey(ctx context.Context, env []string, apiKey string) error {
@@ -425,16 +500,28 @@ func writePrivateFileAtomic(path string, data []byte) error {
 }
 
 func verifyCodexAPIKey(path, expected string) error {
-	info, err := os.Lstat(path)
+	apiKey, err := readCodexAPIKey(path)
 	if err != nil {
 		return err
 	}
+	defer zero(apiKey)
+	if string(apiKey) != expected {
+		return errors.New("Codex auth.json did not contain the expected API-key login")
+	}
+	return nil
+}
+
+func readCodexAPIKey(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 64*1024 {
-		return errors.New("Codex auth.json must be a bounded regular non-symlink file")
+		return nil, errors.New("Codex auth.json must be a bounded regular non-symlink file")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer zero(data)
 	var auth struct {
@@ -443,23 +530,26 @@ func verifyCodexAPIKey(path, expected string) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(&auth); err != nil {
-		return errors.New("Codex auth.json is invalid")
+		return nil, errors.New("Codex auth.json is invalid")
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF || auth.AuthMode != "apikey" || auth.APIKey != expected {
-		return errors.New("Codex auth.json did not contain the expected API-key login")
+	if err := decoder.Decode(&struct{}{}); err != io.EOF || auth.AuthMode != "apikey" || !managedAPIKey.MatchString(auth.APIKey) {
+		return nil, errors.New("Codex auth.json did not contain a managed API-key login")
 	}
-	return nil
+	return []byte(auth.APIKey), nil
 }
 
 func (h *Host) applyPendingModelBootstrap(ctx context.Context, pending *pendingModelBootstrap) error {
 	if pending == nil {
 		return nil
 	}
-	bundle := &pending.bundle
-	defer func() {
-		bundle.CodexAPIKey = ""
-		bundle.KimiAPIKey = ""
-	}()
+	if pending.rebase != nil {
+		return h.applyPendingModelRebase(ctx, pending)
+	}
+	bundle := pending.bundle
+	if bundle == nil {
+		return errors.New("pending model bootstrap has no operation")
+	}
+	defer func() { bundle.CodexAPIKey, bundle.KimiAPIKey = "", "" }()
 	desired := []aionProvider{
 		{ID: modelbootstrap.CodexProviderID, Platform: "custom", Name: modelbootstrap.CodexProviderName, BaseURL: bundle.BaseURL, APIKey: bundle.CodexAPIKey, Models: append([]string(nil), bundle.CodexModels...), Enabled: true},
 		{ID: modelbootstrap.KimiProviderID, Platform: "custom", Name: modelbootstrap.KimiProviderName, BaseURL: bundle.BaseURL, APIKey: bundle.KimiAPIKey, Models: append([]string(nil), bundle.KimiModels...), Enabled: true},
@@ -471,6 +561,51 @@ func (h *Host) applyPendingModelBootstrap(ctx context.Context, pending *pendingM
 		return err
 	}
 	h.log.Printf("Initialized Codex API-key login and Aion providers codex_key_id=%s kimi_key_id=%s", bundle.CodexKeyID, bundle.KimiKeyID)
+	return nil
+}
+
+func (h *Host) applyPendingModelRebase(ctx context.Context, pending *pendingModelBootstrap) error {
+	rebase := pending.rebase
+	if rebase == nil {
+		return errors.New("pending model rebase is missing")
+	}
+	current, err := h.client.listProviders(ctx)
+	if err != nil {
+		return fmt.Errorf("list Aion model providers for rebase: %w", err)
+	}
+	byID := make(map[string]aionProvider, len(current))
+	for _, provider := range current {
+		if _, duplicate := byID[provider.ID]; duplicate {
+			return fmt.Errorf("Aion provider id is duplicated: %s", provider.ID)
+		}
+		byID[provider.ID] = provider
+	}
+	codex, hasCodex := byID[modelbootstrap.CodexProviderID]
+	kimi, hasKimi := byID[modelbootstrap.KimiProviderID]
+	if !hasCodex || !hasKimi {
+		return errors.New("managed Aion providers are incomplete during Base URL rebase")
+	}
+	for _, provider := range []aionProvider{codex, kimi} {
+		if provider.BaseURL != rebase.Previous.BaseURL && provider.BaseURL != rebase.Target.BaseURL {
+			return fmt.Errorf("managed Aion provider %s has an unexpected Base URL", provider.ID)
+		}
+		if !managedAPIKey.MatchString(provider.APIKey) {
+			return fmt.Errorf("managed Aion provider %s has an invalid API key", provider.ID)
+		}
+	}
+	if sha256.Sum256([]byte(codex.APIKey)) != pending.codexKeyHash || sha256.Sum256([]byte(kimi.APIKey)) != pending.kimiKeyHash {
+		return errors.New("managed Aion provider keys do not match the preserved CLI keys")
+	}
+	codex.BaseURL, kimi.BaseURL = rebase.Target.BaseURL, rebase.Target.BaseURL
+	codex.Name, kimi.Name = modelbootstrap.CodexProviderName, modelbootstrap.KimiProviderName
+	codex.Models, kimi.Models = append([]string(nil), rebase.Target.CodexModels...), append([]string(nil), rebase.Target.KimiModels...)
+	if err := h.client.upsertManagedProviders(ctx, []aionProvider{codex, kimi}); err != nil {
+		return fmt.Errorf("rebase Aion model providers: %w", err)
+	}
+	if err := modelbootstrap.CompleteRebase(h.cfg.DataRoot, rebase.Target); err != nil {
+		return err
+	}
+	h.log.Printf("Rebased CLIProxyAPI Base URL without rotating keys codex_key_id=%s kimi_key_id=%s", rebase.Target.CodexKeyID, rebase.Target.KimiKeyID)
 	return nil
 }
 

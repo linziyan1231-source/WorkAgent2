@@ -98,8 +98,25 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 }
 
 func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
-	if len(arguments) == 0 || (arguments[0] != "provision" && arguments[0] != "status") {
-		return errors.New("usage: portal --config <path> model-bootstrap <provision|status> ...")
+	if len(arguments) == 0 || (arguments[0] != "provision" && arguments[0] != "rebase" && arguments[0] != "status" && arguments[0] != "catalog-converge") {
+		return errors.New("usage: portal --config <path> model-bootstrap <provision|rebase|status|catalog-converge> ...")
+	}
+	if arguments[0] == "catalog-converge" {
+		flags := newFlags("model-bootstrap catalog-converge")
+		managementURL := flags.String("management-url", "", "local cpa-key-policy Management API URL")
+		managementKeyFile := flags.String("management-key-file", "", "protected local Management API key file")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *managementURL == "" || *managementKeyFile == "" {
+			return errors.New("usage: portal --config <path> model-bootstrap catalog-converge --management-url <loopback-url> --management-key-file <path>")
+		}
+		result, err := manager.ConvergeManagedKimiCatalog(ctx, *managementURL, *managementKeyFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Kimi catalog converged: alias_changed=%t keys_changed=%d kimi_keys=%d\n", result.AliasChanged, result.KeysChanged, result.KimiKeys)
+		return nil
 	}
 	if arguments[0] == "status" {
 		if len(arguments) != 2 {
@@ -110,21 +127,39 @@ func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, argument
 			return err
 		}
 		outcome := "MISSING"
-		if status.Pending {
+		if status.RebasePending {
+			outcome = "REBASE_PENDING"
+		} else if status.Pending {
 			outcome = "PENDING"
 		} else if status.Applied {
 			outcome = "APPLIED"
 		}
 		fmt.Printf("user=%s outcome=%s codex_key_id=%s kimi_key_id=%s\n", arguments[1], outcome, status.State.CodexKeyID, status.State.KimiKeyID)
-		if !status.Applied {
+		if !status.Applied || status.RebasePending {
 			return errors.New("model bootstrap is not applied")
 		}
 		return nil
 	}
+	if arguments[0] == "rebase" {
+		flags := newFlags("model-bootstrap rebase")
+		baseURL := flags.String("base-url", "", "replacement employee OpenAI-compatible /v1 Base URL")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 || *baseURL == "" {
+			return errors.New("usage: portal --config <path> model-bootstrap rebase --base-url <url/v1> <portal-username>")
+		}
+		result, err := manager.RebaseModelBootstrap(ctx, flags.Arg(0), *baseURL)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("user=%s outcome=%s codex_key_id=%s kimi_key_id=%s restarted=%t\n", flags.Arg(0), result.Outcome, result.CodexKeyID, result.KimiKeyID, result.Restarted)
+		return nil
+	}
 
 	flags := newFlags("model-bootstrap provision")
-	sshTarget := flags.String("ssh-target", "", "CLIProxyAPI SSH user@host")
-	remoteHelper := flags.String("remote-helper", "", "absolute remote key-policy helper path")
+	managementURL := flags.String("management-url", "", "local cpa-key-policy Management API URL")
+	managementKeyFile := flags.String("management-key-file", "", "protected local Management API key file")
 	baseURL := flags.String("base-url", "", "employee OpenAI-compatible /v1 base URL")
 	codexDefault := flags.String("codex-default-model", "example-reasoning", "default Codex model alias")
 	codexModels := flags.String("codex-models", "", "comma-separated Codex/ChatGPT aliases")
@@ -138,8 +173,8 @@ func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, argument
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 1 || *sshTarget == "" || *remoteHelper == "" || *baseURL == "" {
-		return errors.New("usage: portal --config <path> model-bootstrap provision --ssh-target <user@host> --remote-helper </path> --base-url <url/v1> --codex-models <aliases> --kimi-models <aliases> [--update] <portal-username>")
+	if flags.NArg() != 1 || *managementURL == "" || *managementKeyFile == "" || *baseURL == "" {
+		return errors.New("usage: portal --config <path> model-bootstrap provision --management-url <loopback-url> --management-key-file <path> --base-url <url/v1> --codex-models <aliases> --kimi-models <aliases> [--update] <portal-username>")
 	}
 	parseModels := func(value string) ([]string, error) {
 		parts := strings.Split(value, ",")
@@ -161,7 +196,7 @@ func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, argument
 	if err != nil {
 		return err
 	}
-	result, err := manager.ProvisionModelBootstrap(ctx, flags.Arg(0), admin.ModelBootstrapOptions{SSHTarget: *sshTarget, RemoteHelperPath: *remoteHelper,
+	result, err := manager.ProvisionModelBootstrap(ctx, flags.Arg(0), admin.ModelBootstrapOptions{ManagementURL: *managementURL, ManagementKeyFile: *managementKeyFile,
 		BaseURL: *baseURL, CodexDefaultModel: *codexDefault, CodexModels: parsedCodex, KimiModels: parsedKimi, RPM: *rpm,
 		CodexDailyUSD: *codexDaily, CodexWeeklyUSD: *codexWeekly, KimiDailyUSD: *kimiDaily, KimiWeeklyUSD: *kimiWeekly, Update: *update})
 	if err != nil {

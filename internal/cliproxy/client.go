@@ -7,26 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"regexp"
 	"strings"
 
 	"aionuiportal/internal/modelbootstrap"
 )
 
-const maxSSHOutput = 256 * 1024
-
 var (
-	sshTargetPattern  = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}@[A-Za-z0-9.-]{1,253}$`)
-	helperPathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]{1,240}$`)
 	plainKeyPattern   = regexp.MustCompile(`^cpa_[A-Za-z0-9_-]{20,256}$`)
 	secretTextPattern = regexp.MustCompile(`cpa_[A-Za-z0-9_-]+`)
 )
 
 type Client struct {
-	SSHTarget  string
-	HelperPath string
-	Executable string
+	ManagementURL     string
+	ManagementKeyFile string
 }
 
 type ProvisionOptions struct {
@@ -75,36 +69,12 @@ func (c Client) Provision(ctx context.Context, options ProvisionOptions) (modelb
 	if err != nil {
 		return modelbootstrap.Bundle{}, err
 	}
-	if !sshTargetPattern.MatchString(c.SSHTarget) {
-		return modelbootstrap.Bundle{}, errors.New("CLIProxyAPI SSH target is invalid")
-	}
-	if !helperPathPattern.MatchString(c.HelperPath) || strings.Contains(c.HelperPath, "..") {
-		return modelbootstrap.Bundle{}, errors.New("CLIProxyAPI remote helper path is invalid")
-	}
-	executable := c.Executable
-	if executable == "" {
-		executable = "ssh.exe"
-	}
-	payload := provisionRequest(options, state)
-	encoded, err := json.Marshal(payload)
+	client, err := NewManagementClient(ManagementOptions{BaseURL: c.ManagementURL, KeyFile: c.ManagementKeyFile})
 	if err != nil {
 		return modelbootstrap.Bundle{}, err
 	}
-	command := exec.CommandContext(ctx, executable, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", c.SSHTarget, c.HelperPath, "provision")
-	command.Stdin = bytes.NewReader(encoded)
-	stdout, stderr := &cappedBuffer{limit: maxSSHOutput}, &cappedBuffer{limit: 16 * 1024}
-	command.Stdout, command.Stderr = stdout, stderr
-	if err := command.Run(); err != nil {
-		message := redact(strings.TrimSpace(stderr.String()))
-		if message == "" {
-			message = "remote helper failed without a diagnostic"
-		}
-		return modelbootstrap.Bundle{}, fmt.Errorf("provision CLIProxyAPI employee keys: %s", message)
-	}
-	if stdout.overflow {
-		return modelbootstrap.Bundle{}, errors.New("CLIProxyAPI provision response exceeded the output limit")
-	}
-	parsed, err := parseResponse(stdout.Bytes(), state)
+	payload := provisionRequest(options, state)
+	parsed, err := provisionWithManagementAPI(ctx, client, payload, state)
 	if err != nil {
 		return modelbootstrap.Bundle{}, err
 	}
@@ -113,6 +83,160 @@ func (c Client) Provision(ctx context.Context, options ProvisionOptions) (modelb
 		return modelbootstrap.Bundle{}, fmt.Errorf("validate CLIProxyAPI provision result: %w", err)
 	}
 	return bundle, nil
+}
+
+type aliasList struct {
+	Aliases []json.RawMessage `json:"aliases"`
+}
+
+type publicKeyList struct {
+	Keys []publicKey `json:"keys"`
+}
+
+type publicKey struct {
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	Enabled             bool              `json:"enabled"`
+	KeyPreview          string            `json:"key_preview"`
+	RPM                 int               `json:"rpm"`
+	Models              []json.RawMessage `json:"models"`
+	Aliases             []any             `json:"aliases"`
+	DailyLimitUSD       json.Number       `json:"daily_limit_usd"`
+	WeeklyLimitUSD      json.Number       `json:"weekly_limit_usd"`
+	AllowModelsEndpoint bool              `json:"allow_models_endpoint"`
+	Usage               any               `json:"usage"`
+	CreatedAt           string            `json:"created_at,omitempty"`
+	UpdatedAt           string            `json:"updated_at,omitempty"`
+}
+
+type keyWrite struct {
+	ID                  string     `json:"id"`
+	Name                string     `json:"name"`
+	Enabled             bool       `json:"enabled"`
+	RPM                 int        `json:"rpm"`
+	Models              []keyModel `json:"models"`
+	DailyLimitUSD       float64    `json:"daily_limit_usd"`
+	WeeklyLimitUSD      float64    `json:"weekly_limit_usd"`
+	AllowModelsEndpoint bool       `json:"allow_models_endpoint"`
+}
+
+type keyModel struct {
+	Alias                    string  `json:"alias"`
+	Provider                 string  `json:"provider"`
+	TargetModel              string  `json:"target_model"`
+	Group                    string  `json:"group,omitempty"`
+	BillingMode              string  `json:"billing_mode,omitempty"`
+	InputPricePerMillion     float64 `json:"input_price_per_million,omitempty"`
+	OutputPricePerMillion    float64 `json:"output_price_per_million,omitempty"`
+	CacheReadPricePerMillion float64 `json:"cache_read_price_per_million,omitempty"`
+	PerCallUSD               float64 `json:"per_call_usd,omitempty"`
+}
+
+func provisionWithManagementAPI(ctx context.Context, client *ManagementClient, payload request, state modelbootstrap.State) (map[string]string, error) {
+	var aliases aliasList
+	if err := client.JSON(ctx, "GET", "/aliases", nil, &aliases); err != nil {
+		return nil, err
+	}
+	catalog := make(map[string][]keyModel, len(aliases.Aliases))
+	for _, raw := range aliases.Aliases {
+		var alias struct {
+			Alias                    string  `json:"alias"`
+			BillingMode              string  `json:"billing_mode,omitempty"`
+			InputPricePerMillion     float64 `json:"input_price_per_million,omitempty"`
+			OutputPricePerMillion    float64 `json:"output_price_per_million,omitempty"`
+			CacheReadPricePerMillion float64 `json:"cache_read_price_per_million,omitempty"`
+			PerCallUSD               float64 `json:"per_call_usd,omitempty"`
+			Targets                  []struct {
+				Provider    string `json:"provider"`
+				TargetModel string `json:"target_model"`
+				Group       string `json:"group,omitempty"`
+			} `json:"targets"`
+		}
+		if err := json.Unmarshal(raw, &alias); err != nil || strings.TrimSpace(alias.Alias) == "" {
+			return nil, errors.New("CLIProxyAPI alias catalog contained an invalid entry")
+		}
+		catalogKey := strings.ToLower(alias.Alias)
+		if _, duplicate := catalog[catalogKey]; duplicate {
+			return nil, errors.New("CLIProxyAPI alias catalog contained a duplicate alias")
+		}
+		for _, target := range alias.Targets {
+			catalog[catalogKey] = append(catalog[catalogKey], keyModel{Alias: alias.Alias, Provider: target.Provider, TargetModel: target.TargetModel, Group: target.Group,
+				BillingMode: alias.BillingMode, InputPricePerMillion: alias.InputPricePerMillion, OutputPricePerMillion: alias.OutputPricePerMillion,
+				CacheReadPricePerMillion: alias.CacheReadPricePerMillion, PerCallUSD: alias.PerCallUSD})
+		}
+	}
+	var listed publicKeyList
+	if err := client.JSON(ctx, "GET", "/keys", nil, &listed); err != nil {
+		return nil, err
+	}
+	existing := make(map[string]bool, len(listed.Keys))
+	for _, key := range listed.Keys {
+		existing[key.ID] = true
+	}
+	result := response{Version: 1}
+	desiredByID := make(map[string]keyWrite, len(payload.Keys))
+	for _, requested := range payload.Keys {
+		desired := keyWrite{ID: requested.ID, Name: requested.Name, Enabled: requested.Enabled, RPM: requested.RPM, DailyLimitUSD: requested.DailyLimitUSD, WeeklyLimitUSD: requested.WeeklyLimitUSD, AllowModelsEndpoint: requested.AllowModelsEndpoint}
+		for _, name := range requested.Aliases {
+			models := catalog[strings.ToLower(name)]
+			if len(models) == 0 {
+				return nil, fmt.Errorf("CLIProxyAPI alias is missing or has no targets: %s", name)
+			}
+			desired.Models = append(desired.Models, models...)
+		}
+		desiredByID[desired.ID] = desired
+		var oneTime struct {
+			PlainKey  string          `json:"plain_key"`
+			Key       json.RawMessage `json:"key"`
+			Generated bool            `json:"generated"`
+		}
+		action := "created"
+		if existing[desired.ID] {
+			if err := client.JSON(ctx, "PATCH", "/keys", desired, &struct {
+				Key json.RawMessage `json:"key"`
+			}{}); err != nil {
+				return nil, err
+			}
+			if err := client.JSON(ctx, "POST", "/keys/rotate", map[string]string{"id": desired.ID}, &oneTime); err != nil {
+				return nil, err
+			}
+			action = "rotated"
+		} else if err := client.JSON(ctx, "POST", "/keys", desired, &oneTime); err != nil {
+			return nil, err
+		}
+		result.Keys = append(result.Keys, responseKey{ID: desired.ID, PlainKey: oneTime.PlainKey, Action: action})
+	}
+	var verified publicKeyList
+	if err := client.JSON(ctx, "GET", "/keys", nil, &verified); err != nil {
+		return nil, err
+	}
+	verifiedByID := make(map[string]publicKey, len(verified.Keys))
+	for _, key := range verified.Keys {
+		verifiedByID[key.ID] = key
+	}
+	for id, desired := range desiredByID {
+		actual, ok := verifiedByID[id]
+		if !ok || actual.Name != desired.Name || actual.Enabled != desired.Enabled || actual.RPM != desired.RPM ||
+			actual.AllowModelsEndpoint != desired.AllowModelsEndpoint || actual.DailyLimitUSD.String() != fmt.Sprint(desired.DailyLimitUSD) ||
+			actual.WeeklyLimitUSD.String() != fmt.Sprint(desired.WeeklyLimitUSD) || len(actual.Models) != len(desired.Models) {
+			return nil, fmt.Errorf("CLIProxyAPI key verification failed for %s", id)
+		}
+		models := make(map[string]bool, len(actual.Models))
+		for _, raw := range actual.Models {
+			var model keyModel
+			if err := json.Unmarshal(raw, &model); err != nil {
+				return nil, fmt.Errorf("CLIProxyAPI key model readback was invalid for %s", id)
+			}
+			models[strings.ToLower(model.Alias+"\x00"+model.Provider+"\x00"+model.TargetModel+"\x00"+model.Group)] = true
+		}
+		for _, model := range desired.Models {
+			if !models[strings.ToLower(model.Alias+"\x00"+model.Provider+"\x00"+model.TargetModel+"\x00"+model.Group)] {
+				return nil, fmt.Errorf("CLIProxyAPI key model verification failed for %s", id)
+			}
+		}
+	}
+	encoded, _ := json.Marshal(result)
+	return parseResponse(encoded, state)
 }
 
 func provisionRequest(options ProvisionOptions, state modelbootstrap.State) request {

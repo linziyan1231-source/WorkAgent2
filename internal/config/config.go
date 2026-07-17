@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -18,12 +17,7 @@ const (
 	ProductionListenAddress = "0.0.0.0:25808"
 	DefaultUserProfilesRoot = `C:\Users`
 	UserDataDirectoryName   = "AionUiPortal"
-	DefaultUsageSSHRoot     = `C:\ProgramData\AionUiPortalSsh`
-)
-
-var (
-	usageSSHTargetPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}@[A-Za-z0-9.-]{1,253}$`)
-	usageHelperPattern    = regexp.MustCompile(`^/[A-Za-z0-9._/-]{1,240}$`)
+	DefaultCLIProxyRoot     = `C:\ProgramData\CLIProxyAPI`
 )
 
 type Portal struct {
@@ -51,10 +45,8 @@ type Portal struct {
 	LoginBlockSeconds      int      `json:"login_block_seconds"`
 	LoginAccountFailures   int      `json:"login_account_failures"`
 	LoginIPFailures        int      `json:"login_ip_failures"`
-	UsageSSHTarget         string   `json:"usage_ssh_target"`
-	UsageSSHHelperPath     string   `json:"usage_ssh_helper_path"`
-	UsageSSHIdentityFile   string   `json:"usage_ssh_identity_file"`
-	UsageSSHKnownHostsFile string   `json:"usage_ssh_known_hosts_file"`
+	UsageManagementURL     string   `json:"usage_management_url"`
+	UsageManagementKeyFile string   `json:"usage_management_key_file"`
 	UsageQueryTimeoutSecs  int      `json:"usage_query_timeout_seconds"`
 	UsageCacheSeconds      int      `json:"usage_cache_seconds"`
 	OutboundProxyURL       string   `json:"outbound_proxy_url,omitempty"`
@@ -187,20 +179,13 @@ func (c Portal) Validate() error {
 		return errors.New("invalid login rate-limit settings")
 	}
 	if c.Mode == "production" {
-		if !usageSSHTargetPattern.MatchString(c.UsageSSHTarget) {
-			return errors.New("usage_ssh_target is invalid")
+		management, err := url.Parse(c.UsageManagementURL)
+		if err != nil || management.Scheme != "http" || management.Hostname() != "127.0.0.1" || management.Port() == "" || management.User != nil ||
+			management.Path != "/v0/management/plugins/cpa-key-policy" || management.RawQuery != "" || management.Fragment != "" {
+			return errors.New("usage_management_url must be the exact local cpa-key-policy Management API URL")
 		}
-		if !usageHelperPattern.MatchString(c.UsageSSHHelperPath) || strings.Contains(c.UsageSSHHelperPath, "..") {
-			return errors.New("usage_ssh_helper_path is invalid")
-		}
-		if !filepath.IsAbs(c.UsageSSHIdentityFile) || !filepath.IsAbs(c.UsageSSHKnownHostsFile) ||
-			strings.EqualFold(filepath.Clean(c.UsageSSHIdentityFile), filepath.Clean(c.UsageSSHKnownHostsFile)) {
-			return errors.New("usage SSH identity and known-hosts files must be distinct absolute paths")
-		}
-		usageRoot := filepath.Clean(DefaultUsageSSHRoot)
-		if !strings.EqualFold(filepath.Dir(filepath.Clean(c.UsageSSHIdentityFile)), usageRoot) ||
-			!strings.EqualFold(filepath.Dir(filepath.Clean(c.UsageSSHKnownHostsFile)), usageRoot) {
-			return fmt.Errorf("usage SSH files must be direct children of %s", DefaultUsageSSHRoot)
+		if !filepath.IsAbs(c.UsageManagementKeyFile) || !strings.EqualFold(filepath.Dir(filepath.Clean(c.UsageManagementKeyFile)), filepath.Clean(DefaultCLIProxyRoot)) {
+			return fmt.Errorf("usage_management_key_file must be a direct child of %s", DefaultCLIProxyRoot)
 		}
 	}
 	if c.UsageQueryTimeoutSecs < 5 || c.UsageQueryTimeoutSecs > 60 {

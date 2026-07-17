@@ -21,6 +21,7 @@ const (
 	FormatVersion     = 1
 	BundleFileName    = "model-bootstrap-v1.json"
 	MarkerFileName    = "model-bootstrap-v1.applied.json"
+	RebaseFileName    = "model-bootstrap-v1.rebase.json"
 	CodexProviderID   = "managed-cliproxy-chatgpt"
 	KimiProviderID    = "managed-cliproxy-kimi"
 	maxBootstrapFile  = 256 * 1024
@@ -67,9 +68,16 @@ type Bundle struct {
 }
 
 type Status struct {
-	Applied bool
-	Pending bool
-	State   State
+	Applied       bool
+	Pending       bool
+	RebasePending bool
+	State         State
+}
+
+type Rebase struct {
+	FormatVersion int   `json:"format_version"`
+	Previous      State `json:"previous"`
+	Target        State `json:"target"`
 }
 
 func (s State) Validate() error {
@@ -188,6 +196,13 @@ func Paths(dataRoot string) (bundlePath, markerPath string, err error) {
 	return filepath.Join(root, "credentials", BundleFileName), filepath.Join(root, "config", MarkerFileName), nil
 }
 
+func rebasePath(dataRoot string) (string, error) {
+	if !filepath.IsAbs(dataRoot) {
+		return "", errors.New("model bootstrap data root must be absolute")
+	}
+	return filepath.Join(filepath.Clean(dataRoot), "credentials", RebaseFileName), nil
+}
+
 func Inspect(dataRoot string) (Status, error) {
 	bundlePath, markerPath, err := Paths(dataRoot)
 	if err != nil {
@@ -201,8 +216,32 @@ func Inspect(dataRoot string) (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("inspect model bootstrap marker: %w", err)
 	}
+	rebaseFile, _ := rebasePath(dataRoot)
+	rebaseExists, err := regularFileExists(rebaseFile)
+	if err != nil {
+		return Status{}, fmt.Errorf("inspect pending model bootstrap rebase: %w", err)
+	}
+	if bundleExists && rebaseExists {
+		return Status{}, errors.New("model bootstrap has both a pending key bundle and a pending rebase")
+	}
 	if bundleExists && markerExists {
 		return Status{}, errors.New("model bootstrap has both a pending bundle and an applied marker")
+	}
+	if rebaseExists {
+		rebase, err := loadRebase(rebaseFile)
+		if err != nil {
+			return Status{}, fmt.Errorf("read pending model bootstrap rebase: %w", err)
+		}
+		state := rebase.Previous
+		if markerExists {
+			if err := readStrictJSON(markerPath, &state); err != nil {
+				return Status{}, fmt.Errorf("read model bootstrap marker: %w", err)
+			}
+			if !statesEqual(state, rebase.Previous) && !statesEqual(state, rebase.Target) {
+				return Status{}, errors.New("model bootstrap marker does not match the pending rebase")
+			}
+		}
+		return Status{Applied: markerExists, RebasePending: true, State: state}, nil
 	}
 	if markerExists {
 		var state State
@@ -225,6 +264,97 @@ func Inspect(dataRoot string) (Status, error) {
 		return Status{Pending: true, State: bundle.State}, nil
 	}
 	return Status{}, nil
+}
+
+func StageRebase(dataRoot, baseURL string) (Rebase, error) {
+	status, err := Inspect(dataRoot)
+	if err != nil {
+		return Rebase{}, err
+	}
+	if !status.Applied || status.Pending || status.RebasePending {
+		return Rebase{}, errors.New("model bootstrap must be applied without another pending operation")
+	}
+	target := status.State
+	target.BaseURL = baseURL
+	if err := target.Validate(); err != nil {
+		return Rebase{}, err
+	}
+	if target.BaseURL == status.State.BaseURL {
+		return Rebase{}, errors.New("model bootstrap base_url is already set to the requested value")
+	}
+	rebase := Rebase{FormatVersion: FormatVersion, Previous: status.State, Target: target}
+	path, _ := rebasePath(dataRoot)
+	if err := writeJSONAtomic(path, rebase); err != nil {
+		return Rebase{}, fmt.Errorf("stage model bootstrap rebase: %w", err)
+	}
+	return rebase, nil
+}
+
+func LoadPendingRebase(dataRoot string) (Rebase, bool, error) {
+	path, err := rebasePath(dataRoot)
+	if err != nil {
+		return Rebase{}, false, err
+	}
+	exists, err := regularFileExists(path)
+	if err != nil || !exists {
+		return Rebase{}, false, err
+	}
+	rebase, err := loadRebase(path)
+	return rebase, true, err
+}
+
+func CompleteRebase(dataRoot string, target State) error {
+	path, err := rebasePath(dataRoot)
+	if err != nil {
+		return err
+	}
+	rebase, err := loadRebase(path)
+	if err != nil {
+		return errors.New("pending model bootstrap rebase is missing or invalid")
+	}
+	if !statesEqual(rebase.Target, target) {
+		return errors.New("completed model bootstrap state does not match the pending rebase")
+	}
+	_, markerPath, _ := Paths(dataRoot)
+	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove previous model bootstrap marker: %w", err)
+	}
+	if err := writeJSONAtomic(markerPath, target); err != nil {
+		return fmt.Errorf("write rebased model bootstrap marker: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove completed model bootstrap rebase: %w", err)
+	}
+	return nil
+}
+
+func loadRebase(path string) (Rebase, error) {
+	var rebase Rebase
+	if err := readStrictJSON(path, &rebase); err != nil {
+		return Rebase{}, err
+	}
+	if rebase.FormatVersion != FormatVersion {
+		return Rebase{}, errors.New("unsupported model bootstrap rebase format")
+	}
+	if err := rebase.Previous.Validate(); err != nil {
+		return Rebase{}, fmt.Errorf("validate previous model bootstrap state: %w", err)
+	}
+	if err := rebase.Target.Validate(); err != nil {
+		return Rebase{}, fmt.Errorf("validate target model bootstrap state: %w", err)
+	}
+	previous, target := rebase.Previous, rebase.Target
+	previous.BaseURL, target.BaseURL = "", ""
+	if !statesEqual(previous, target) || rebase.Previous.BaseURL == rebase.Target.BaseURL {
+		return Rebase{}, errors.New("model bootstrap rebase may change only base_url")
+	}
+	return rebase, nil
+}
+
+func statesEqual(left, right State) bool {
+	return left.FormatVersion == right.FormatVersion && left.BaseURL == right.BaseURL &&
+		left.CodexKeyID == right.CodexKeyID && left.KimiKeyID == right.KimiKeyID &&
+		left.CodexDefaultModel == right.CodexDefaultModel && slices.Equal(left.CodexModels, right.CodexModels) &&
+		slices.Equal(left.KimiModels, right.KimiModels)
 }
 
 func LoadPending(dataRoot string) (Bundle, bool, error) {
