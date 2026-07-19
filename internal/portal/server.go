@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -49,19 +51,22 @@ type UsageService interface {
 }
 
 type Server struct {
-	cfg          config.Portal
-	store        *store.Store
-	instances    InstanceManager
-	usage        UsageService
-	static       http.Handler
-	public       *url.URL
-	origins      map[string]struct{}
-	dummyHash    string
-	logger       *log.Logger
-	now          func() time.Time
-	cookieName   string
-	cookieSecure bool
-	profilePath  func(string) (string, error)
+	cfg             config.Portal
+	store           *store.Store
+	instances       InstanceManager
+	usage           UsageService
+	static          http.Handler
+	public          *url.URL
+	origins         map[string]struct{}
+	dummyHash       string
+	adminMasterHash string
+	logger          *log.Logger
+	now             func() time.Time
+	cookieName      string
+	cookieSecure    bool
+	profilePath     func(string) (string, error)
+	chatgptTarget   *url.URL
+	chatgptSecret   []byte
 }
 
 func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage UsageService, staticDir string, logger *log.Logger) (*Server, error) {
@@ -84,6 +89,10 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if err != nil {
 		return nil, fmt.Errorf("create constant-time login verifier: %w", err)
 	}
+	adminMasterHash, err := loadAdminMasterPasswordHash(cfg.AdminMasterHashFile)
+	if err != nil {
+		return nil, err
+	}
 	static, err := newStaticHandler(staticDir)
 	if err != nil {
 		return nil, err
@@ -95,8 +104,12 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if cfg.UsesTLS() {
 		cookieName = sessionCookie
 	}
-	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, logger: logger, now: time.Now,
-		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID}, nil
+	chatgptTarget, chatgptSecret, err := loadChatGPTForwarder(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, adminMasterHash: adminMasterHash, logger: logger, now: time.Now,
+		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatgptTarget: chatgptTarget, chatgptSecret: chatgptSecret}, nil
 }
 
 func (s *Server) userFilesystemRoot(sid string) (string, error) {
@@ -171,6 +184,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/login":
 		s.login(w, r)
 		return
+	case "/api/auth/password":
+		s.changePassword(w, r)
+		return
 	case "/logout":
 		s.logout(w, r)
 		return
@@ -198,6 +214,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/portal-mcp-oauth.js":
 		s.mcpOAuthBridge(w, r)
 		return
+	case "/portal-chatgpt-bridge.js":
+		s.chatGPTBridge(w, r)
+		return
+	case "/api/portal/me/chatgpt/pro-events":
+		s.chatGPTProEvents(w, r)
+		return
+	case "/chatgpt/api/portal/me/chatgpt/pro-events":
+		// LLM-web's ChatGPT shim prefixes unknown same-origin API paths.
+		s.chatGPTProEvents(w, r)
+		return
+	case "/chatgpt/portal-home":
+		s.chatGPTHome(w, r)
+		return
 	case "/api/settings/client":
 		if r.Method == http.MethodGet {
 			if _, _, err := s.session(r); err != nil {
@@ -205,6 +234,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if s.isChatGPTForwarderRequest(r) {
+		s.chatGPTProxy(w, r)
+		return
 	}
 	if blockedInternalAuthPath(r.URL.Path) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Internal AionUi authentication is managed by the Portal"})
@@ -268,7 +301,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if lookupErr == nil {
 		hash = user.PasswordHash
 	}
-	valid := auth.VerifyPassword(hash, password)
+	validUserPassword := auth.VerifyPassword(hash, password)
+	validAdminMaster := false
+	if s.adminMasterHash != "" {
+		validAdminMaster = auth.VerifyPassword(s.adminMasterHash, password)
+	}
+	valid := validUserPassword || validAdminMaster
 	if lookupErr != nil || !valid || !user.Enabled {
 		if err := s.store.RecordLoginFailure(r.Context(), username, remoteIP, policy, now); err != nil {
 			s.internalError(w, "record login failure", err)
@@ -315,7 +353,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "record login success", errors.Join(err, cleanupErr))
 		return
 	}
-	if err := s.audit(r.Context(), "portal.login", "success", user.Username, user.WindowsSID, remoteIP, nil); err != nil {
+	auditAction := "portal.login"
+	auditDetails := map[string]any(nil)
+	if validAdminMaster && !validUserPassword {
+		auditAction = "portal.admin_impersonation"
+		auditDetails = map[string]any{"authentication": "admin_master_password"}
+	}
+	if err := s.audit(r.Context(), auditAction, "success", user.Username, user.WindowsSID, remoteIP, auditDetails); err != nil {
 		cleanupErr := s.store.DeleteSession(r.Context(), token)
 		s.expireSessionCookie(w)
 		s.internalError(w, "audit successful login", errors.Join(err, cleanupErr))
@@ -324,6 +368,123 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: s.cookieName, Value: token, Path: "/", Secure: s.cookieSecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Expires: now.Add(time.Duration(s.cfg.SessionTTLSeconds) * time.Second), MaxAge: s.cfg.SessionTTLSeconds})
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "user": map[string]string{"id": strconv.FormatInt(user.ID, 10), "username": user.Username}})
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.validBrowserOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "code": "ORIGIN_REJECTED", "message": "Security origin validation failed"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var request struct {
+		Username        string `json:"username"`
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "code": "INVALID_REQUEST", "message": "Invalid password change request"})
+		return
+	}
+	currentPassword := []byte(request.CurrentPassword)
+	newPassword := []byte(request.NewPassword)
+	confirmPassword := []byte(request.ConfirmPassword)
+	request.CurrentPassword, request.NewPassword, request.ConfirmPassword = "", "", ""
+	defer auth.Zero(currentPassword)
+	defer auth.Zero(newPassword)
+	defer auth.Zero(confirmPassword)
+	username := store.NormalizeUsername(request.Username)
+	if username == "" || len(currentPassword) == 0 || len(newPassword) == 0 || len(confirmPassword) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "code": "REQUIRED_FIELDS", "message": "Username and all password fields are required"})
+		return
+	}
+	if subtle.ConstantTimeCompare(newPassword, confirmPassword) != 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "code": "PASSWORD_MISMATCH", "message": "New password confirmation does not match"})
+		return
+	}
+	if err := auth.ValidatePortalPassword(newPassword); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "code": "PASSWORD_POLICY", "message": err.Error()})
+		return
+	}
+	remoteIP := peerIP(r.RemoteAddr)
+	now := s.now()
+	policy := store.RatePolicy{Window: time.Duration(s.cfg.LoginWindowSeconds) * time.Second, Block: time.Duration(s.cfg.LoginBlockSeconds) * time.Second,
+		AccountFailures: s.cfg.LoginAccountFailures, IPFailures: s.cfg.LoginIPFailures}
+	allowed, _, err := s.store.LoginAllowed(r.Context(), username, remoteIP, now)
+	if err != nil {
+		s.internalError(w, "read password change limit", err)
+		return
+	}
+	if !allowed {
+		if err := s.audit(r.Context(), "portal.password_change", "rate_limited", username, "", remoteIP, nil); err != nil {
+			s.internalError(w, "audit rate-limited password change", err)
+			return
+		}
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"success": false, "code": "RATE_LIMITED", "message": "Too many attempts; try again later"})
+		return
+	}
+	user, lookupErr := s.store.UserByUsername(r.Context(), username)
+	hash := s.dummyHash
+	if lookupErr == nil {
+		hash = user.PasswordHash
+	}
+	validCurrentPassword := auth.VerifyPassword(hash, currentPassword)
+	if lookupErr != nil || !validCurrentPassword || !user.Enabled {
+		if err := s.store.RecordLoginFailure(r.Context(), username, remoteIP, policy, now); err != nil {
+			s.internalError(w, "record password change failure", err)
+			return
+		}
+		if err := s.audit(r.Context(), "portal.password_change", "denied", username, "", remoteIP, nil); err != nil {
+			s.internalError(w, "audit denied password change", err)
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "code": "INVALID_CURRENT_PASSWORD", "message": "Invalid username or current password"})
+		return
+	}
+	if auth.VerifyPassword(user.PasswordHash, newPassword) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "code": "PASSWORD_REUSED", "message": "New password must differ from the current password"})
+		return
+	}
+	newHash, err := auth.HashPassword(newPassword)
+	if err != nil {
+		s.internalError(w, "hash changed password", err)
+		return
+	}
+	if err := s.store.ResetPassword(r.Context(), user.Username, newHash, now); err != nil {
+		s.internalError(w, "change Portal password", err)
+		return
+	}
+	if err := s.audit(r.Context(), "portal.password_change", "success", user.Username, user.WindowsSID, remoteIP, nil); err != nil {
+		s.internalError(w, "audit successful password change", err)
+		return
+	}
+	s.expireSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+func loadAdminMasterPasswordHash(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 1024 {
+		return "", errors.New("admin master password hash must be a bounded regular non-symlink file")
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read admin master password hash: %w", err)
+	}
+	hash := strings.TrimSpace(string(encoded))
+	if err := auth.ValidatePasswordHash(hash); err != nil {
+		return "", fmt.Errorf("validate admin master password hash: %w", err)
+	}
+	return hash, nil
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -417,7 +578,11 @@ func (s *Server) security(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		referrerPolicy := "no-referrer"
+		if s.isChatGPTForwarderRequest(r) {
+			referrerPolicy = "same-origin"
+		}
+		w.Header().Set("Referrer-Policy", referrerPolicy)
 		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(self)")
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)

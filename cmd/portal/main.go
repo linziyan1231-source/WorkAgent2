@@ -75,6 +75,8 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 		return modelBootstrapCommand(ctx, manager, arguments[1:])
 	case "limits":
 		return limitsCommand(ctx, manager, arguments[1:])
+	case "chatgpt-pro-limit":
+		return chatGPTProLimitCommand(ctx, manager, arguments[1:])
 	case "logs":
 		return logsCommand(ctx, manager, arguments[1:])
 	case "release":
@@ -95,6 +97,23 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func chatGPTProLimitCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
+	if len(arguments) == 0 || arguments[0] != "set" {
+		return errors.New("usage: portal --config <path> chatgpt-pro-limit set --username <name> --weekly <n>")
+	}
+	flags := newFlags("chatgpt-pro-limit set")
+	username := flags.String("username", "", "Portal username")
+	weekly := flags.Int("weekly", 0, "ChatGPT Pro sends per natural week")
+	if err := flags.Parse(arguments[1:]); err != nil || *username == "" || *weekly < 1 || *weekly > 10000 || flags.NArg() != 0 {
+		return errors.New("weekly ChatGPT Pro limit must be between 1 and 10000")
+	}
+	if err := manager.SetChatGPTProWeeklyLimit(ctx, *username, *weekly); err != nil {
+		return err
+	}
+	fmt.Printf("ChatGPT Pro weekly limit for %s is now %d.\n", *username, *weekly)
+	return nil
 }
 
 func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
@@ -863,5 +882,5 @@ func newFlags(name string) *flag.FlagSet {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|model-bootstrap|limits|logs|release|acl|readiness> ...")
+	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|model-bootstrap|limits|chatgpt-pro-limit|logs|release|acl|readiness> ...")
 }

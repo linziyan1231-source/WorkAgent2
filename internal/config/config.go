@@ -18,6 +18,7 @@ const (
 	DefaultUserProfilesRoot = `C:\Users`
 	UserDataDirectoryName   = "AionUiPortal"
 	DefaultCLIProxyRoot     = `C:\ProgramData\CLIProxyAPI`
+	DefaultPortalDataRoot   = `C:\ProgramData\AionUiPortal`
 )
 
 type Portal struct {
@@ -45,10 +46,14 @@ type Portal struct {
 	LoginBlockSeconds      int      `json:"login_block_seconds"`
 	LoginAccountFailures   int      `json:"login_account_failures"`
 	LoginIPFailures        int      `json:"login_ip_failures"`
+	AdminMasterHashFile    string   `json:"admin_master_password_hash_file,omitempty"`
 	UsageManagementURL     string   `json:"usage_management_url"`
 	UsageManagementKeyFile string   `json:"usage_management_key_file"`
 	UsageQueryTimeoutSecs  int      `json:"usage_query_timeout_seconds"`
 	UsageCacheSeconds      int      `json:"usage_cache_seconds"`
+	ChatGPTForwarderURL    string   `json:"chatgpt_forwarder_url"`
+	ChatGPTSecretFile      string   `json:"chatgpt_forwarder_secret_file"`
+	ChatGPTProModels       []string `json:"chatgpt_pro_models"`
 	OutboundProxyURL       string   `json:"outbound_proxy_url,omitempty"`
 	SupportedAionCore      []string `json:"supported_aioncore_versions"`
 }
@@ -69,6 +74,9 @@ func DefaultPortal() Portal {
 		LoginIPFailures:        20,
 		UsageQueryTimeoutSecs:  25,
 		UsageCacheSeconds:      30,
+		ChatGPTForwarderURL:    "http://127.0.0.1:1560",
+		ChatGPTSecretFile:      filepath.Join(DefaultPortalDataRoot, "chatgpt-forwarder.key"),
+		ChatGPTProModels:       []string{"gpt-5-4-pro", "gpt-5-5-pro", "gpt-5-6-pro"},
 		SupportedAionCore:      []string{"v0.1.42"},
 	}
 }
@@ -178,6 +186,14 @@ func (c Portal) Validate() error {
 	if c.LoginWindowSeconds < 60 || c.LoginBlockSeconds < 60 || c.LoginAccountFailures < 1 || c.LoginIPFailures < c.LoginAccountFailures {
 		return errors.New("invalid login rate-limit settings")
 	}
+	if c.AdminMasterHashFile != "" {
+		if !filepath.IsAbs(c.AdminMasterHashFile) {
+			return errors.New("admin_master_password_hash_file must be absolute when configured")
+		}
+		if c.Mode == "production" && !strings.EqualFold(filepath.Dir(filepath.Clean(c.AdminMasterHashFile)), filepath.Clean(DefaultPortalDataRoot)) {
+			return fmt.Errorf("admin_master_password_hash_file must be a direct child of %s", DefaultPortalDataRoot)
+		}
+	}
 	if c.Mode == "production" {
 		management, err := url.Parse(c.UsageManagementURL)
 		if err != nil || management.Scheme != "http" || management.Hostname() != "127.0.0.1" || management.Port() == "" || management.User != nil ||
@@ -194,6 +210,9 @@ func (c Portal) Validate() error {
 	if c.UsageCacheSeconds < 1 || c.UsageCacheSeconds > 60 {
 		return errors.New("usage_cache_seconds must be between 1 and 60")
 	}
+	if err := c.validateChatGPTForwarder(); err != nil {
+		return err
+	}
 	if err := validateOutboundProxyURL(c.OutboundProxyURL); err != nil {
 		return err
 	}
@@ -204,6 +223,41 @@ func (c Portal) Validate() error {
 		if strings.TrimSpace(version) == "" {
 			return errors.New("supported_aioncore_versions contains an empty version")
 		}
+	}
+	return nil
+}
+
+func (c Portal) validateChatGPTForwarder() error {
+	if c.ChatGPTForwarderURL == "" {
+		if c.Mode == "production" {
+			return errors.New("chatgpt_forwarder_url is required in production")
+		}
+		return nil
+	}
+	forwarder, err := url.Parse(c.ChatGPTForwarderURL)
+	if err != nil || forwarder.Scheme != "http" || forwarder.Hostname() != "127.0.0.1" || forwarder.Port() == "" || forwarder.User != nil ||
+		forwarder.Opaque != "" || (forwarder.Path != "" && forwarder.Path != "/") || forwarder.RawQuery != "" || forwarder.Fragment != "" {
+		return errors.New("chatgpt_forwarder_url must be an exact 127.0.0.1 HTTP origin")
+	}
+	if !filepath.IsAbs(c.ChatGPTSecretFile) {
+		return errors.New("chatgpt_forwarder_secret_file must be absolute")
+	}
+	if c.Mode == "production" && !strings.EqualFold(filepath.Dir(filepath.Clean(c.ChatGPTSecretFile)), filepath.Clean(DefaultPortalDataRoot)) {
+		return fmt.Errorf("chatgpt_forwarder_secret_file must be a direct child of %s", DefaultPortalDataRoot)
+	}
+	if len(c.ChatGPTProModels) == 0 {
+		return errors.New("chatgpt_pro_models must not be empty")
+	}
+	seen := make(map[string]struct{}, len(c.ChatGPTProModels))
+	for _, model := range c.ChatGPTProModels {
+		model = strings.ToLower(strings.TrimSpace(model))
+		if !strings.HasPrefix(model, "gpt-") || !strings.HasSuffix(model, "-pro") {
+			return fmt.Errorf("chatgpt_pro_models contains invalid model %q", model)
+		}
+		if _, duplicate := seen[model]; duplicate {
+			return fmt.Errorf("chatgpt_pro_models contains duplicate model %q", model)
+		}
+		seen[model] = struct{}{}
 	}
 	return nil
 }

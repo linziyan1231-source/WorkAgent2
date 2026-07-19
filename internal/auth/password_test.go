@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPasswordHashRoundTrip(t *testing.T) {
 	password := []byte("correct horse battery staple")
@@ -16,6 +19,22 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 	}
 	if VerifyPassword("$argon2id$invalid", password) {
 		t.Fatal("malformed hash verified")
+	}
+}
+
+func TestValidatePasswordHashRejectsMalformedOrUnsupportedHashes(t *testing.T) {
+	password := []byte("correct horse battery staple")
+	hash, err := HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePasswordHash(hash); err != nil {
+		t.Fatalf("valid hash rejected: %v", err)
+	}
+	for _, invalid := range []string{"", "$argon2id$invalid", strings.Replace(hash, "m=65536", "m=32768", 1)} {
+		if err := ValidatePasswordHash(invalid); err == nil {
+			t.Fatalf("invalid hash accepted: %q", invalid)
+		}
 	}
 }
 

@@ -158,6 +158,22 @@ func (m *Manager) SetUserEnabled(ctx context.Context, username string, enabled b
 	return nil
 }
 
+func (m *Manager) SetChatGPTProWeeklyLimit(ctx context.Context, username string, limit int) error {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if err := m.Store.SetChatGPTProWeeklyLimit(ctx, user.ID, limit, now); err != nil {
+		return err
+	}
+	if err := m.Store.Audit(ctx, "admin.user.set_chatgpt_pro_limit", "success", user.Username, user.WindowsSID, "local-admin",
+		map[string]any{"weekly_limit": limit}, now); err != nil {
+		return fmt.Errorf("ChatGPT Pro limit was updated but its audit event could not be recorded: %w", err)
+	}
+	return nil
+}
+
 func (m *Manager) ResetPortalPassword(ctx context.Context, username string, password []byte) error {
 	defer auth.Zero(password)
 	if err := auth.ValidatePortalPassword(password); err != nil {
@@ -708,6 +724,9 @@ func (m *Manager) servicePrivateDirectories() []string {
 
 func (m *Manager) servicePrivateFiles() []string {
 	paths := []string{m.ConfigPath, m.Config.DatabasePath, m.Config.AuditLogPath, m.Config.PortalLogPath}
+	if m.Config.ChatGPTForwarderURL != "" {
+		paths = append(paths, m.Config.ChatGPTSecretFile)
+	}
 	if m.Config.UsesTLS() {
 		paths = append(paths, m.Config.TLSCertificateFile, m.Config.TLSPrivateKeyFile)
 	}

@@ -54,6 +54,21 @@ func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"success": false, "message": "Quota service is temporarily unavailable"})
 		return
 	}
+	quota, err := s.store.ChatGPTProQuota(r.Context(), session.User.ID, s.now())
+	if err != nil {
+		s.internalError(w, "read ChatGPT Pro quota", err)
+		return
+	}
+	for index := range summary.Providers {
+		if summary.Providers[index].Kind == portalusage.KindChatGPT {
+			summary.Providers[index].Pro = &portalusage.CountWindow{
+				Used:    quota.Confirmed + quota.Pending,
+				Limit:   quota.Limit,
+				ResetAt: quota.ResetAt.Format(time.RFC3339),
+			}
+			break
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": summary})
 }
 

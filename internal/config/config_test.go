@@ -142,6 +142,45 @@ func TestPortalUsageManagementConfigRejectsNonLocalOrBroadPaths(t *testing.T) {
 	}
 }
 
+func TestChatGPTForwarderConfigRequiresLoopbackSecretAndProModels(t *testing.T) {
+	valid := validPortal(t)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid ChatGPT forwarder config rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*Portal){
+		"remote forwarder": func(c *Portal) { c.ChatGPTForwarderURL = "http://192.0.2.10:1560" },
+		"forwarder path":   func(c *Portal) { c.ChatGPTForwarderURL = "http://127.0.0.1:1560/chatgpt" },
+		"secret outside Portal root": func(c *Portal) {
+			c.ChatGPTSecretFile = `C:\Users\user-4194d170\chatgpt.key`
+		},
+		"invalid model":   func(c *Portal) { c.ChatGPTProModels = []string{"gpt-5-6-thinking"} },
+		"duplicate model": func(c *Portal) { c.ChatGPTProModels = []string{"gpt-5-6-pro", "GPT-5-6-PRO"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("unsafe ChatGPT forwarder configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestAdminMasterPasswordHashFileIsOptionalAndConfinedToPortalData(t *testing.T) {
+	valid := validPortal(t)
+	valid.AdminMasterHashFile = filepath.Join(DefaultPortalDataRoot, "admin-master-password.argon2id")
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid admin master password hash path rejected: %v", err)
+	}
+	for _, invalid := range []string{"relative.argon2id", `C:\Users\user-4194d170\admin-master-password.argon2id`} {
+		candidate := valid
+		candidate.AdminMasterHashFile = invalid
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("unsafe admin master password hash path accepted: %q", invalid)
+		}
+	}
+}
+
 func TestPortalConfigRejectsTrailingJSONValue(t *testing.T) {
 	cfg := validPortal(t)
 	b, err := json.Marshal(cfg)

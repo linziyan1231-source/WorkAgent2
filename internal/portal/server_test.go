@@ -2,6 +2,7 @@ package portal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
@@ -414,6 +415,151 @@ func TestLoginCookieAndPortalUserContract(t *testing.T) {
 	defer instances.mu.Unlock()
 	if len(instances.ensureSIDs) != 1 || instances.ensureSIDs[0] != testSID1 {
 		t.Fatalf("login routed from anything other than stored SID: %v", instances.ensureSIDs)
+	}
+}
+
+func TestPasswordChangeRequiresCurrentPasswordAndInvalidatesSessions(t *testing.T) {
+	server, data, _ := testServer(t)
+	currentPassword := []byte("correct-employee-portal-password")
+	newPassword := []byte("new-employee-portal-password")
+	hash, err := auth.HashPassword(currentPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := data.CreateUser(context.Background(), "password-alice", hash, testSID1, `SERVER\test1`, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := auth.RandomToken(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := data.CreateSession(context.Background(), token, user, time.Hour, "192.0.2.10", "old-browser", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"username":"password-alice","current_password":%q,"new_password":%q,"confirm_password":%q}`,
+		string(currentPassword), string(newPassword), string(newPassword))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, changePasswordRequest(body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("password change status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := data.UserByUsername(context.Background(), user.Username)
+	if err != nil || !auth.VerifyPassword(updated.PasswordHash, newPassword) || auth.VerifyPassword(updated.PasswordHash, currentPassword) {
+		t.Fatalf("password hash was not replaced safely: err=%v", err)
+	}
+	if _, err := data.Session(context.Background(), token, time.Hour, time.Now()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("old session survived password change: %v", err)
+	}
+}
+
+func TestPasswordChangeRejectsInvalidCurrentPasswordAndConfirmation(t *testing.T) {
+	server, data, _ := testServer(t)
+	currentPassword := []byte("correct-employee-portal-password")
+	hash, _ := auth.HashPassword(currentPassword)
+	if _, err := data.CreateUser(context.Background(), "password-bob", hash, testSID1, `SERVER\test1`, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"invalid current password": `{"username":"password-bob","current_password":"wrong-employee-portal-password","new_password":"new-employee-portal-password","confirm_password":"new-employee-portal-password"}`,
+		"mismatched confirmation":  `{"username":"password-bob","current_password":"correct-employee-portal-password","new_password":"new-employee-portal-password","confirm_password":"different-portal-password"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, changePasswordRequest(body))
+			if response.Code != http.StatusUnauthorized && response.Code != http.StatusBadRequest {
+				t.Fatalf("rejected password change status=%d body=%s", response.Code, response.Body.String())
+			}
+			unchanged, err := data.UserByUsername(context.Background(), "password-bob")
+			if err != nil || !auth.VerifyPassword(unchanged.PasswordHash, currentPassword) {
+				t.Fatalf("rejected password change modified credentials: %v", err)
+			}
+		})
+	}
+}
+
+func TestAdminMasterPasswordLoginIsDisabledByDefaultAndAuditedSeparatelyWhenConfigured(t *testing.T) {
+	root := t.TempDir()
+	server, data, _ := testServerAtRoot(t, root)
+	userPassword := []byte("correct-employee-portal-password")
+	masterPassword := []byte("administrator-master-password")
+	userHash, _ := auth.HashPassword(userPassword)
+	if _, err := data.CreateUser(context.Background(), "impersonated-alice", userHash, testSID1, `SERVER\test1`, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	requestBody := fmt.Sprintf(`{"username":"impersonated-alice","password":%q}`, string(masterPassword))
+	disabledResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(disabledResponse, loginRequest(requestBody))
+	if disabledResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled admin master password login status=%d body=%s", disabledResponse.Code, disabledResponse.Body.String())
+	}
+	masterHash, _ := auth.HashPassword(masterPassword)
+	server.adminMasterHash = masterHash
+	enabledResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(enabledResponse, loginRequest(requestBody))
+	if enabledResponse.Code != http.StatusOK {
+		t.Fatalf("configured admin master password login status=%d body=%s", enabledResponse.Code, enabledResponse.Body.String())
+	}
+	if !strings.Contains(enabledResponse.Body.String(), `"username":"impersonated-alice"`) {
+		t.Fatalf("admin master password login did not bind the target account: %s", enabledResponse.Body.String())
+	}
+	auditLog, err := os.ReadFile(filepath.Join(root, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditLog), `"action":"portal.admin_impersonation"`) ||
+		!strings.Contains(string(auditLog), `"authentication":"admin_master_password"`) {
+		t.Fatalf("admin master password login was not distinctly audited: %s", auditLog)
+	}
+}
+
+func TestAdminMasterPasswordCannotChangeTargetPassword(t *testing.T) {
+	server, data, _ := testServer(t)
+	userPassword := []byte("correct-employee-portal-password")
+	masterPassword := []byte("administrator-master-password")
+	userHash, _ := auth.HashPassword(userPassword)
+	if _, err := data.CreateUser(context.Background(), "protected-alice", userHash, testSID1, `SERVER\test1`, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	server.adminMasterHash, _ = auth.HashPassword(masterPassword)
+	body := fmt.Sprintf(`{"username":"protected-alice","current_password":%q,"new_password":"new-employee-portal-password","confirm_password":"new-employee-portal-password"}`,
+		string(masterPassword))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, changePasswordRequest(body))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("admin master password changed target credentials: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminMasterPasswordHashLoaderFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "admin-master.argon2id")
+	validHash, err := auth.HashPassword([]byte("administrator-master-password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(validHash+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadAdminMasterPasswordHash(path)
+	if err != nil || loaded != validHash {
+		t.Fatalf("valid admin master password hash was not loaded: loaded=%q err=%v", loaded, err)
+	}
+	if err := os.WriteFile(path, []byte("not-an-argon2id-hash"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadAdminMasterPasswordHash(path); err == nil {
+		t.Fatal("malformed admin master password hash was accepted")
+	}
+	if _, err := loadAdminMasterPasswordHash(root); err == nil {
+		t.Fatal("directory admin master password hash source was accepted")
+	}
+	oversized := filepath.Join(root, "oversized.argon2id")
+	if err := os.WriteFile(oversized, bytes.Repeat([]byte("x"), 1025), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadAdminMasterPasswordHash(oversized); err == nil {
+		t.Fatal("oversized admin master password hash source was accepted")
 	}
 }
 
@@ -1209,6 +1355,9 @@ func testServerAtRootWithPublicURLAndOrigins(t *testing.T, root, publicURL strin
 	cfg.ListenAddress = "127.0.0.1:0"
 	cfg.PublicBaseURL = publicURL
 	cfg.BrowserOrigins = append([]string(nil), origins...)
+	cfg.ChatGPTForwarderURL = ""
+	cfg.ChatGPTSecretFile = ""
+	cfg.ChatGPTProModels = nil
 	cfg.LoginAccountFailures = 5
 	cfg.LoginIPFailures = 20
 	instances := &fakeInstances{route: instance.Route{Status: ipc.Status{WindowsSID: testSID1, Healthy: true, WebPort: 31001, AionCorePort: 32001,
@@ -1223,6 +1372,14 @@ func testServerAtRootWithPublicURLAndOrigins(t *testing.T, root, publicURL strin
 
 func loginRequest(body string) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, "https://portal.example.test/login", strings.NewReader(body))
+	request.RemoteAddr = "192.0.2.10:54321"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://portal.example.test")
+	return request
+}
+
+func changePasswordRequest(body string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/auth/password", strings.NewReader(body))
 	request.RemoteAddr = "192.0.2.10:54321"
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "https://portal.example.test")

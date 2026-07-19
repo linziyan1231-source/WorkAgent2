@@ -28,10 +28,17 @@ type Window struct {
 }
 
 type Provider struct {
-	Kind   string `json:"kind"`
-	Label  string `json:"label"`
-	Daily  Window `json:"daily"`
-	Weekly Window `json:"weekly"`
+	Kind   string       `json:"kind"`
+	Label  string       `json:"label"`
+	Daily  Window       `json:"daily"`
+	Weekly Window       `json:"weekly"`
+	Pro    *CountWindow `json:"pro,omitempty"`
+}
+
+type CountWindow struct {
+	Used    int    `json:"used"`
+	Limit   int    `json:"limit"`
+	ResetAt string `json:"reset_at"`
 }
 
 type Summary struct {

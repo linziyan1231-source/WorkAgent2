@@ -32,6 +32,9 @@ func TestCurrentUsageUsesOnlyAuthenticatedUsersSIDBoundMapping(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"used_usd":"1.25"`) || strings.Contains(response.Body.String(), `"used_usd":"2.75"`) {
 		t.Fatalf("first user received another user's quota: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"pro":{"used":0,"limit":7,`) {
+		t.Fatalf("first user response omitted default ChatGPT Pro quota: %s", response.Body.String())
+	}
 	secondToken := createPortalSessionFor(t, data, "portal-bob", testSID2, `SERVER\test2`)
 	secondResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(secondResponse, authenticatedUsageRequest(secondToken, "/api/portal/me/usage"))

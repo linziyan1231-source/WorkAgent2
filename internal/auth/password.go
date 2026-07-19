@@ -64,9 +64,37 @@ func HashPassword(password []byte) (string, error) {
 }
 
 func VerifyPassword(encoded string, password []byte) bool {
+	parameters, ok := decodePasswordHash(encoded)
+	if !ok {
+		return false
+	}
+	defer zero(parameters.expected)
+	actual := argon2.IDKey(password, parameters.salt, parameters.iterations, parameters.memory, parameters.parallelism, uint32(len(parameters.expected)))
+	defer zero(actual)
+	return subtle.ConstantTimeCompare(actual, parameters.expected) == 1
+}
+
+func ValidatePasswordHash(encoded string) error {
+	parameters, ok := decodePasswordHash(encoded)
+	if !ok {
+		return errors.New("invalid Argon2id password hash")
+	}
+	zero(parameters.expected)
+	return nil
+}
+
+type passwordHashParameters struct {
+	memory      uint32
+	iterations  uint32
+	parallelism uint8
+	salt        []byte
+	expected    []byte
+}
+
+func decodePasswordHash(encoded string) (passwordHashParameters, bool) {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" {
-		return false
+		return passwordHashParameters{}, false
 	}
 	var memory uint64
 	var iterations uint64
@@ -74,11 +102,11 @@ func VerifyPassword(encoded string, password []byte) bool {
 	for _, field := range strings.Split(parts[3], ",") {
 		kv := strings.SplitN(field, "=", 2)
 		if len(kv) != 2 {
-			return false
+			return passwordHashParameters{}, false
 		}
 		value, err := strconv.ParseUint(kv[1], 10, 32)
 		if err != nil {
-			return false
+			return passwordHashParameters{}, false
 		}
 		switch kv[0] {
 		case "m":
@@ -88,23 +116,21 @@ func VerifyPassword(encoded string, password []byte) bool {
 		case "p":
 			parallelism = value
 		default:
-			return false
+			return passwordHashParameters{}, false
 		}
 	}
 	if memory != argonMemory || iterations != argonIterations || parallelism != argonParallelism {
-		return false
+		return passwordHashParameters{}, false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil || len(salt) != argonSaltLength {
-		return false
+		return passwordHashParameters{}, false
 	}
 	expected, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil || len(expected) != argonKeyLength {
-		return false
+		return passwordHashParameters{}, false
 	}
-	actual := argon2.IDKey(password, salt, uint32(iterations), uint32(memory), uint8(parallelism), uint32(len(expected)))
-	defer zero(actual)
-	return subtle.ConstantTimeCompare(actual, expected) == 1
+	return passwordHashParameters{memory: uint32(memory), iterations: uint32(iterations), parallelism: uint8(parallelism), salt: salt, expected: expected}, true
 }
 
 func RandomToken(bytes int) (string, error) {

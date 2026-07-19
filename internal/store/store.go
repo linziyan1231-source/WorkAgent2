@@ -148,7 +148,36 @@ CREATE TABLE IF NOT EXISTS audit_events (
  remote_ip TEXT,
  details_json TEXT NOT NULL
 );
-PRAGMA user_version=2;`
+CREATE TABLE IF NOT EXISTS chatgpt_pro_limits (
+ user_id INTEGER PRIMARY KEY REFERENCES portal_users(id) ON DELETE CASCADE,
+ weekly_limit INTEGER NOT NULL CHECK(weekly_limit BETWEEN 1 AND 10000),
+ updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chatgpt_pro_usage (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ logical_send_id TEXT NOT NULL UNIQUE CHECK(length(logical_send_id)=64),
+ week_start INTEGER NOT NULL,
+ requested_model TEXT NOT NULL,
+ thinking_effort TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('reserved','confirmed_pro','confirmed_fallback','unknown','upstream_rejected')),
+ reserved_at INTEGER NOT NULL,
+ finished_at INTEGER,
+ upstream_status INTEGER,
+ stream_completed INTEGER NOT NULL DEFAULT 0 CHECK(stream_completed IN (0,1)),
+ served_models_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS chatgpt_pro_usage_user_week ON chatgpt_pro_usage(user_id,week_start,status);
+CREATE TABLE IF NOT EXISTS chatgpt_pro_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ usage_id INTEGER NOT NULL UNIQUE REFERENCES chatgpt_pro_usage(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind='confirmed_fallback'),
+ occurred_at INTEGER NOT NULL,
+ acknowledged_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS chatgpt_pro_events_pending ON chatgpt_pro_events(user_id,acknowledged_at,id);
+PRAGMA user_version=3;`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate portal database: %w", err)
 	}
@@ -163,6 +192,9 @@ PRAGMA user_version=2;`
 		if _, err := s.db.ExecContext(ctx, `PRAGMA user_version=2`); err != nil {
 			return fmt.Errorf("record Portal database migration: %w", err)
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA user_version=3`); err != nil {
+		return fmt.Errorf("record Portal database migration: %w", err)
 	}
 	return nil
 }
