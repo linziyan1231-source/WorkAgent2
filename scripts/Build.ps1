@@ -2,7 +2,8 @@
 param(
     [string]$AionUiSource = (Join-Path $PSScriptRoot '..\..\AionUi'),
     [string]$GoExe = 'go',
-    [switch]$SkipAionUiPack
+    [switch]$SkipAionUiPack,
+    [switch]$ReuseVerifiedPortalBinaries
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,11 @@ $packedDirectory = Join-Path $dist 'staging\aionui-web'
 if (-not $SkipAionUiPack) {
     Push-Location $aionRoot
     try {
+        # pack-web-cli copies the already-built renderer from out/renderer.
+        # Always rebuild it first so an immutable Web release cannot silently
+        # package stale UI/help/i18n assets from an earlier source revision.
+        & bun run package
+        if ($LASTEXITCODE -ne 0) { throw "AionUi renderer build failed with exit code $LASTEXITCODE" }
         $env:PACK_PLATFORM = 'win32'
         $env:PACK_ARCH = 'x64'
         & node 'scripts\pack-web-cli.js'
@@ -81,20 +87,37 @@ $env:GOTOOLCHAIN = 'local'
 $env:CGO_ENABLED = '0'
 Push-Location $projectRoot
 try {
-    & $GoExe test -count=1 ./...
-    if ($LASTEXITCODE -ne 0) { throw "Go behavior tests failed" }
-    & $GoExe vet -unsafeptr=false ./...
-    if ($LASTEXITCODE -ne 0) { throw "Go vet failed" }
     $bin = Join-Path $projectRoot 'artifacts\bin'
     New-Item -ItemType Directory -Force -Path $bin | Out-Null
-    & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionUiPortal.exe') ./cmd/aionui-portal
-    if ($LASTEXITCODE -ne 0) { throw "AionUiPortal build failed" }
-    & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionUiUserHost.exe') ./cmd/aionui-userhost
-    if ($LASTEXITCODE -ne 0) { throw "AionUiUserHost build failed" }
-    & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'portal.exe') ./cmd/portal
-    if ($LASTEXITCODE -ne 0) { throw "Portal administrator CLI build failed" }
-    & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionAgentCli.exe') ./cmd/aion-agent-cli
-    if ($LASTEXITCODE -ne 0) { throw "Shared agent CLI launcher build failed" }
+    if (-not $ReuseVerifiedPortalBinaries) {
+        & $GoExe test -count=1 ./...
+        if ($LASTEXITCODE -ne 0) { throw "Go behavior tests failed" }
+        & $GoExe vet -unsafeptr=false ./...
+        if ($LASTEXITCODE -ne 0) { throw "Go vet failed" }
+        & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionUiPortal.exe') ./cmd/aionui-portal
+        if ($LASTEXITCODE -ne 0) { throw "AionUiPortal build failed" }
+        & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionUiUserHost.exe') ./cmd/aionui-userhost
+        if ($LASTEXITCODE -ne 0) { throw "AionUiUserHost build failed" }
+        & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'portal.exe') ./cmd/portal
+        if ($LASTEXITCODE -ne 0) { throw "Portal administrator CLI build failed" }
+        & $GoExe build -trimpath -ldflags '-s -w' -o (Join-Path $bin 'AionAgentCli.exe') ./cmd/aion-agent-cli
+        if ($LASTEXITCODE -ne 0) { throw "Shared agent CLI launcher build failed" }
+    } else {
+        $previousManifestPath = Join-Path $projectRoot 'artifacts\build-manifest.json'
+        if (-not (Test-Path -LiteralPath $previousManifestPath -PathType Leaf)) {
+            throw 'Cannot reuse Portal binaries without the previous hash-recorded build manifest.'
+        }
+        $previousManifest = Get-Content -LiteralPath $previousManifestPath -Raw | ConvertFrom-Json
+        foreach ($name in @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionAgentCli.exe')) {
+            $path = Join-Path $bin $name
+            $expectedHash = [string]$previousManifest.binaries.$name.sha256
+            $actualBinaryHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if (-not $expectedHash -or $actualBinaryHash -cne $expectedHash) {
+                throw "Reusable Portal binary does not match the previous manifest: $name"
+            }
+        }
+        Write-Host 'Web-only release: reusing hash-recorded Portal binaries.'
+    }
 
     foreach ($temporary in @(Get-ChildItem -LiteralPath $bin -File -Filter '*.exe~')) {
         Remove-Item -LiteralPath $temporary.FullName -Force
