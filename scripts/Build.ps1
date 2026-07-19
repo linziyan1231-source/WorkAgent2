@@ -39,6 +39,21 @@ foreach ($path in @(
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required build output is missing: $path" }
 }
 
+$managedResourcesRoot = Join-Path $packedDirectory 'bundled-aioncore\win32-x64\managed-resources'
+& (Join-Path $PSScriptRoot 'Patch-CodexAcpSessionFork.ps1') -ManagedResourcesRoot $managedResourcesRoot
+
+# The managed bridge is part of the immutable Web/Core bundle. Rebuild the
+# archive and checksum after patching so the published archive and expanded
+# staging tree describe the exact same release bytes.
+& tar -czf $archive -C (Join-Path $dist 'staging') 'aionui-web'
+if ($LASTEXITCODE -ne 0) { throw "Repack patched AionUi archive failed with exit code $LASTEXITCODE" }
+$patchedArchiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText(
+    "$archive.sha256",
+    "$patchedArchiveHash  $([IO.Path]::GetFileName($archive))`n",
+    [Text.UTF8Encoding]::new($false)
+)
+
 $declaredHash = ((Get-Content -LiteralPath "$archive.sha256" -Raw) -split '\s+')[0].ToLowerInvariant()
 $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($declaredHash -ne $actualHash) { throw "AionUi archive checksum mismatch" }
