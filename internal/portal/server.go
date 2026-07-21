@@ -51,22 +51,24 @@ type UsageService interface {
 }
 
 type Server struct {
-	cfg             config.Portal
-	store           *store.Store
-	instances       InstanceManager
-	usage           UsageService
-	static          http.Handler
-	public          *url.URL
-	origins         map[string]struct{}
-	dummyHash       string
-	adminMasterHash string
-	logger          *log.Logger
-	now             func() time.Time
-	cookieName      string
-	cookieSecure    bool
-	profilePath     func(string) (string, error)
-	chatgptTarget   *url.URL
-	chatgptSecret   []byte
+	cfg                config.Portal
+	store              *store.Store
+	instances          InstanceManager
+	usage              UsageService
+	static             http.Handler
+	public             *url.URL
+	origins            map[string]struct{}
+	dummyHash          string
+	adminMasterHash    string
+	logger             *log.Logger
+	now                func() time.Time
+	cookieName         string
+	cookieSecure       bool
+	profilePath        func(string) (string, error)
+	chatgptTarget      *url.URL
+	chatgptSecret      []byte
+	notificationTarget *url.URL
+	notificationClient *http.Client
 }
 
 func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage UsageService, staticDir string, logger *log.Logger) (*Server, error) {
@@ -108,8 +110,13 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if err != nil {
 		return nil, err
 	}
+	notificationTarget, notificationClient, err := newNotificationSource(cfg.NotificationSourceURL)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, adminMasterHash: adminMasterHash, logger: logger, now: time.Now,
-		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatgptTarget: chatgptTarget, chatgptSecret: chatgptSecret}, nil
+		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatgptTarget: chatgptTarget, chatgptSecret: chatgptSecret,
+		notificationTarget: notificationTarget, notificationClient: notificationClient}, nil
 }
 
 func (s *Server) userFilesystemRoot(sid string) (string, error) {
@@ -198,6 +205,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/portal/me/projects":
 		s.projects(w, r)
+		return
+	case "/api/portal/me/notifications", "/chatgpt/api/portal/me/notifications":
+		s.currentNotifications(w, r)
 		return
 	case "/api/mcp/oauth/login":
 		s.mcpOAuthLogin(w, r)

@@ -166,6 +166,26 @@ func TestChatGPTForwarderConfigRequiresLoopbackSecretAndProModels(t *testing.T) 
 	}
 }
 
+func TestNotificationSourceRequiresExactBoundedURL(t *testing.T) {
+	valid := validPortal(t)
+	valid.NotificationSourceURL = "http://203.0.113.79:25888/notification"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid notification source rejected: %v", err)
+	}
+	for _, invalid := range []string{
+		"ftp://203.0.113.79:25888/notification",
+		"http://user@203.0.113.79:25888/notification",
+		"http://203.0.113.79:25888/",
+		"http://203.0.113.79:25888/notification?user=test1",
+	} {
+		candidate := valid
+		candidate.NotificationSourceURL = invalid
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("unsafe notification source accepted: %q", invalid)
+		}
+	}
+}
+
 func TestAdminMasterPasswordHashFileIsOptionalAndConfinedToPortalData(t *testing.T) {
 	valid := validPortal(t)
 	valid.AdminMasterHashFile = filepath.Join(DefaultPortalDataRoot, "admin-master-password.argon2id")

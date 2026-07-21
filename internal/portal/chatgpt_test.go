@@ -67,6 +67,69 @@ func TestChatGPTWebDelegatesPortalIdentityAndInjectsBridge(t *testing.T) {
 	}
 }
 
+func TestChatGPTMaintenanceRejectsAllProxyPathsWithoutForwarding(t *testing.T) {
+	var calls atomic.Int32
+	forwarder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = fmt.Fprint(w, "must not be reached")
+	}))
+	defer forwarder.Close()
+
+	server, data, _ := testServer(t)
+	target, _ := url.Parse(forwarder.URL)
+	server.chatgptTarget = target
+	server.cfg.ChatGPTMaintenanceMode = true
+	token := createPortalSession(t, data)
+
+	requests := []*http.Request{
+		httptest.NewRequest(http.MethodGet, "https://portal.example.test/chatgpt", nil),
+		httptest.NewRequest(http.MethodGet, "https://portal.example.test/chatgpt/cdn/assets/sprites-core.svg", nil),
+		httptest.NewRequest(http.MethodPost, "https://portal.example.test/chatgpt/backend-api/f/conversation", strings.NewReader(`{}`)),
+	}
+	for _, request := range requests {
+		request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		if request.Method == http.MethodPost {
+			request.Header.Set("Origin", "https://portal.example.test")
+		}
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable ||
+			!strings.Contains(response.Body.String(), `"code":"CHATGPT_UPGRADING"`) ||
+			!strings.Contains(response.Body.String(), `"message":"聊天模式正在升级中"`) {
+			t.Fatalf("maintenance response mismatch for %s %s: status=%d body=%s", request.Method, request.URL.Path, response.Code, response.Body.String())
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("maintenance requests reached the forwarder: calls=%d", calls.Load())
+	}
+}
+
+func TestChatGPTSharedSpriteKeepsImmutableBrowserCachePolicy(t *testing.T) {
+	secret := []byte("portal-chatgpt-test-secret-0123456789abcdef")
+	forwarder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertChatGPTDelegation(t, r, secret, "portal-alice")
+		w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+		w.Header().Set("Content-Type", "image/svg+xml")
+		_, _ = fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg"></svg>`)
+	}))
+	defer forwarder.Close()
+
+	server, data, _ := testServer(t)
+	target, _ := url.Parse(forwarder.URL)
+	server.chatgptTarget = target
+	server.chatgptSecret = secret
+	token := createPortalSession(t, data)
+	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/chatgpt/cdn/assets/sprites-core.svg", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || strings.Contains(response.Header().Get("Cache-Control"), "no-store") ||
+		!strings.Contains(response.Header().Get("Cache-Control"), "immutable") {
+		t.Fatalf("shared sprite cache policy mismatch: status=%d cache=%q", response.Code, response.Header().Get("Cache-Control"))
+	}
+}
+
 func TestChatGPTRootRequestUsesAllowedChatPageReferrer(t *testing.T) {
 	secret := []byte("portal-chatgpt-test-secret-0123456789abcdef")
 	var calls atomic.Int32
@@ -254,6 +317,16 @@ func TestChatGPTBridgeContainsRequiredDegradationGuidance(t *testing.T) {
 		"遇到模型降智，请在新的窗口重新发送相关文件和指令并",
 		"【将思考程度（Intelligence）切换至“超高”（“Extra High”）】",
 		"新的思考程度可能会造成内容生成质量下降",
+		"目前处于降智状态，暂不可用，请使用5.6 balanced Extra high。",
+		"data-workagent-pro-status-note",
+		"syncProStatusNote",
+		"findSelectedProButton",
+		"button.getAttribute('aria-haspopup')",
+		"href.endsWith('#ba3792')",
+		"for (const note of notes) note.remove()",
+		"/api/portal/me/notifications",
+		"workagent-portal-notification-modal",
+		"window.addEventListener('focus'",
 	} {
 		if !strings.Contains(response.Body.String(), required) {
 			t.Fatalf("bridge omitted required guidance %q", required)

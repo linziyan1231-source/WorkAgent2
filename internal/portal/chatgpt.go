@@ -98,6 +98,14 @@ func (s *Server) chatGPTProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
 		return
 	}
+	if s.cfg.ChatGPTMaintenanceMode {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"success": false,
+			"code":    "CHATGPT_UPGRADING",
+			"message": "聊天模式正在升级中",
+		})
+		return
+	}
 
 	var send chatgptproxy.Send
 	reserved := false
@@ -138,6 +146,12 @@ func (s *Server) chatGPTProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := *s.chatgptTarget
+	if isChatGPTSharedStaticAssetPath(r.URL.Path) {
+		// The global Portal middleware defaults to no-store. Static ChatGPT assets
+		// are immutable content-hashed files and must keep the forwarder's public
+		// cache policy so cold clients do not repeatedly miss the SVG sprite.
+		w.Header().Del("Cache-Control")
+	}
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			originalHost := request.In.Host
@@ -181,6 +195,25 @@ func (s *Server) chatGPTProxy(w http.ResponseWriter, r *http.Request) {
 		FlushInterval: -1,
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func isChatGPTSharedStaticAssetPath(requestPath string) bool {
+	requestPath = strings.TrimPrefix(requestPath, "/chatgpt")
+	const prefix = "/cdn/assets/"
+	if !strings.HasPrefix(requestPath, prefix) {
+		return false
+	}
+	name := strings.TrimPrefix(requestPath, prefix)
+	if name == "" || strings.Contains(name, "/") {
+		return false
+	}
+	lower := strings.ToLower(name)
+	for _, suffix := range []string{".avif", ".css", ".gif", ".ico", ".jpeg", ".jpg", ".js", ".png", ".svg", ".webp", ".woff", ".woff2"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func stripChatGPTBrowserCredentials(header http.Header) {

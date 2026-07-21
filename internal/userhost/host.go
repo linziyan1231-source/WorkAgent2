@@ -67,6 +67,7 @@ func Run(ctx context.Context, cfg config.UserHost) error {
 }
 
 func (h *Host) run(ctx context.Context) error {
+	startupBegan := time.Now()
 	identity, err := winutil.RequireIdentity(h.cfg.WindowsSID, true)
 	if err != nil {
 		return err
@@ -88,7 +89,7 @@ func (h *Host) run(ctx context.Context) error {
 	if !samePath(expectedDataRoot, h.cfg.DataRoot) {
 		return fmt.Errorf("configured data root %s does not match SID profile data root %s", h.cfg.DataRoot, expectedDataRoot)
 	}
-	verified, err := release.VerifyCurrent(h.cfg.CurrentReleaseFile, h.cfg.ReleasesRoot, h.cfg.SupportedAionCore)
+	verified, err := release.VerifyCurrentFast(h.cfg.CurrentReleaseFile, h.cfg.ReleasesRoot, h.cfg.SupportedAionCore)
 	if err != nil {
 		return fmt.Errorf("verify shared AionUi release: %w", err)
 	}
@@ -118,6 +119,7 @@ func (h *Host) run(ctx context.Context) error {
 	}
 	defer h.log.Close()
 	h.log.Printf("UserHost starting sid=%s account=%s\\%s release=%s", identity.SID, identity.Domain, identity.Username, verified.Manifest.Version)
+	h.log.Printf("Startup release verification mode=fast prelaunch_elapsed_ms=%d", time.Since(startupBegan).Milliseconds())
 	h.job, err = winutil.NewJob("AionUiWeb-"+h.cfg.WindowsSID, winutil.JobLimits{
 		MemoryBytes: h.cfg.Limits.MemoryBytes, CPUPercent: h.cfg.Limits.CPUPercent, ActiveProcesses: h.cfg.Limits.ActiveProcesses,
 	})

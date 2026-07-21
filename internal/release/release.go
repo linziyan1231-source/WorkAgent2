@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
 const ManifestName = "release-manifest.json"
@@ -40,8 +42,91 @@ type Verified struct {
 }
 
 func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string) (Verified, error) {
+	verified, err := loadCurrentMetadata(pointerPath, releasesRoot, supportedAionCore)
+	if err != nil {
+		return Verified{}, err
+	}
+	seen := make(map[string]bool, len(verified.Manifest.Files))
+	err = filepath.WalkDir(verified.Path, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if reparse, err := isReparsePoint(path); err != nil {
+			return err
+		} else if reparse {
+			return fmt.Errorf("release contains a reparse point: %s", path)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(verified.Path, path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(relative)
+		if name == ManifestName {
+			return nil
+		}
+		expected, ok := verified.Manifest.Files[name]
+		if !ok {
+			return fmt.Errorf("release contains an unmanifested file: %s", name)
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() != expected.Size {
+			return fmt.Errorf("release file %s has unexpected type or size", name)
+		}
+		hash, err := hashFile(path)
+		if err != nil || !strings.EqualFold(hash, expected.SHA256) {
+			return fmt.Errorf("release file hash mismatch: %s", name)
+		}
+		seen[name] = true
+		return nil
+	})
+	if err != nil {
+		return Verified{}, err
+	}
+	if len(seen) != len(verified.Manifest.Files) {
+		missing := make([]string, 0)
+		for name := range verified.Manifest.Files {
+			if !seen[name] {
+				missing = append(missing, name)
+			}
+		}
+		sort.Strings(missing)
+		return Verified{}, fmt.Errorf("release is missing manifested file %s", missing[0])
+	}
+	return verified, nil
+}
+
+// VerifyCurrentFast validates the protected pointer and manifest, then checks
+// that each executable or bootstrap-critical file still has the manifested
+// type and size. Full content hashing remains an install/activation/readiness
+// gate; this bounded check is for ordinary per-user cold starts.
+func VerifyCurrentFast(pointerPath, releasesRoot string, supportedAionCore []string) (Verified, error) {
+	verified, err := loadCurrentMetadata(pointerPath, releasesRoot, supportedAionCore)
+	if err != nil {
+		return Verified{}, err
+	}
+	for _, name := range criticalFiles() {
+		entry := verified.Manifest.Files[name]
+		full := filepath.Join(verified.Path, filepath.FromSlash(name))
+		info, err := os.Lstat(full)
+		if err != nil || !info.Mode().IsRegular() || info.Size() != entry.Size {
+			return Verified{}, fmt.Errorf("release critical file is missing or has the wrong type or size: %s", name)
+		}
+		if err := ensureNoReparsePath(verified.Path, full); err != nil {
+			return Verified{}, fmt.Errorf("release critical file is a reparse point: %s", name)
+		}
+	}
+	return verified, nil
+}
+
+func loadCurrentMetadata(pointerPath, releasesRoot string, supportedAionCore []string) (Verified, error) {
 	if !filepath.IsAbs(pointerPath) || !filepath.IsAbs(releasesRoot) {
 		return Verified{}, errors.New("release pointer and root must be absolute")
+	}
+	if reparse, err := isReparsePoint(pointerPath); err != nil || reparse {
+		return Verified{}, errors.New("current release pointer is a reparse point or cannot be inspected")
 	}
 	b, err := os.ReadFile(pointerPath)
 	if err != nil {
@@ -65,7 +150,13 @@ func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string)
 	if !isWithin(root, releasePath) || strings.Contains(p.Version, "\\") || strings.Contains(p.Version, "/") || filepath.Base(releasePath) != p.Version {
 		return Verified{}, errors.New("release pointer escapes releases root or has a mismatched version")
 	}
+	if reparse, err := isReparsePoint(releasePath); err != nil || reparse {
+		return Verified{}, errors.New("release directory is a reparse point or cannot be inspected")
+	}
 	manifestPath := filepath.Join(releasePath, ManifestName)
+	if reparse, err := isReparsePoint(manifestPath); err != nil || reparse {
+		return Verified{}, errors.New("release manifest is a reparse point or cannot be inspected")
+	}
 	manifestBytes, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return Verified{}, fmt.Errorf("read release manifest: %w", err)
@@ -84,16 +175,7 @@ func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string)
 	if !contains(supportedAionCore, manifest.AionCoreVersion) {
 		return Verified{}, fmt.Errorf("unsupported aioncore version %q", manifest.AionCoreVersion)
 	}
-	for _, critical := range []string{
-		"aionui-web.exe",
-		"package.json",
-		"static/index.html",
-		"bundled-aioncore/win32-x64/aioncore.exe",
-		"workagent-builtin-assistants/assistants.json",
-		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md",
-		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md",
-		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md",
-	} {
+	for _, critical := range criticalFiles() {
 		if _, ok := manifest.Files[critical]; !ok {
 			return Verified{}, fmt.Errorf("release manifest is missing critical file %s", critical)
 		}
@@ -108,23 +190,24 @@ func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string)
 		if !validRelative(name) || len(entry.SHA256) != 64 || entry.Size < 0 {
 			return Verified{}, fmt.Errorf("invalid release manifest entry %q", name)
 		}
-		full := filepath.Join(releasePath, filepath.FromSlash(name))
-		info, err := os.Lstat(full)
-		if err != nil {
-			return Verified{}, fmt.Errorf("release file %s: %w", name, err)
-		}
-		if !info.Mode().IsRegular() || info.Size() != entry.Size {
-			return Verified{}, fmt.Errorf("release file %s has unexpected type or size", name)
-		}
-		hash, err := hashFile(full)
-		if err != nil {
-			return Verified{}, err
-		}
-		if !strings.EqualFold(hash, entry.SHA256) {
-			return Verified{}, fmt.Errorf("release file hash mismatch: %s", name)
+		if _, err := hex.DecodeString(entry.SHA256); err != nil {
+			return Verified{}, fmt.Errorf("invalid release manifest hash %q", name)
 		}
 	}
 	return Verified{Path: releasePath, Manifest: manifest}, nil
+}
+
+func criticalFiles() []string {
+	return []string{
+		"aionui-web.exe",
+		"package.json",
+		"static/index.html",
+		"bundled-aioncore/win32-x64/aioncore.exe",
+		"workagent-builtin-assistants/assistants.json",
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md",
+	}
 }
 
 func BuildManifest(root, version, aionCoreVersion string) (Manifest, error) {
@@ -232,4 +315,35 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func isReparsePoint(path string) (bool, error) {
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return false, err
+	}
+	attributes, err := windows.GetFileAttributes(pointer)
+	if err != nil {
+		return false, err
+	}
+	return attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0, nil
+}
+
+func ensureNoReparsePath(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("path escapes release root")
+	}
+	current := root
+	for _, part := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		reparse, err := isReparsePoint(current)
+		if err != nil {
+			return err
+		}
+		if reparse {
+			return errors.New("path contains a reparse point")
+		}
+	}
+	return nil
 }

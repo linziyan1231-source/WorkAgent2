@@ -114,6 +114,35 @@ func TestKimiCodeBinaryBecomesCriticalWithoutChangingManifestSchema(t *testing.T
 	if _, err := VerifyCurrent(root); err == nil {
 		t.Fatal("missing Kimi Code binary passed current release verification")
 	}
+	if _, err := VerifyCurrentFast(root); err == nil {
+		t.Fatal("missing Kimi Code binary passed fast current release verification")
+	}
+}
+
+func TestVerifyCurrentFastDefersNonCriticalHashingToFullGate(t *testing.T) {
+	root := t.TempDir()
+	releaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
+	releasePath := makeRelease(t, root, releaseID)
+	manifest, err := BuildManifest(releasePath, releaseID, "0.142.5", "1.38.0", "3.13.13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(releasePath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(root, manifest.ReleaseID); err != nil {
+		t.Fatal(err)
+	}
+	noncritical := filepath.Join(releasePath, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-resources", "codex-windows-sandbox-setup.exe")
+	if err := os.WriteFile(noncritical, []byte("changed-helper"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyCurrentFast(root); err != nil {
+		t.Fatalf("fast verification unexpectedly reread a noncritical dependency: %v", err)
+	}
+	if _, err := VerifyCurrent(root); err == nil {
+		t.Fatal("full deployment gate accepted a tampered noncritical dependency")
+	}
 }
 
 func TestRootAndBinAreFixedSiblingsOfAionSharedRoot(t *testing.T) {

@@ -20,7 +20,7 @@ const maxKimiConfig = 1024 * 1024
 
 func (h *Host) initializeKimiCodeConfig(ctx context.Context, env []string) (bool, error) {
 	root := agentcli.RootFromAionReleases(h.cfg.ReleasesRoot)
-	verified, err := agentcli.VerifyCurrent(root)
+	verified, err := agentcli.VerifyCurrentFast(root)
 	if err != nil {
 		return false, fmt.Errorf("verify shared agent CLI release before Kimi Code configuration migration: %w", err)
 	}

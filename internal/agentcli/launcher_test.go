@@ -81,6 +81,9 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if environmentValue(python.Env, "PATH") != environmentValue(environment, "PATH") {
 		t.Fatalf("Python launcher changed PATH: %s", environmentValue(python.Env, "PATH"))
 	}
+	if environmentValue(python.Env, "PYTHONDONTWRITEBYTECODE") != "1" {
+		t.Fatalf("Python launcher did not protect the immutable runtime: %+v", python.Env)
+	}
 	if _, err := Spec(filepath.Join(root, "bin", "unknown.exe"), nil, environment); err == nil {
 		t.Fatal("unknown launcher name was accepted")
 	}

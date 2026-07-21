@@ -54,6 +54,8 @@ type Portal struct {
 	ChatGPTForwarderURL    string   `json:"chatgpt_forwarder_url"`
 	ChatGPTSecretFile      string   `json:"chatgpt_forwarder_secret_file"`
 	ChatGPTProModels       []string `json:"chatgpt_pro_models"`
+	ChatGPTMaintenanceMode bool     `json:"chatgpt_maintenance_mode,omitempty"`
+	NotificationSourceURL  string   `json:"notification_source_url,omitempty"`
 	OutboundProxyURL       string   `json:"outbound_proxy_url,omitempty"`
 	SupportedAionCore      []string `json:"supported_aioncore_versions"`
 }
@@ -77,6 +79,7 @@ func DefaultPortal() Portal {
 		ChatGPTForwarderURL:    "http://127.0.0.1:1560",
 		ChatGPTSecretFile:      filepath.Join(DefaultPortalDataRoot, "chatgpt-forwarder.key"),
 		ChatGPTProModels:       []string{"gpt-5-4-pro", "gpt-5-5-pro", "gpt-5-6-pro"},
+		NotificationSourceURL:  "http://203.0.113.79:25888/notification",
 		SupportedAionCore:      []string{"v0.1.42"},
 	}
 }
@@ -213,6 +216,9 @@ func (c Portal) Validate() error {
 	if err := c.validateChatGPTForwarder(); err != nil {
 		return err
 	}
+	if err := validateNotificationSourceURL(c.NotificationSourceURL); err != nil {
+		return err
+	}
 	if err := validateOutboundProxyURL(c.OutboundProxyURL); err != nil {
 		return err
 	}
@@ -223,6 +229,18 @@ func (c Portal) Validate() error {
 		if strings.TrimSpace(version) == "" {
 			return errors.New("supported_aioncore_versions contains an empty version")
 		}
+	}
+	return nil
+}
+
+func validateNotificationSourceURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	source, err := url.Parse(value)
+	if err != nil || (source.Scheme != "http" && source.Scheme != "https") || source.Hostname() == "" || source.User != nil || source.Opaque != "" ||
+		source.Path != "/notification" || source.RawQuery != "" || source.Fragment != "" {
+		return errors.New("notification_source_url must be an absolute HTTP or HTTPS /notification URL without credentials, query, or fragment")
 	}
 	return nil
 }

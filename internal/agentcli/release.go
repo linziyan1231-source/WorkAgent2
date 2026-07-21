@@ -184,6 +184,13 @@ func VerifyCurrent(root string) (Verified, error) {
 	return verified, nil
 }
 
+// VerifyCurrentFast validates the protected pointer and manifest plus the
+// shape of launch-critical files without rereading the entire shared runtime.
+// Full verification remains mandatory when publishing or activating a release.
+func VerifyCurrentFast(root string) (Verified, error) {
+	return loadCurrentFast(root)
+}
+
 func VerifyRelease(root, releaseID string) (Verified, error) {
 	if !filepath.IsAbs(root) || !validVersion(releaseID) {
 		return Verified{}, errors.New("agent CLI root must be absolute and release ID must be valid")
@@ -260,6 +267,9 @@ func loadCurrentFast(root string) (Verified, error) {
 	if err := validateReleasePath(releasePath, pointer.ReleaseID); err != nil {
 		return Verified{}, err
 	}
+	if reparse, err := isReparsePoint(releasePath); err != nil || reparse {
+		return Verified{}, errors.New("agent CLI release directory is a reparse point or cannot be inspected")
+	}
 	manifest, _, err := loadManifest(releasePath)
 	if err != nil {
 		return Verified{}, err
@@ -274,7 +284,7 @@ func loadCurrentFast(root string) (Verified, error) {
 		if err != nil || !info.Mode().IsRegular() || info.Size() != entry.Size {
 			return Verified{}, fmt.Errorf("agent CLI critical file is missing or has the wrong size: %s", name)
 		}
-		if reparse, err := isReparsePoint(path); err != nil || reparse {
+		if err := ensureNoReparsePath(releasePath, path); err != nil {
 			return Verified{}, fmt.Errorf("agent CLI critical file is a reparse point: %s", name)
 		}
 	}
@@ -466,4 +476,23 @@ func isReparsePoint(path string) (bool, error) {
 		return false, err
 	}
 	return attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0, nil
+}
+
+func ensureNoReparsePath(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("path escapes agent CLI release root")
+	}
+	current := root
+	for _, part := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		reparse, err := isReparsePoint(current)
+		if err != nil {
+			return err
+		}
+		if reparse {
+			return errors.New("path contains a reparse point")
+		}
+	}
+	return nil
 }

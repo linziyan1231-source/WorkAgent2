@@ -116,6 +116,57 @@ const chatGPTBridgeScript = `(() => {
     document.body.appendChild(link);
   };
 
+  const proStatusText = '目前处于降智状态，暂不可用，请使用5.6 balanced Extra high。';
+  const findSelectedProButton = () => {
+    if (!document.body) return;
+    for (const button of document.querySelectorAll('button')) {
+      if (!(button instanceof HTMLElement) || button.textContent.trim() !== 'Pro') continue;
+      const rect = button.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.left < window.innerWidth * 0.35 || rect.width > 160 || rect.height > 64) continue;
+      const semanticHint = [
+        button.getAttribute('aria-haspopup'), button.getAttribute('aria-expanded'),
+        button.getAttribute('aria-label'), button.getAttribute('data-testid')
+      ].filter(Boolean).join(' ').toLowerCase();
+      const hasSelectorSemantics = semanticHint.includes('menu') || semanticHint.includes('listbox') ||
+        semanticHint.includes('thinking') || semanticHint.includes('reason') || semanticHint.includes('intelligence') ||
+        Array.from(button.querySelectorAll('use')).some((use) => {
+          const href = use.getAttribute('href') || use.getAttribute('xlink:href') || '';
+          return href.endsWith('#ba3792');
+        });
+      if (hasSelectorSemantics) return button;
+    }
+    return undefined;
+  };
+
+  const syncProStatusNote = () => {
+    if (!document.body) return;
+    const selectedButton = findSelectedProButton();
+    const notes = Array.from(document.querySelectorAll('[data-workagent-pro-status-note="true"]'));
+    if (!selectedButton) {
+      for (const note of notes) note.remove();
+      return;
+    }
+    let host = selectedButton.parentElement;
+    for (let depth = 0; depth < 5 && host && host.parentElement; depth += 1) {
+      const parent = host.parentElement;
+      const parentRect = parent.getBoundingClientRect();
+      if (parent.textContent.trim() !== 'Pro' || parentRect.width > 220 || parentRect.height > 80) break;
+      host = parent;
+    }
+    if (!host) return;
+    if (notes.length === 1 && notes[0].parentElement === host) return;
+    for (const note of notes) note.remove();
+    const note = document.createElement('span');
+    note.setAttribute('data-workagent-pro-status-note', 'true');
+    note.textContent = proStatusText;
+    Object.assign(note.style, {
+      display: 'inline-block', maxWidth: '340px', marginRight: '8px', color: '#d97706',
+      font: '600 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      whiteSpace: 'normal', textAlign: 'right', pointerEvents: 'none'
+    });
+    host.prepend(note);
+  };
+
   let modalOpen = false;
   const acknowledge = async (id) => {
     try {
@@ -169,7 +220,7 @@ const chatGPTBridgeScript = `(() => {
     close.focus();
   };
 
-  const poll = async () => {
+  const pollProEvents = async () => {
     if (modalOpen || document.visibilityState === 'hidden') return;
     try {
       const response = await fetch('/api/portal/me/chatgpt/pro-events', { credentials: 'same-origin', cache: 'no-store' });
@@ -180,15 +231,109 @@ const chatGPTBridgeScript = `(() => {
     } catch {}
   };
 
+  const notificationSeenKey = 'workagent-portal-notification-seen-v1';
+  const readSeenNotifications = () => {
+    try {
+      const value = JSON.parse(localStorage.getItem(notificationSeenKey) || '[]');
+      return new Set(Array.isArray(value) ? value.filter((id) => typeof id === 'string').slice(-200) : []);
+    } catch { return new Set(); }
+  };
+  const seenNotifications = readSeenNotifications();
+  const rememberNotification = (id) => {
+    seenNotifications.add(id);
+    try { localStorage.setItem(notificationSeenKey, JSON.stringify(Array.from(seenNotifications).slice(-200))); } catch {}
+  };
+  const showNotification = (notification) => {
+    if (modalOpen || !document.body || !notification || typeof notification.id !== 'string') return;
+    modalOpen = true;
+    const overlay = document.createElement('div');
+    overlay.id = 'workagent-portal-notification-modal';
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', zIndex: '2147483646', display: 'grid', placeItems: 'center',
+      padding: '24px', background: 'rgba(0,0,0,.48)', fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    });
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-modal', 'true');
+    Object.assign(dialog.style, {
+      width: 'min(560px, calc(100vw - 48px))', borderRadius: '16px', padding: '24px',
+      background: 'var(--main-surface-primary, #fff)', color: 'var(--text-primary, #111827)',
+      boxShadow: '0 24px 80px rgba(0,0,0,.28)', fontSize: '15px', lineHeight: '1.75'
+    });
+    const title = document.createElement('div');
+    title.textContent = typeof notification.title === 'string' && notification.title.trim() ? notification.title : '通知';
+    Object.assign(title.style, { fontSize: '18px', fontWeight: '700', marginBottom: '10px' });
+    const message = document.createElement('div');
+    message.textContent = notification.message;
+    Object.assign(message.style, { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' });
+    const actions = document.createElement('div');
+    Object.assign(actions.style, { display: 'flex', justifyContent: 'flex-end', marginTop: '18px' });
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '知道了';
+    Object.assign(close.style, {
+      height: '36px', padding: '0 16px', border: '0', borderRadius: '9px', cursor: 'pointer',
+      background: '#111827', color: '#fff', font: '600 14px system-ui, sans-serif'
+    });
+    close.addEventListener('click', () => {
+      rememberNotification(notification.id);
+      overlay.remove();
+      modalOpen = false;
+      window.setTimeout(pollNotifications, 0);
+    }, { once: true });
+    actions.appendChild(close);
+    dialog.append(title, message, actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    close.focus();
+  };
+
+  let notificationRequestInFlight = false;
+  const pollNotifications = async () => {
+    if (notificationRequestInFlight || modalOpen || document.visibilityState === 'hidden') return;
+    notificationRequestInFlight = true;
+    try {
+      const response = await fetch('/api/portal/me/notifications', { credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const notifications = payload && payload.data && Array.isArray(payload.data.notifications) ? payload.data.notifications : [];
+      const next = notifications.find((notification) =>
+        notification && typeof notification.id === 'string' && typeof notification.message === 'string' &&
+        notification.message.trim() && !seenNotifications.has(notification.id)
+      );
+      if (next) showNotification(next);
+    } catch {
+    } finally {
+      notificationRequestInFlight = false;
+    }
+  };
+
   const keepReturnButtonMounted = () => {
     addReturnButton();
+    syncProStatusNote();
     const root = document.documentElement;
     if (!root) return;
-    new MutationObserver(addReturnButton).observe(root, { childList: true, subtree: true });
+    let observerFrame = 0;
+    new MutationObserver(() => {
+      if (observerFrame) return;
+      observerFrame = window.requestAnimationFrame(() => {
+        observerFrame = 0;
+        addReturnButton();
+        syncProStatusNote();
+      });
+    }).observe(root, { childList: true, subtree: true });
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', keepReturnButtonMounted, { once: true });
   else keepReturnButtonMounted();
-  window.setInterval(poll, 2500);
-  void poll();
+  const pollNotificationsWhenActive = () => {
+    if (document.visibilityState === 'visible') void pollNotifications();
+  };
+  document.addEventListener('visibilitychange', pollNotificationsWhenActive);
+  window.addEventListener('focus', pollNotificationsWhenActive);
+  window.addEventListener('online', pollNotificationsWhenActive);
+  window.setInterval(pollProEvents, 2500);
+  window.setInterval(pollNotifications, 60000);
+  void pollProEvents();
+  void pollNotifications();
 })();
 `

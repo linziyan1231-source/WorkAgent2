@@ -57,6 +57,10 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 		}
 	case "python":
 		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(PythonRelativePath))
+		// The shared Python runtime is an immutable, manifest-verified release.
+		// Prevent imports (notably `python -m pip`) from refreshing bytecode in
+		// that protected tree when the launcher is invoked by an administrator.
+		spec.Env = setEnvironment(spec.Env, "PYTHONDONTWRITEBYTECODE", "1")
 	default:
 		return LauncherSpec{}, fmt.Errorf("unsupported shared agent CLI launcher name %q", name)
 	}
