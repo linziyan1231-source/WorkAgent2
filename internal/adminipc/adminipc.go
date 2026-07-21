@@ -58,10 +58,14 @@ func SDDL(portalServiceSID string) (string, error) {
 }
 
 func Listen(ctx context.Context, securityDescriptor string, handler Handler) (*Server, error) {
+	return listen(ctx, PipeName, securityDescriptor, handler)
+}
+
+func listen(ctx context.Context, pipeName, securityDescriptor string, handler Handler) (*Server, error) {
 	if handler == nil {
 		return nil, errors.New("nil Portal admin IPC handler")
 	}
-	listener, err := winio.ListenPipe(PipeName, &winio.PipeConfig{SecurityDescriptor: securityDescriptor, InputBufferSize: 64 * 1024, OutputBufferSize: 64 * 1024})
+	listener, err := winio.ListenPipe(pipeName, &winio.PipeConfig{SecurityDescriptor: securityDescriptor, InputBufferSize: 64 * 1024, OutputBufferSize: 64 * 1024})
 	if err != nil {
 		return nil, err
 	}
@@ -117,10 +121,14 @@ func (s *Server) Close() error {
 }
 
 func Call(ctx context.Context, request Request) (Response, error) {
+	return call(ctx, PipeName, request)
+}
+
+func call(ctx context.Context, pipeName string, request Request) (Response, error) {
 	if request.ProtocolVersion == 0 {
 		request.ProtocolVersion = ProtocolVersion
 	}
-	connection, err := winio.DialPipeContext(ctx, PipeName)
+	connection, err := winio.DialPipeContext(ctx, pipeName)
 	if err != nil {
 		return Response{}, err
 	}

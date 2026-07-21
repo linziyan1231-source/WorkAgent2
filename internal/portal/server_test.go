@@ -1355,8 +1355,8 @@ func testServerAtRootWithPublicURLAndOrigins(t *testing.T, root, publicURL strin
 	cfg.ListenAddress = "127.0.0.1:0"
 	cfg.PublicBaseURL = publicURL
 	cfg.BrowserOrigins = append([]string(nil), origins...)
-	cfg.ChatGPTForwarderURL = ""
-	cfg.ChatGPTSecretFile = ""
+	cfg.ChatForwardURL = ""
+	cfg.ChatForwardSecretFile = ""
 	cfg.ChatGPTProModels = nil
 	cfg.LoginAccountFailures = 5
 	cfg.LoginIPFailures = 20

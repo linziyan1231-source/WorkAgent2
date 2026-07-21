@@ -39,7 +39,7 @@ func TestParseNotificationPayloadAcceptsCompatibleShapesAndStableIDs(t *testing.
 	}
 }
 
-func TestNotificationEndpointUsesFixedServerSourceAndChatGPTAlias(t *testing.T) {
+func TestNotificationEndpointUsesFixedServerSource(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -57,16 +57,14 @@ func TestNotificationEndpointUsesFixedServerSourceAndChatGPTAlias(t *testing.T) 
 	server.notificationClient = upstream.Client()
 	token := createPortalSession(t, data)
 
-	for _, path := range []string{"/api/portal/me/notifications", "/chatgpt/api/portal/me/notifications"} {
-		request := httptest.NewRequest(http.MethodGet, "https://portal.example.test"+path, nil)
-		request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
-		response := httptest.NewRecorder()
-		server.Handler().ServeHTTP(response, request)
-		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"n-1"`) || !strings.Contains(response.Body.String(), `\u003cimg`) {
-			t.Fatalf("notification response status=%d body=%s", response.Code, response.Body.String())
-		}
+	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/me/notifications", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"n-1"`) || !strings.Contains(response.Body.String(), `\u003cimg`) {
+		t.Fatalf("notification response status=%d body=%s", response.Code, response.Body.String())
 	}
-	if calls.Load() != 2 {
+	if calls.Load() != 1 {
 		t.Fatalf("unexpected upstream call count: %d", calls.Load())
 	}
 }

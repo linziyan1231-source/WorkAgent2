@@ -8,7 +8,7 @@ import (
 
 func TestKnownStandardAccountProfilesAreDistinctDirectChildrenOfCUsers(t *testing.T) {
 	seen := make(map[string]string)
-	for _, account := range []string{"test1", "test2"} {
+	for _, account := range standardAccountsForIntegrationTest(t) {
 		sid, _, err := ValidateStandardAccount(account)
 		if err != nil {
 			t.Fatalf("%s: %v", account, err)

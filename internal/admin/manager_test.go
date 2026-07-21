@@ -93,12 +93,12 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	cfg.PortalServiceSID = identity.SID
 	credentialRoot := filepath.Join(root, "cliproxy")
 	cfg.UsageManagementKeyFile = filepath.Join(credentialRoot, "management.key")
-	cfg.ChatGPTSecretFile = filepath.Join(data, "chatgpt-forwarder.key")
+	cfg.ChatForwardSecretFile = filepath.Join(data, "chatforward.key")
 	configPath := filepath.Join(data, "portal.json")
 	if err := os.MkdirAll(data, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfg.ChatGPTSecretFile, []byte("test-chatgpt-forwarder-secret-0123456789abcdef"), 0o600); err != nil {
+	if err := os.WriteFile(cfg.ChatForwardSecretFile, []byte("test-chatforward-secret-0123456789abcdef"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(cfg)
@@ -125,9 +125,9 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	if failures := manager.VerifyACLs(context.Background()); len(failures) != 0 {
 		t.Fatalf("ACL verification failures: %v", failures)
 	}
-	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageManagementKeyFile, cfg.ChatGPTSecretFile} {
+	for _, path := range []string{configPath, shared, releases, current, agentRoot, agentRelease, credentialRoot, cfg.UsageManagementKeyFile, cfg.ChatForwardSecretFile} {
 		policy := winutil.SharedReadOnlyPolicy()
-		if path == configPath || path == cfg.ChatGPTSecretFile {
+		if path == configPath || path == cfg.ChatForwardSecretFile {
 			policy = winutil.ServicePrivatePolicy(identity.SID)
 		} else if path == credentialRoot || path == cfg.UsageManagementKeyFile {
 			policy = winutil.ServiceCredentialPolicy(identity.SID)

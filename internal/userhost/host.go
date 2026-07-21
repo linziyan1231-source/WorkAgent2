@@ -147,7 +147,11 @@ func (h *Host) run(ctx context.Context) error {
 		return err
 	}
 	h.log.Printf("UserHost healthy web_pid=%d core_pid=%d web_port=%d core_port=%d", h.status.WebPID, h.status.AionCorePID, h.status.WebPort, h.status.AionCorePort)
-	return h.monitor(ctx)
+	if err := h.monitor(ctx); err != nil {
+		h.log.Printf("runtime failed: %v", err)
+		return err
+	}
+	return nil
 }
 
 func (h *Host) initialize(ctx context.Context) error {
@@ -476,10 +480,14 @@ func (h *Host) monitor(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			h.log.Printf("UserHost shutdown requested reason=context cancelled")
 			h.shutdown("context cancelled")
+			h.log.Printf("UserHost shutdown completed reason=context cancelled")
 			return nil
 		case <-h.stop:
+			h.log.Printf("UserHost shutdown requested reason=stop requested")
 			h.shutdown("stop requested")
+			h.log.Printf("UserHost shutdown completed reason=stop requested")
 			return nil
 		case err := <-h.webDone:
 			failure := fmt.Errorf("aionui-web exited unexpectedly: %v", err)

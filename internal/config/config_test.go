@@ -142,16 +142,16 @@ func TestPortalUsageManagementConfigRejectsNonLocalOrBroadPaths(t *testing.T) {
 	}
 }
 
-func TestChatGPTForwarderConfigRequiresLoopbackSecretAndProModels(t *testing.T) {
+func TestChatForwardConfigRequiresLoopbackSecretAndProModels(t *testing.T) {
 	valid := validPortal(t)
 	if err := valid.Validate(); err != nil {
-		t.Fatalf("valid ChatGPT forwarder config rejected: %v", err)
+		t.Fatalf("valid ChatForward config rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*Portal){
-		"remote forwarder": func(c *Portal) { c.ChatGPTForwarderURL = "http://192.0.2.10:1560" },
-		"forwarder path":   func(c *Portal) { c.ChatGPTForwarderURL = "http://127.0.0.1:1560/chatgpt" },
+		"remote bridge": func(c *Portal) { c.ChatForwardURL = "http://192.0.2.10:3210" },
+		"bridge path":   func(c *Portal) { c.ChatForwardURL = "http://127.0.0.1:3210/chatgpt" },
 		"secret outside Portal root": func(c *Portal) {
-			c.ChatGPTSecretFile = `C:\Users\user-4194d170\chatgpt.key`
+			c.ChatForwardSecretFile = `C:\Users\user-4194d170\chatforward.key`
 		},
 		"invalid model":   func(c *Portal) { c.ChatGPTProModels = []string{"gpt-5-6-thinking"} },
 		"duplicate model": func(c *Portal) { c.ChatGPTProModels = []string{"gpt-5-6-pro", "GPT-5-6-PRO"} },
@@ -160,7 +160,7 @@ func TestChatGPTForwarderConfigRequiresLoopbackSecretAndProModels(t *testing.T) 
 			candidate := valid
 			mutate(&candidate)
 			if err := candidate.Validate(); err == nil {
-				t.Fatal("unsafe ChatGPT forwarder configuration was accepted")
+				t.Fatal("unsafe ChatForward configuration was accepted")
 			}
 		})
 	}

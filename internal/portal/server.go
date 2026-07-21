@@ -65,8 +65,8 @@ type Server struct {
 	cookieName         string
 	cookieSecure       bool
 	profilePath        func(string) (string, error)
-	chatgptTarget      *url.URL
-	chatgptSecret      []byte
+	chatForwardTarget  *url.URL
+	chatForwardSecret  []byte
 	notificationTarget *url.URL
 	notificationClient *http.Client
 }
@@ -106,7 +106,7 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if cfg.UsesTLS() {
 		cookieName = sessionCookie
 	}
-	chatgptTarget, chatgptSecret, err := loadChatGPTForwarder(cfg)
+	chatForwardTarget, chatForwardSecret, err := loadChatForward(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 		return nil, err
 	}
 	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, adminMasterHash: adminMasterHash, logger: logger, now: time.Now,
-		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatgptTarget: chatgptTarget, chatgptSecret: chatgptSecret,
+		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatForwardTarget: chatForwardTarget, chatForwardSecret: chatForwardSecret,
 		notificationTarget: notificationTarget, notificationClient: notificationClient}, nil
 }
 
@@ -206,8 +206,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/portal/me/projects":
 		s.projects(w, r)
 		return
-	case "/api/portal/me/notifications", "/chatgpt/api/portal/me/notifications":
+	case "/api/portal/me/notifications":
 		s.currentNotifications(w, r)
+		return
+	case "/internal/chatforward/quota/reserve":
+		s.chatForwardQuotaReserve(w, r)
+		return
+	case "/internal/chatforward/quota/settle":
+		s.chatForwardQuotaSettle(w, r)
 		return
 	case "/api/mcp/oauth/login":
 		s.mcpOAuthLogin(w, r)
@@ -224,18 +230,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/portal-mcp-oauth.js":
 		s.mcpOAuthBridge(w, r)
 		return
-	case "/portal-chatgpt-bridge.js":
-		s.chatGPTBridge(w, r)
-		return
 	case "/api/portal/me/chatgpt/pro-events":
 		s.chatGPTProEvents(w, r)
-		return
-	case "/chatgpt/api/portal/me/chatgpt/pro-events":
-		// LLM-web's ChatGPT shim prefixes unknown same-origin API paths.
-		s.chatGPTProEvents(w, r)
-		return
-	case "/chatgpt/portal-home":
-		s.chatGPTHome(w, r)
 		return
 	case "/api/settings/client":
 		if r.Method == http.MethodGet {
@@ -245,8 +241,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if s.isChatGPTForwarderRequest(r) {
-		s.chatGPTProxy(w, r)
+	if s.isChatForwardRequest(r) {
+		s.chatForwardProxy(w, r)
 		return
 	}
 	if blockedInternalAuthPath(r.URL.Path) {
@@ -589,7 +585,7 @@ func (s *Server) security(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		referrerPolicy := "no-referrer"
-		if s.isChatGPTForwarderRequest(r) {
+		if s.isChatForwardRequest(r) {
 			referrerPolicy = "same-origin"
 		}
 		w.Header().Set("Referrer-Policy", referrerPolicy)

@@ -146,7 +146,7 @@ func stripBrowserCredentials(header http.Header) {
 		lower := strings.ToLower(name)
 		if lower == "cookie" || lower == "authorization" || lower == "proxy-authorization" || lower == "x-csrf-token" || lower == "x-api-key" ||
 			lower == "forwarded" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-windows-") ||
-			strings.HasPrefix(lower, "x-aionui-portal-") || strings.HasPrefix(lower, "x-llm-web-portal-") {
+			strings.HasPrefix(lower, "x-aionui-portal-") || strings.HasPrefix(lower, "x-chatforward-") {
 			header.Del(name)
 		}
 	}

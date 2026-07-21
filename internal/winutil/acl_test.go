@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestApplyAndVerifyProtectedPrivateTreeACL(t *testing.T) {
@@ -45,6 +47,110 @@ func TestApplyAndVerifyProtectedPrivateTreeACL(t *testing.T) {
 	if err := VerifyTreeACL(root, policy); err == nil {
 		t.Fatal("private ACL verifier accepted an Everyone allow ACE")
 	}
+}
+
+func TestPrivateTreeAcceptsOwnerRightsForUserOwnedDescendant(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "private")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := PrivateTreePolicy(identity.SID)
+	if err := ApplyTreeACL(root, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	var pipTemp string
+	for _, name := range []string{"pip-unpack-python313", "pip-install-python313"} {
+		pipTemp = filepath.Join(root, "temp", name)
+		if err := os.MkdirAll(pipTemp, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		applyOwnerRightsPrivateACLForTest(t, pipTemp, identity.SID, true)
+		artifact := filepath.Join(pipTemp, "artifact.whl")
+		if err := os.WriteFile(artifact, []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		applyOwnerRightsPrivateACLForTest(t, artifact, identity.SID, false)
+	}
+
+	if err := VerifyTreeACL(root, policy); err != nil {
+		t.Fatalf("Python 3.13-style OWNER RIGHTS descendant was rejected: %v", err)
+	}
+	if err := VerifyACL(pipTemp, policy); err == nil {
+		t.Fatal("exact/root ACL verification accepted OWNER RIGHTS")
+	}
+	if err := VerifyDescendantACL(pipTemp, PrivateTreePolicy("S-1-5-19")); err == nil {
+		t.Fatal("OWNER RIGHTS was accepted for an owner outside the private-tree policy")
+	}
+}
+
+func TestOwnerRightsPrivateTreeExceptionRemainsNarrow(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privatePolicy := PrivateTreePolicy(identity.SID)
+	newDirectory := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "acl-target")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("shared policy", func(t *testing.T) {
+		path := newDirectory(t)
+		applySecurityDescriptorForTest(t, path, "O:"+AdministratorsSID+"G:"+SystemSID+"D:P"+
+			"(A;;FA;;;"+OwnerRightsSID+")"+
+			"(A;;FA;;;"+SystemSID+")"+
+			"(A;;FA;;;"+AdministratorsSID+")"+
+			"(A;;GRGX;;;"+UsersSID+")")
+		if err := VerifyDescendantACL(path, SharedReadOnlyPolicy()); err == nil {
+			t.Fatal("shared policy accepted OWNER RIGHTS")
+		}
+	})
+
+	t.Run("Everyone allow ACE", func(t *testing.T) {
+		path := newDirectory(t)
+		applySecurityDescriptorForTest(t, path, "O:"+identity.SID+"G:"+SystemSID+"D:P"+
+			"(A;;FA;;;"+OwnerRightsSID+")"+
+			"(A;;FA;;;"+SystemSID+")"+
+			"(A;;FA;;;"+AdministratorsSID+")"+
+			"(A;;GRGX;;;"+EveryoneSID+")")
+		if err := VerifyDescendantACL(path, privatePolicy); err == nil {
+			t.Fatal("private descendant accepted Everyone alongside OWNER RIGHTS")
+		}
+	})
+
+	t.Run("cross-user SID ACE", func(t *testing.T) {
+		path := newDirectory(t)
+		foreignUserSID := "S-1-5-21-1280439226-1918457042-1239661119-3216"
+		applySecurityDescriptorForTest(t, path, "O:"+identity.SID+"G:"+SystemSID+"D:P"+
+			"(A;;FA;;;"+OwnerRightsSID+")"+
+			"(A;;FA;;;"+SystemSID+")"+
+			"(A;;FA;;;"+AdministratorsSID+")"+
+			"(A;;FA;;;"+foreignUserSID+")")
+		if err := VerifyDescendantACL(path, privatePolicy); err == nil {
+			t.Fatal("private descendant accepted a cross-user SID alongside OWNER RIGHTS")
+		}
+	})
+
+	t.Run("deny ACE", func(t *testing.T) {
+		path := newDirectory(t)
+		applySecurityDescriptorForTest(t, path, "O:"+identity.SID+"G:"+SystemSID+"D:P"+
+			"(D;;FA;;;"+EveryoneSID+")"+
+			"(A;;FA;;;"+OwnerRightsSID+")"+
+			"(A;;FA;;;"+SystemSID+")"+
+			"(A;;FA;;;"+AdministratorsSID+")")
+		if err := VerifyDescendantACL(path, privatePolicy); err == nil {
+			t.Fatal("private descendant accepted a non-Allow ACE alongside OWNER RIGHTS")
+		}
+	})
 }
 
 func TestSharedReadOnlyPolicyRejectsUsersWrite(t *testing.T) {
@@ -125,5 +231,38 @@ func TestPrivateTreeAllowsOnlyContainedDescendantReparsePoints(t *testing.T) {
 	}
 	if err := VerifyTreeACL(root, SharedReadOnlyPolicy()); err == nil {
 		t.Fatal("shared immutable policy accepted a reparse point")
+	}
+}
+
+func applyOwnerRightsPrivateACLForTest(t *testing.T, path, ownerSID string, directory bool) {
+	t.Helper()
+	flags := ""
+	if directory {
+		flags = "OICI"
+	}
+	sddl := "O:" + ownerSID + "G:" + SystemSID + "D:P" +
+		"(A;" + flags + ";FA;;;" + OwnerRightsSID + ")" +
+		"(A;" + flags + ";FA;;;" + SystemSID + ")" +
+		"(A;" + flags + ";FA;;;" + AdministratorsSID + ")"
+	applySecurityDescriptorForTest(t, path, sddl)
+}
+
+func applySecurityDescriptorForTest(t *testing.T, path, sddl string) {
+	t.Helper()
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	information := windows.SECURITY_INFORMATION(windows.OWNER_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, information, owner, nil, dacl, nil); err != nil {
+		t.Fatal(err)
 	}
 }

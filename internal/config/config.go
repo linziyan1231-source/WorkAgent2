@@ -51,10 +51,9 @@ type Portal struct {
 	UsageManagementKeyFile string   `json:"usage_management_key_file"`
 	UsageQueryTimeoutSecs  int      `json:"usage_query_timeout_seconds"`
 	UsageCacheSeconds      int      `json:"usage_cache_seconds"`
-	ChatGPTForwarderURL    string   `json:"chatgpt_forwarder_url"`
-	ChatGPTSecretFile      string   `json:"chatgpt_forwarder_secret_file"`
+	ChatForwardURL         string   `json:"chatforward_url"`
+	ChatForwardSecretFile  string   `json:"chatforward_secret_file"`
 	ChatGPTProModels       []string `json:"chatgpt_pro_models"`
-	ChatGPTMaintenanceMode bool     `json:"chatgpt_maintenance_mode,omitempty"`
 	NotificationSourceURL  string   `json:"notification_source_url,omitempty"`
 	OutboundProxyURL       string   `json:"outbound_proxy_url,omitempty"`
 	SupportedAionCore      []string `json:"supported_aioncore_versions"`
@@ -76,8 +75,8 @@ func DefaultPortal() Portal {
 		LoginIPFailures:        20,
 		UsageQueryTimeoutSecs:  25,
 		UsageCacheSeconds:      30,
-		ChatGPTForwarderURL:    "http://127.0.0.1:1560",
-		ChatGPTSecretFile:      filepath.Join(DefaultPortalDataRoot, "chatgpt-forwarder.key"),
+		ChatForwardURL:         "http://127.0.0.1:3210",
+		ChatForwardSecretFile:  filepath.Join(DefaultPortalDataRoot, "chatforward.key"),
 		ChatGPTProModels:       []string{"gpt-5-4-pro", "gpt-5-5-pro", "gpt-5-6-pro"},
 		NotificationSourceURL:  "http://203.0.113.79:25888/notification",
 		SupportedAionCore:      []string{"v0.1.42"},
@@ -213,7 +212,7 @@ func (c Portal) Validate() error {
 	if c.UsageCacheSeconds < 1 || c.UsageCacheSeconds > 60 {
 		return errors.New("usage_cache_seconds must be between 1 and 60")
 	}
-	if err := c.validateChatGPTForwarder(); err != nil {
+	if err := c.validateChatForward(); err != nil {
 		return err
 	}
 	if err := validateNotificationSourceURL(c.NotificationSourceURL); err != nil {
@@ -245,23 +244,23 @@ func validateNotificationSourceURL(value string) error {
 	return nil
 }
 
-func (c Portal) validateChatGPTForwarder() error {
-	if c.ChatGPTForwarderURL == "" {
+func (c Portal) validateChatForward() error {
+	if c.ChatForwardURL == "" {
 		if c.Mode == "production" {
-			return errors.New("chatgpt_forwarder_url is required in production")
+			return errors.New("chatforward_url is required in production")
 		}
 		return nil
 	}
-	forwarder, err := url.Parse(c.ChatGPTForwarderURL)
-	if err != nil || forwarder.Scheme != "http" || forwarder.Hostname() != "127.0.0.1" || forwarder.Port() == "" || forwarder.User != nil ||
-		forwarder.Opaque != "" || (forwarder.Path != "" && forwarder.Path != "/") || forwarder.RawQuery != "" || forwarder.Fragment != "" {
-		return errors.New("chatgpt_forwarder_url must be an exact 127.0.0.1 HTTP origin")
+	bridge, err := url.Parse(c.ChatForwardURL)
+	if err != nil || bridge.Scheme != "http" || bridge.Hostname() != "127.0.0.1" || bridge.Port() == "" || bridge.User != nil ||
+		bridge.Opaque != "" || (bridge.Path != "" && bridge.Path != "/") || bridge.RawQuery != "" || bridge.Fragment != "" {
+		return errors.New("chatforward_url must be an exact 127.0.0.1 HTTP origin")
 	}
-	if !filepath.IsAbs(c.ChatGPTSecretFile) {
-		return errors.New("chatgpt_forwarder_secret_file must be absolute")
+	if !filepath.IsAbs(c.ChatForwardSecretFile) {
+		return errors.New("chatforward_secret_file must be absolute")
 	}
-	if c.Mode == "production" && !strings.EqualFold(filepath.Dir(filepath.Clean(c.ChatGPTSecretFile)), filepath.Clean(DefaultPortalDataRoot)) {
-		return fmt.Errorf("chatgpt_forwarder_secret_file must be a direct child of %s", DefaultPortalDataRoot)
+	if c.Mode == "production" && !strings.EqualFold(filepath.Dir(filepath.Clean(c.ChatForwardSecretFile)), filepath.Clean(DefaultPortalDataRoot)) {
+		return fmt.Errorf("chatforward_secret_file must be a direct child of %s", DefaultPortalDataRoot)
 	}
 	if len(c.ChatGPTProModels) == 0 {
 		return errors.New("chatgpt_pro_models must not be empty")

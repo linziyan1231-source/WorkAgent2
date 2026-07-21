@@ -724,8 +724,8 @@ func (m *Manager) servicePrivateDirectories() []string {
 
 func (m *Manager) servicePrivateFiles() []string {
 	paths := []string{m.ConfigPath, m.Config.DatabasePath, m.Config.AuditLogPath, m.Config.PortalLogPath}
-	if m.Config.ChatGPTForwarderURL != "" {
-		paths = append(paths, m.Config.ChatGPTSecretFile)
+	if m.Config.ChatForwardURL != "" {
+		paths = append(paths, m.Config.ChatForwardSecretFile)
 	}
 	if m.Config.UsesTLS() {
 		paths = append(paths, m.Config.TLSCertificateFile, m.Config.TLSPrivateKeyFile)

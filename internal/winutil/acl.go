@@ -16,6 +16,7 @@ const (
 	AdministratorsSID = "S-1-5-32-544"
 	UsersSID          = "S-1-5-32-545"
 	EveryoneSID       = "S-1-1-0"
+	OwnerRightsSID    = "S-1-3-4"
 
 	fileAllAccess windows.ACCESS_MASK = 0x001F01FF
 	fileWriteBits windows.ACCESS_MASK = windows.GENERIC_ALL | windows.GENERIC_WRITE | windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA |
@@ -30,14 +31,15 @@ const (
 )
 
 type ACLPolicy struct {
-	OwnerSID              string
-	AllowedOwnerSIDs      []string
-	DescendantsMayInherit bool
-	Principals            map[string]ACLPermission
+	OwnerSID                       string
+	AllowedOwnerSIDs               []string
+	DescendantsMayInherit          bool
+	Principals                     map[string]ACLPermission
+	allowOwnerRightsForDescendants bool
 }
 
 func PrivateTreePolicy(userSID string) ACLPolicy {
-	return ACLPolicy{OwnerSID: AdministratorsSID, AllowedOwnerSIDs: []string{userSID, SystemSID}, DescendantsMayInherit: true, Principals: map[string]ACLPermission{
+	return ACLPolicy{OwnerSID: AdministratorsSID, AllowedOwnerSIDs: []string{userSID, SystemSID}, DescendantsMayInherit: true, allowOwnerRightsForDescendants: true, Principals: map[string]ACLPermission{
 		SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, userSID: ACLFullControl,
 	}}
 }
@@ -247,6 +249,7 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool) error {
 	if owner == nil || !allowedOwner(policy, owner.String()) {
 		return fmt.Errorf("owner is %v, want one of %v", owner, append([]string{policy.OwnerSID}, policy.AllowedOwnerSIDs...))
 	}
+	ownerSID := owner.String()
 	dacl, _, err := descriptor.DACL()
 	if err != nil || dacl == nil {
 		return errors.New("protected DACL is missing")
@@ -266,15 +269,20 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool) error {
 			return fmt.Errorf("invalid ACE SID at index %d", index)
 		}
 		sidText := sid.String()
+		principalSID := sidText
 		permission, allowed := permissionForSID(policy, sidText)
+		if !allowed && !requireProtected && policy.allowOwnerRightsForDescendants && strings.EqualFold(sidText, OwnerRightsSID) {
+			principalSID = ownerSID
+			permission, allowed = permissionForSID(policy, principalSID)
+		}
 		if !allowed {
 			return fmt.Errorf("unexpected allowed principal %s", sidText)
 		}
 		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE == 0 {
-			granted[canonicalSID(policy, sidText)] |= ace.Mask
+			granted[canonicalSID(policy, principalSID)] |= ace.Mask
 		}
 		if permission == ACLReadExecute && ace.Mask&fileWriteBits != 0 {
-			return fmt.Errorf("read-only principal %s has write or ACL-management rights 0x%08x", sidText, uint32(ace.Mask))
+			return fmt.Errorf("read-only principal %s has write or ACL-management rights 0x%08x", principalSID, uint32(ace.Mask))
 		}
 	}
 	for sid, permission := range policy.Principals {
