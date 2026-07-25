@@ -1,6 +1,33 @@
-# Local Go SDKs, caches, and downloaded toolchains
-/.tools/go/
-/.tools/go[0-9]*/
-/.tools/gocache/
-/.tools/gomodcache/
-/.tools/downloads/go*.zip
+# Build outputs and local toolchains
+/artifacts/
+/dist/
+/bin/
+/.tools/
+*.exe
+*.dll
+*.pdb
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.secret
+secrets/
+credentials/
+
+# Test and editor state
+/coverage.out
+/coverage.html
+*.test
+.idea/
+.vscode/
+*.swp
+*.tmp
+
+# Operating-system files
+.DS_Store
+Thumbs.db

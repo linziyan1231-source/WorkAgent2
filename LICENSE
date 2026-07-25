@@ -1,0 +1,88 @@
+Personal and Internal Non-Monetized Source License
+Version 1.1, July 2026
+
+Copyright (c) 2026 linziyan1231. All rights reserved.
+
+1. Definitions
+
+"Software" means the source code, documentation, and other first-party material distributed with this license, including modified portions and derivative works.
+
+"Licensor" means the copyright owner identified above.
+
+"You" means the natural person or legal entity exercising rights under this license.
+
+"Personal Use" means private use by a natural person for that person's own learning, study, experimentation, evaluation, or productivity, without providing the Software or a service based on it to another person or entity for compensation.
+
+"Internal Organizational Use" means use within one legal entity, solely by its employees and individual contractors who need access for that entity's internal evaluation, research, prototyping, administration, operations, or productivity. It does not include access by customers, the public, affiliated legal entities, or other third parties, and it does not include providing a product, service, or deliverable based on the Software outside that entity.
+
+"Monetized Use" means selling, reselling, renting, licensing, sublicensing, charging for access to, or receiving revenue, fees, advertising income, sponsorship, or other compensation from the Software or a derivative work. It also includes using the Software as a material component of a product, hosted offering, professional service, or deliverable supplied to an external customer or user for compensation. Ordinary cost savings, productivity improvements, or other internal business benefits resulting solely from permitted Internal Organizational Use do not by themselves constitute Monetized Use.
+
+2. Limited permission
+
+Subject to every condition in this license, the Licensor grants You a revocable, non-exclusive, non-transferable, non-sublicensable, worldwide, royalty-free permission to:
+
+a. view and study the Software;
+
+b. download and make reasonable backup copies for Personal Use or Internal Organizational Use;
+
+c. run the Software for Personal Use or Internal Organizational Use;
+
+d. modify the Software for Personal Use or Internal Organizational Use, provided that all copyright, attribution, and license notices remain intact; and
+
+e. for Internal Organizational Use, reproduce and deploy the Software within one legal entity and share it only with that entity's employees and individual contractors who need access and are bound to keep the Software within the entity. The entity is responsible for their compliance with this license.
+
+3. Prohibited uses
+
+Except with the Licensor's separate prior written permission, You must not:
+
+a. make any Monetized Use of the Software or a derivative work;
+
+b. distribute, publish, mirror, transmit, or otherwise provide copies of the Software or a derivative work outside the single entity exercising Internal Organizational Use;
+
+c. host or deploy the Software for access by the public, customers, clients, affiliated legal entities, or other third parties, whether access is paid or free, including any hosted, managed, cloud, subscription, platform, API, SaaS, or similar service;
+
+d. incorporate the Software into, or use it to provide, any product, professional service, customer project, or external deliverable that is sold, licensed, or otherwise provided for compensation;
+
+e. transfer the Software to a parent company, subsidiary, affiliate, client, vendor, or other separate legal entity unless the Licensor gives separate written permission;
+
+f. use the Software in connection with advertising, sponsorship, donations, fundraising, or any other monetized activity;
+
+g. include the Software or any substantial portion of it in a dataset, benchmark corpus, machine-learning training process, model-weight creation process, or commercial automated code-generation system, except for rights that the Licensor has separately and directly granted to a hosting platform under binding platform terms;
+
+h. remove, obscure, or alter copyright, attribution, license, provenance, or authorship notices; or
+
+i. claim the Software or its development history as Your own work.
+
+Separate hosting-platform terms may apply. If the Licensor makes the Software public on a source-hosting platform, the Licensor may grant that platform and its users certain rights directly under the platform's terms of service. Depending on those terms, the separate rights may include viewing, forking or reproducing through the service, and platform-operated artificial-intelligence uses. Those separate grants control to the extent required by the binding platform terms and are not revoked by this license. They do not grant any broader right under this license to sell, commercialize, redistribute off-platform, or operate the Software as a service.
+
+4. Modified versions
+
+Any permitted modified version remains subject to this license. You may keep it for Personal Use or share and deploy it only within the single entity exercising Internal Organizational Use. No permission is granted to distribute or deploy a modified version outside that boundary.
+
+5. Third-party material
+
+This license applies only to material for which the Licensor owns the copyright. Third-party libraries, APIs, trademarks, and other material remain governed by their respective licenses and terms. No third-party right is granted by this license.
+
+6. No patent or trademark license
+
+No patent, trademark, trade-name, logo, or branding right is granted. All rights not expressly granted are reserved by the Licensor.
+
+7. Notices
+
+Every permitted copy or modified version must retain this license, the copyright notice, and all attribution and provenance notices included with the Software.
+
+8. Termination
+
+Your permission terminates automatically and immediately if You breach this license. Upon termination, You must stop using the Software and delete every copy and modified version in Your possession or control, except records that applicable law requires You to retain.
+
+9. No warranty; limitation of liability
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR WILL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR ITS USE.
+
+10. Severability and waiver
+
+If any provision is unenforceable, the remaining provisions remain in effect to the maximum extent permitted by law. A failure to enforce a provision is not a waiver of the right to enforce it later.
+
+11. Additional permission
+
+Any use outside this license requires a separate written license from the Licensor. No email, conversation, repository issue, pull request, or contribution constitutes additional permission unless it expressly identifies this license and is signed or otherwise formally confirmed by the Licensor.
