@@ -46,6 +46,47 @@ func TestStageInspectLoadAndCompleteRealShapedBootstrap(t *testing.T) {
 	}
 }
 
+func TestUpdateAppliedCodexDefaultModelPreservesManagedState(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"credentials", "config"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bundle := realBundle()
+	bundle.CodexModels = ManagedCodexModels()
+	before := bundle.State
+	if err := Stage(root, bundle, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := Complete(root, bundle.State); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := UpdateAppliedCodexDefaultModel(root, DefaultCodexModel)
+	if err != nil || !updated {
+		t.Fatalf("update applied default: updated=%t err=%v", updated, err)
+	}
+	status, err := Inspect(root)
+	if err != nil || !status.Applied {
+		t.Fatalf("inspect updated state: status=%+v err=%v", status, err)
+	}
+	want := before
+	want.CodexDefaultModel = DefaultCodexModel
+	if !reflect.DeepEqual(status.State, want) {
+		t.Fatalf("updated state changed unrelated fields: got=%+v want=%+v", status.State, want)
+	}
+	if updated, err := UpdateAppliedCodexDefaultModel(root, DefaultCodexModel); err != nil || updated {
+		t.Fatalf("second update was not a no-op: updated=%t err=%v", updated, err)
+	}
+	rebase, err := StageRebase(root, "http://127.0.0.1:8317/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebase.Previous.CodexDefaultModel != DefaultCodexModel || rebase.Target.CodexDefaultModel != DefaultCodexModel {
+		t.Fatalf("rebase did not preserve migrated default: %+v", rebase)
+	}
+}
+
 func TestRebaseChangesOnlyBaseURLWithoutStagingKeys(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"credentials", "config"} {

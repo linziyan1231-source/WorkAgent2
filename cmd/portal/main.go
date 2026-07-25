@@ -20,6 +20,7 @@ import (
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/kimi"
+	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/winutil"
 	"golang.org/x/term"
@@ -180,7 +181,7 @@ func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, argument
 	managementURL := flags.String("management-url", "", "local cpa-key-policy Management API URL")
 	managementKeyFile := flags.String("management-key-file", "", "protected local Management API key file")
 	baseURL := flags.String("base-url", "", "employee OpenAI-compatible /v1 base URL")
-	codexDefault := flags.String("codex-default-model", "example-reasoning", "default Codex model alias")
+	codexDefault := flags.String("codex-default-model", modelbootstrap.DefaultCodexModel, "default Codex model alias")
 	codexModels := flags.String("codex-models", "", "comma-separated Codex/ChatGPT aliases")
 	kimiModels := flags.String("kimi-models", "", "comma-separated Kimi aliases")
 	rpm := flags.Int("rpm", 0, "requests per minute; zero means unlimited")

@@ -199,12 +199,28 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	dbPath := filepath.Join(h.dirs.Data, "aionui-backend.db")
+	if pendingModels == nil {
+		codexModelDefaultsApplied, err := applyCodexModelDefaults(h.cfg.DataRoot, h.dirs)
+		if err != nil {
+			return err
+		}
+		if codexModelDefaultsApplied {
+			h.log.Printf("Set the Codex default model to %s with %s reasoning before runtime startup", modelbootstrap.DefaultCodexModel, modelbootstrap.DefaultCodexReasoningEffort)
+		}
+	}
 	agentDefaultsApplied, err := applyInitialAgentDefaults(ctx, dbPath, filepath.Join(h.dirs.Config, agentDefaultsMarkerName), time.Now())
 	if err != nil {
 		return err
 	}
 	if agentDefaultsApplied {
 		h.log.Printf("Initialized AionUi agents with Aion CLI, Codex, and Kimi enabled and Aion CLI defaulting to YOLO")
+	}
+	codexAssistantDefaultsApplied, err := applyCodexAssistantDefaults(ctx, dbPath, filepath.Join(h.dirs.Config, codexAssistantDefaultsMarkerName), time.Now())
+	if err != nil {
+		return err
+	}
+	if codexAssistantDefaultsApplied {
+		h.log.Printf("Set managed Codex assistant defaults to %s, %s reasoning, and full access", modelbootstrap.DefaultCodexModel, modelbootstrap.DefaultCodexReasoningEffort)
 	}
 	username, password, err := rotateInternalCredentials(ctx, dbPath, time.Now())
 	if err != nil {
@@ -269,6 +285,14 @@ func (h *Host) initialize(ctx context.Context) error {
 	if err := h.applyPendingModelBootstrap(startupCtx, pendingModels); err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
+	}
+	codexModelDefaultsApplied, err := applyCodexModelDefaults(h.cfg.DataRoot, h.dirs)
+	if err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
+	if codexModelDefaultsApplied {
+		h.log.Printf("Set the Codex default model to %s with %s reasoning", modelbootstrap.DefaultCodexModel, modelbootstrap.DefaultCodexReasoningEffort)
 	}
 	if err := h.enforceManagedProviderPolicy(startupCtx); err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)

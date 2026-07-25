@@ -414,7 +414,7 @@ func writeInitialCodexConfig(path, baseURL, model string) error {
 		"# Initial CLIProxyAPI settings managed by AionUiPortal.",
 		"openai_base_url = " + strconv.Quote(baseURL),
 		"model = " + strconv.Quote(model),
-		`model_reasoning_effort = "xhigh"`,
+		"model_reasoning_effort = " + strconv.Quote(modelbootstrap.DefaultCodexReasoningEffort),
 		`cli_auth_credentials_store = "file"`,
 		"",
 	}

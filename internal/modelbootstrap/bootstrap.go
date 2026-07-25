@@ -18,15 +18,17 @@ import (
 )
 
 const (
-	FormatVersion     = 1
-	BundleFileName    = "model-bootstrap-v1.json"
-	MarkerFileName    = "model-bootstrap-v1.applied.json"
-	RebaseFileName    = "model-bootstrap-v1.rebase.json"
-	CodexProviderID   = "managed-cliproxy-chatgpt"
-	KimiProviderID    = "managed-cliproxy-kimi"
-	maxBootstrapFile  = 256 * 1024
-	CodexProviderName = "ChatGPT"
-	KimiProviderName  = "KIMI"
+	FormatVersion               = 1
+	BundleFileName              = "model-bootstrap-v1.json"
+	MarkerFileName              = "model-bootstrap-v1.applied.json"
+	RebaseFileName              = "model-bootstrap-v1.rebase.json"
+	CodexProviderID             = "managed-cliproxy-chatgpt"
+	KimiProviderID              = "managed-cliproxy-kimi"
+	maxBootstrapFile            = 256 * 1024
+	CodexProviderName           = "ChatGPT"
+	KimiProviderName            = "KIMI"
+	DefaultCodexModel           = "example-balanced"
+	DefaultCodexReasoningEffort = "low"
 )
 
 var (
@@ -169,6 +171,39 @@ func AppliedKeyIDs(dataRoot, windowsSID string) (KeyIDs, error) {
 		return KeyIDs{}, fmt.Errorf("validate applied model bootstrap marker: %w", err)
 	}
 	return KeyIDs{CodexKeyID: state.CodexKeyID, KimiKeyID: state.KimiKeyID}, nil
+}
+
+func UpdateAppliedCodexDefaultModel(dataRoot, model string) (bool, error) {
+	status, err := Inspect(dataRoot)
+	if err != nil {
+		return false, err
+	}
+	if !status.Applied || status.Pending || status.RebasePending {
+		return false, errors.New("model bootstrap must be applied without a pending operation")
+	}
+	if status.State.CodexDefaultModel == model {
+		return false, nil
+	}
+	updated := status.State
+	updated.CodexDefaultModel = model
+	if err := updated.Validate(); err != nil {
+		return false, fmt.Errorf("validate updated Codex default model: %w", err)
+	}
+	_, markerPath, err := Paths(dataRoot)
+	if err != nil {
+		return false, err
+	}
+	if err := writeJSONAtomic(markerPath, updated); err != nil {
+		return false, fmt.Errorf("write updated model bootstrap marker: %w", err)
+	}
+	verified, err := Inspect(dataRoot)
+	if err != nil {
+		return false, fmt.Errorf("verify updated model bootstrap marker: %w", err)
+	}
+	if !verified.Applied || verified.Pending || verified.RebasePending || !statesEqual(verified.State, updated) {
+		return false, errors.New("updated model bootstrap marker did not persist exactly")
+	}
+	return true, nil
 }
 
 func (b Bundle) Validate() error {
