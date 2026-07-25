@@ -243,11 +243,11 @@ func TestManagedModelPolicyIsExactAndReturnsCopies(t *testing.T) {
 
 func TestKeyIDsAreStableAndBoundToUppercaseSID(t *testing.T) {
 	const sid = "S-1-5-21-1335169958-1819941586-1322872941-1322"
-	want := KeyIDs{CodexKeyID: "aionui-c6caa7a66c7a1ad24ed9-chatgpt", KimiKeyID: "aionui-c6caa7a66c7a1ad24ed9-kimi"}
+	want := KeyIDs{CodexKeyID: "aionui-6cd6d637d50327d44e4b-chatgpt", KimiKeyID: "aionui-6cd6d637d50327d44e4b-kimi"}
 	if got := KeyIDsForSID(sid); got != want {
 		t.Fatalf("key IDs=%+v, want %+v", got, want)
 	}
-	if got := KeyIDsForSID("S-1-5-21-1335169958-1819941586-1322872941-1322"); got != want {
+	if got := KeyIDsForSID("s-1-5-21-1335169958-1819941586-1322872941-1322"); got != want {
 		t.Fatalf("lowercase SID derived different key IDs: %+v", got)
 	}
 	if err := want.ValidateForSID(sid); err != nil {
