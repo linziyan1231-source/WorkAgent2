@@ -41,9 +41,17 @@ type CountWindow struct {
 	ResetAt string `json:"reset_at"`
 }
 
+type StorageUsage struct {
+	LimitBytes     uint64 `json:"limit_bytes"`
+	UsedBytes      uint64 `json:"used_bytes"`
+	RemainingBytes uint64 `json:"remaining_bytes"`
+	MeasuredAt     string `json:"measured_at"`
+}
+
 type Summary struct {
-	AsOf      string     `json:"as_of"`
-	Providers []Provider `json:"providers"`
+	AsOf      string        `json:"as_of"`
+	Providers []Provider    `json:"providers"`
+	Storage   *StorageUsage `json:"storage,omitempty"`
 }
 
 type RawWindow struct {
@@ -199,5 +207,9 @@ func formatUSD(value *big.Rat) string {
 
 func cloneSummary(value Summary) Summary {
 	value.Providers = append([]Provider(nil), value.Providers...)
+	if value.Storage != nil {
+		storage := *value.Storage
+		value.Storage = &storage
+	}
 	return value
 }

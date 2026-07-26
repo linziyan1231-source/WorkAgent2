@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -68,6 +69,19 @@ func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
+	}
+	storage, err := s.instances.StorageUsage(ctx, session.User.WindowsSID)
+	if err != nil {
+		s.usageFailure("storage_unavailable")
+	} else {
+		summary.Storage = &portalusage.StorageUsage{
+			LimitBytes: storage.LimitBytes, UsedBytes: storage.UsedBytes, RemainingBytes: storage.RemainingBytes, MeasuredAt: storage.MeasuredAt,
+		}
+	}
+	if snapshot, marshalErr := json.Marshal(summary); marshalErr != nil {
+		s.usageFailure("snapshot_encode_failed")
+	} else if writeErr := s.instances.WriteUsageSnapshot(ctx, session.User.WindowsSID, snapshot); writeErr != nil {
+		s.usageFailure("snapshot_write_failed")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": summary})
 }

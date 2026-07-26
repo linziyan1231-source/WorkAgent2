@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -159,35 +160,44 @@ func (h *Host) initialize(ctx context.Context) error {
 	webPath := filepath.Join(h.release.Path, "aionui-web.exe")
 	staticPath := filepath.Join(h.release.Path, "static")
 	env := h.environment()
+	phaseStarted := time.Now()
 	agentVersions, err := agentcli.Probe(ctx, agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), env, h.sandbox.Apply)
 	if err != nil {
 		return fmt.Errorf("verify shared agent CLIs: %w", err)
 	}
-	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s python=%s", agentVersions.Codex, agentVersions.Kimi, agentVersions.Python)
+	h.log.Printf("Shared agent CLIs verified codex=%s kimi=%s python=%s elapsed_ms=%d", agentVersions.Codex, agentVersions.Kimi, agentVersions.Python, time.Since(phaseStarted).Milliseconds())
+	phaseStarted = time.Now()
 	kimiConfigMigrated, err := h.initializeKimiCodeConfig(ctx, env)
 	if err != nil {
 		return err
 	}
+	h.log.Printf("Startup phase completed phase=kimi-config elapsed_ms=%d changed=%t", time.Since(phaseStarted).Milliseconds(), kimiConfigMigrated)
 	if kimiConfigMigrated {
 		h.log.Printf("Copied the legacy Kimi configuration to the private Kimi Code home; the legacy configuration was preserved for rollback")
 	}
+	phaseStarted = time.Now()
 	pendingModels, err := h.preparePendingModelBootstrap(ctx, env)
 	if err != nil {
 		return err
 	}
+	h.log.Printf("Startup phase completed phase=model-bootstrap-prepare elapsed_ms=%d pending=%t", time.Since(phaseStarted).Milliseconds(), pendingModels != nil)
 	// Keep catalog setup after the pending API-key login and before the bundle is
 	// completed so a first-start user follows the same exact picker policy.
+	phaseStarted = time.Now()
 	codexCatalogApplied, err := h.applyManagedCodexModelCatalog(ctx, env, agentVersions.Codex)
 	if err != nil {
 		return err
 	}
+	h.log.Printf("Startup phase completed phase=codex-catalog elapsed_ms=%d catalog_fetched=%t", time.Since(phaseStarted).Milliseconds(), codexCatalogApplied)
 	if codexCatalogApplied {
 		h.log.Printf("Initialized Codex CLI with the exact three-model GPT-5.6 catalog")
 	}
+	phaseStarted = time.Now()
 	kimiThinkingApplied, err := h.applyKimiThinkingDefault(ctx, env)
 	if err != nil {
 		return err
 	}
+	h.log.Printf("Startup phase completed phase=kimi-defaults elapsed_ms=%d changed=%t", time.Since(phaseStarted).Milliseconds(), kimiThinkingApplied)
 	if kimiThinkingApplied {
 		h.log.Printf("Initialized Kimi for Coding with thinking enabled")
 	}
@@ -195,9 +205,11 @@ func (h *Host) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("select migration port: %w", err)
 	}
+	phaseStarted = time.Now()
 	if err := h.runMigrations(ctx, corePath, migrationPort, env); err != nil {
 		return err
 	}
+	h.log.Printf("Startup phase completed phase=aioncore-migrations elapsed_ms=%d", time.Since(phaseStarted).Milliseconds())
 	dbPath := filepath.Join(h.dirs.Data, "aionui-backend.db")
 	if pendingModels == nil {
 		codexModelDefaultsApplied, err := applyCodexModelDefaults(h.cfg.DataRoot, h.dirs)
@@ -231,7 +243,7 @@ func (h *Host) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("select internal Web port: %w", err)
 	}
-	cmd := exec.Command(webPath, "start", "--port", fmt.Sprint(webPort), "--data-dir", h.dirs.Data, "--log-dir", h.dirs.Logs,
+	cmd := exec.Command(webPath, "start", "--port", fmt.Sprint(webPort), "--data-dir", h.dirs.Data, "--work-dir", h.dirs.Workspace, "--log-dir", h.dirs.Logs,
 		"--static-dir", staticPath, "--backend-bin", corePath, "--no-open")
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = env
@@ -331,7 +343,7 @@ func (h *Host) initialize(ctx context.Context) error {
 }
 
 func (h *Host) runMigrations(ctx context.Context, corePath string, port int, env []string) error {
-	cmd := exec.Command(corePath, "--port", fmt.Sprint(port), "--data-dir", h.dirs.Data, "--work-dir", h.dirs.Data,
+	cmd := exec.Command(corePath, "--port", fmt.Sprint(port), "--data-dir", h.dirs.Data, "--work-dir", h.dirs.Workspace,
 		"--log-dir", h.dirs.Logs, "--managed-resources-mode", "bundled")
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = env
@@ -450,7 +462,7 @@ func (h *Host) verifyCompleteHealth(ctx context.Context, corePath string, webPor
 	if inside, err := h.job.ContainsPID(corePID); err != nil || !inside {
 		return 0, 0, nil, errors.New("aioncore is not in the expected Job Object")
 	}
-	if err := h.client.validateAuthenticatedAPIs(ctx, username, systemInfo{CacheDir: h.dirs.Data, WorkDir: h.dirs.Data, LogDir: h.dirs.Logs, Platform: "win32", Arch: "x64"}); err != nil {
+	if err := h.client.validateAuthenticatedAPIs(ctx, username, systemInfo{CacheDir: h.dirs.Data, WorkDir: h.dirs.Workspace, LogDir: h.dirs.Logs, Platform: "win32", Arch: "x64"}); err != nil {
 		return 0, 0, nil, err
 	}
 	return corePID, corePort, []string{"sid", "whoami-user", "release-integrity", "job-object", "web-process", "aioncore-process", "loopback-bindings", "aioncore-health", "internal-auth", "auth-user-api", "system-dirs", "renderer-api", "not-frontend-only"}, nil
@@ -476,6 +488,29 @@ func waitCoreHealth(ctx context.Context, port int, expectedVersion string, done 
 	}
 }
 
+const coreHealthTransientFailureThreshold = 3
+
+type coreHealthError struct {
+	transient bool
+	err       error
+}
+
+func (e *coreHealthError) Error() string { return e.err.Error() }
+func (e *coreHealthError) Unwrap() error { return e.err }
+
+func isTransientCoreHealthError(err error) bool {
+	var healthErr *coreHealthError
+	return errors.As(err, &healthErr) && healthErr.transient
+}
+
+func coreHealthMonitorDecision(consecutive int, err error) (int, bool) {
+	if !isTransientCoreHealthError(err) {
+		return 0, true
+	}
+	consecutive++
+	return consecutive, consecutive >= coreHealthTransientFailureThreshold
+}
+
 func checkCoreHealth(ctx context.Context, port int, expectedVersion string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", port), nil)
 	if err != nil {
@@ -484,15 +519,18 @@ func checkCoreHealth(ctx context.Context, port int, expectedVersion string) erro
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Do(req)
 	if err != nil {
-		return err
+		return &coreHealthError{transient: true, err: err}
 	}
 	defer response.Body.Close()
+	if response.StatusCode >= http.StatusInternalServerError {
+		return &coreHealthError{transient: true, err: fmt.Errorf("AionCore health returned HTTP %d", response.StatusCode)}
+	}
 	var health struct {
 		Status  string `json:"status"`
 		Version string `json:"version"`
 	}
-	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&health) != nil || health.Status != "ok" ||
-		health.Version != strings.TrimPrefix(expectedVersion, "v") {
+	decodeErr := json.NewDecoder(response.Body).Decode(&health)
+	if response.StatusCode != http.StatusOK || decodeErr != nil || health.Status != "ok" || health.Version != strings.TrimPrefix(expectedVersion, "v") {
 		return fmt.Errorf("unexpected AionCore health response: HTTP %d status=%q version=%q", response.StatusCode, health.Status, health.Version)
 	}
 	return nil
@@ -501,6 +539,7 @@ func checkCoreHealth(ctx context.Context, port int, expectedVersion string) erro
 func (h *Host) monitor(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	consecutiveHealthFailures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -529,8 +568,18 @@ func (h *Host) monitor(ctx context.Context) error {
 			h.status.ProcessCount, h.status.MemoryBytes, h.status.CPUPercent = stats.ProcessCount, stats.MemoryBytes, cpu
 			h.mu.Unlock()
 			if err := checkCoreHealth(ctx, h.snapshot().AionCorePort, h.release.Manifest.AionCoreVersion); err != nil {
+				var fail bool
+				consecutiveHealthFailures, fail = coreHealthMonitorDecision(consecutiveHealthFailures, err)
+				if !fail {
+					h.log.Printf("AionCore health monitor transient failure consecutive=%d threshold=%d error=%v", consecutiveHealthFailures, coreHealthTransientFailureThreshold, err)
+					continue
+				}
 				h.setFailure(fmt.Errorf("AionCore health monitor failed: %w", err))
 				return err
+			}
+			if consecutiveHealthFailures != 0 {
+				h.log.Printf("AionCore health monitor recovered after transient_failures=%d", consecutiveHealthFailures)
+				consecutiveHealthFailures = 0
 			}
 		}
 	}
@@ -595,6 +644,29 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		}
 		responseIDs := ipc.ModelKeyIDs{CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID}
 		return ipc.Response{OK: true, ModelKeyIDs: &responseIDs}
+	case "storage_usage":
+		usage, err := measureStorageUsage(ctx, h.cfg.DataRoot)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: "STORAGE_USAGE_UNAVAILABLE", ErrorMessage: "private storage usage is unavailable"}
+		}
+		return ipc.Response{OK: true, StorageUsage: &usage}
+	case "usage_snapshot":
+		if len(request.UsageSnapshot) == 0 || len(request.UsageSnapshot) > 64*1024 || !json.Valid(request.UsageSnapshot) {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_USAGE_SNAPSHOT", ErrorMessage: "usage snapshot is invalid"}
+		}
+		var snapshot struct {
+			AsOf      string `json:"as_of"`
+			Providers []struct {
+				Kind string `json:"kind"`
+			} `json:"providers"`
+		}
+		if err := json.Unmarshal(request.UsageSnapshot, &snapshot); err != nil || snapshot.AsOf == "" || len(snapshot.Providers) != 2 || snapshot.Providers[0].Kind == snapshot.Providers[1].Kind {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_USAGE_SNAPSHOT", ErrorMessage: "usage snapshot is invalid"}
+		}
+		if err := writePrivateFileAtomic(filepath.Join(h.dirs.Data, "quota-summary.json"), request.UsageSnapshot); err != nil {
+			return ipc.Response{OK: false, ErrorCode: "USAGE_SNAPSHOT_WRITE_FAILED", ErrorMessage: "usage snapshot could not be saved"}
+		}
+		return ipc.Response{OK: true}
 	case "touch":
 		h.mu.Lock()
 		h.status.LastActivityUnix = time.Now().Unix()
@@ -682,6 +754,67 @@ func (h *Host) snapshot() ipc.Status {
 	status := h.status
 	status.Checks = append([]string(nil), h.status.Checks...)
 	return status
+}
+
+const userStorageLimitBytes = uint64(20 * 1024 * 1024 * 1024)
+
+func measureStorageUsage(ctx context.Context, root string) (ipc.StorageUsage, error) {
+	var used uint64
+	err := filepath.WalkDir(root, accumulateStorageEntry(ctx, &used))
+	if err != nil {
+		return ipc.StorageUsage{}, err
+	}
+	remaining := uint64(0)
+	if used < userStorageLimitBytes {
+		remaining = userStorageLimitBytes - used
+	}
+	return ipc.StorageUsage{
+		LimitBytes:     userStorageLimitBytes,
+		UsedBytes:      used,
+		RemainingBytes: remaining,
+		MeasuredAt:     time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func accumulateStorageEntry(ctx context.Context, used *uint64) fs.WalkDirFunc {
+	return func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// WalkDir does not normally follow symbolic links, but Windows directory
+		// junctions are reparse points that may otherwise require resolving an
+		// inaccessible target before Info can return. Skip them from the cheap
+		// DirEntry type metadata first, then retain the attribute check below for
+		// other Windows reparse-point forms.
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if data, ok := info.Sys().(*syscall.Win32FileAttributeData); ok && data.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 {
+			return nil
+		}
+		size := uint64(info.Size())
+		if ^uint64(0)-*used < size {
+			return errors.New("private storage usage overflowed")
+		}
+		*used += size
+		return nil
+	}
 }
 
 func (h *Host) setFailure(err error) {

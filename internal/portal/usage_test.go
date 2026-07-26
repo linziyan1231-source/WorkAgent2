@@ -35,6 +35,9 @@ func TestCurrentUsageUsesOnlyAuthenticatedUsersSIDBoundMapping(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"pro":{"used":0,"limit":7,`) {
 		t.Fatalf("first user response omitted default ChatGPT Pro quota: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"storage":{"limit_bytes":21474836480,"used_bytes":2147483648,"remaining_bytes":19327352832,`) {
+		t.Fatalf("first user response omitted private storage usage: %s", response.Body.String())
+	}
 	secondToken := createPortalSessionFor(t, data, "portal-bob", testSID2, `SERVER\test2`)
 	secondResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(secondResponse, authenticatedUsageRequest(secondToken, "/api/portal/me/usage"))
@@ -44,6 +47,7 @@ func TestCurrentUsageUsesOnlyAuthenticatedUsersSIDBoundMapping(t *testing.T) {
 
 	instances.mu.Lock()
 	markerSIDs := append([]string(nil), instances.modelKeyIDSIDs...)
+	storageSIDs := append([]string(nil), instances.storageUsageSIDs...)
 	instances.mu.Unlock()
 	usage.mu.Lock()
 	calls := append([]usageCall(nil), usage.calls...)
@@ -51,8 +55,9 @@ func TestCurrentUsageUsesOnlyAuthenticatedUsersSIDBoundMapping(t *testing.T) {
 	wantIDs := modelbootstrap.KeyIDsForSID(testSID1)
 	wantSecondIDs := modelbootstrap.KeyIDsForSID(testSID2)
 	if len(markerSIDs) != 2 || markerSIDs[0] != testSID1 || markerSIDs[1] != testSID2 || len(calls) != 2 ||
-		calls[0].sid != testSID1 || calls[0].ids != wantIDs || calls[1].sid != testSID2 || calls[1].ids != wantSecondIDs {
-		t.Fatalf("quota lookup escaped current identity: marker_sids=%v calls=%+v", markerSIDs, calls)
+		calls[0].sid != testSID1 || calls[0].ids != wantIDs || calls[1].sid != testSID2 || calls[1].ids != wantSecondIDs ||
+		len(storageSIDs) != 2 || storageSIDs[0] != testSID1 || storageSIDs[1] != testSID2 {
+		t.Fatalf("quota lookup escaped current identity: marker_sids=%v storage_sids=%v calls=%+v", markerSIDs, storageSIDs, calls)
 	}
 	body := response.Body.String()
 	for _, forbidden := range []string{wantIDs.CodexKeyID, wantIDs.KimiKeyID, modelbootstrap.KeyIDsForSID(testSID2).CodexKeyID, "cpa_"} {
@@ -124,6 +129,17 @@ func TestCurrentUsageReportsRemoteTimeout(t *testing.T) {
 	server.Handler().ServeHTTP(response, authenticatedUsageRequest(token, "/api/portal/me/usage"))
 	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "timed out") {
 		t.Fatalf("timeout status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCurrentUsageKeepsQuotaAvailableWhenStorageMeasurementFails(t *testing.T) {
+	server, data, instances := testServer(t)
+	token := createPortalSession(t, data)
+	instances.storageUsageError = errors.New("private scan failed")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, authenticatedUsageRequest(token, "/api/portal/me/usage"))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"providers"`) || strings.Contains(response.Body.String(), `"storage"`) {
+		t.Fatalf("storage failure changed quota response: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
