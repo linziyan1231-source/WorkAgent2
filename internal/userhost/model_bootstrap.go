@@ -32,7 +32,7 @@ const maxCodexConfig = 1024 * 1024
 const (
 	legacyKimiConfigRelativePath = ".kimi/config.toml"
 	kimiCodeConfigRelativePath   = ".kimi-code/config.toml"
-	kimiDefaultModelKey          = "kimi-code/kimi-for-coding"
+	kimiDefaultModelKey          = "kimi-code/kimi-k3"
 )
 
 var managedCodexAssignment = regexp.MustCompile(`^\s*(?:["']?(openai_base_url|model_reasoning_effort|model|cli_auth_credentials_store)["']?)\s*=`)
@@ -234,6 +234,9 @@ MODEL_KEY = "kimi-code/kimi-for-coding"
 MODEL_NAME = "kimi-for-coding"
 HIGHSPEED_MODEL_KEY = "kimi-code/kimi-for-coding-highspeed"
 HIGHSPEED_MODEL_NAME = "kimi-for-coding-highspeed"
+K3_MODEL_KEY = "kimi-code/kimi-k3"
+K3_MODEL_NAME = "kimi-k3"
+THINKING_EFFORTS = ["low", "high", "max"]
 OAUTH_KEY = "oauth/kimi-code"
 MAX_CONFIG_BYTES = 1024 * 1024
 
@@ -285,28 +288,36 @@ models = document.get("models")
 if not isinstance(models, dict):
     models = tomlkit.table()
     document["models"] = models
-def upsert_model(key, name, display_name):
+def upsert_model(key, name, display_name, max_context_size, default_effort, default_capabilities):
     model = models.get(key)
     if not isinstance(model, dict):
         model = tomlkit.table()
     model["provider"] = PROVIDER_KEY
     model["model"] = name
-    model["max_context_size"] = 262144
+    model["max_context_size"] = max_context_size
     capabilities = model.get("capabilities")
     if not isinstance(capabilities, list):
-        capabilities = ["video_in", "image_in", "thinking"]
+        capabilities = list(default_capabilities)
     elif "thinking" not in capabilities:
         capabilities.append("thinking")
     model["capabilities"] = capabilities
+    model["support_efforts"] = list(THINKING_EFFORTS)
+    model["default_effort"] = default_effort
     if "display_name" not in model:
         model["display_name"] = display_name
     models[key] = model
 
-upsert_model(MODEL_KEY, MODEL_NAME, "Kimi for Coding")
-upsert_model(HIGHSPEED_MODEL_KEY, HIGHSPEED_MODEL_NAME, "Kimi for Coding HighSpeed")
-document["default_model"] = MODEL_KEY
+upsert_model(MODEL_KEY, MODEL_NAME, "Kimi K2.7 Code", 262144, "high", ["video_in", "image_in", "thinking"])
+upsert_model(HIGHSPEED_MODEL_KEY, HIGHSPEED_MODEL_NAME, "Kimi K2.7 Code HighSpeed", 262144, "high", ["video_in", "image_in", "thinking"])
+upsert_model(K3_MODEL_KEY, K3_MODEL_NAME, "Kimi K3", 1048576, "low", ["thinking"])
+document["default_model"] = K3_MODEL_KEY
 document["default_thinking"] = True
 document["default_yolo"] = True
+thinking = document.get("thinking")
+if not isinstance(thinking, dict):
+    thinking = tomlkit.table()
+thinking["enabled"] = True
+document["thinking"] = thinking
 
 def remove_kimi_oauth(section):
     if not isinstance(section, dict):
@@ -333,8 +344,12 @@ try:
     candidate_provider = candidate.providers.get(PROVIDER_KEY)
     candidate_model = candidate.models.get(MODEL_KEY)
     candidate_highspeed_model = candidate.models.get(HIGHSPEED_MODEL_KEY)
+    candidate_k3_model = candidate.models.get(K3_MODEL_KEY)
+    candidate_document = tomlkit.parse(temporary_path.read_text(encoding="utf-8"))
+    candidate_models = candidate_document.get("models")
+    candidate_thinking = candidate_document.get("thinking")
     if (
-        candidate.default_model != MODEL_KEY
+        candidate.default_model != K3_MODEL_KEY
         or candidate.default_thinking is not True
         or candidate.default_yolo is not True
         or candidate_provider is None
@@ -352,6 +367,19 @@ try:
         or candidate_highspeed_model.model != HIGHSPEED_MODEL_NAME
         or candidate_highspeed_model.capabilities is None
         or "thinking" not in candidate_highspeed_model.capabilities
+        or candidate_k3_model is None
+        or candidate_k3_model.provider != PROVIDER_KEY
+        or candidate_k3_model.model != K3_MODEL_NAME
+        or candidate_k3_model.max_context_size != 1048576
+        or candidate_k3_model.capabilities is None
+        or "thinking" not in candidate_k3_model.capabilities
+        or not isinstance(candidate_models, dict)
+        or any(candidate_models[key].get("support_efforts") != THINKING_EFFORTS for key in (MODEL_KEY, HIGHSPEED_MODEL_KEY, K3_MODEL_KEY))
+        or candidate_models[MODEL_KEY].get("default_effort") != "high"
+        or candidate_models[HIGHSPEED_MODEL_KEY].get("default_effort") != "high"
+        or candidate_models[K3_MODEL_KEY].get("default_effort") != "low"
+        or not isinstance(candidate_thinking, dict)
+        or candidate_thinking.get("enabled") is not True
     ):
         raise RuntimeError("Kimi API-key configuration verification failed")
     for service in (candidate.services.moonshot_search, candidate.services.moonshot_fetch):
@@ -375,6 +403,11 @@ verified = load_config(config_path)
 verified_provider = verified.providers.get(PROVIDER_KEY)
 if verified.default_thinking is not True or verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
     raise RuntimeError("persisted Kimi API-key configuration verification failed")
+persisted_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+persisted_models = persisted_document.get("models")
+persisted_thinking = persisted_document.get("thinking")
+if verified.default_model != K3_MODEL_KEY or not isinstance(persisted_models, dict) or any(persisted_models[key].get("support_efforts") != THINKING_EFFORTS for key in (MODEL_KEY, HIGHSPEED_MODEL_KEY, K3_MODEL_KEY)) or persisted_models[MODEL_KEY].get("default_effort") != "high" or persisted_models[HIGHSPEED_MODEL_KEY].get("default_effort") != "high" or persisted_models[K3_MODEL_KEY].get("default_effort") != "low" or not isinstance(persisted_thinking, dict) or persisted_thinking.get("enabled") is not True:
+    raise RuntimeError("persisted Kimi thinking effort configuration verification failed")
 print(hashlib.sha256(api_key.encode("utf-8")).hexdigest())
 `
 
@@ -422,19 +455,24 @@ func writeInitialCodexConfig(path, baseURL, model string) error {
 }
 
 func rewriteCodexConfig(path string, assignment *regexp.Regexp, managed []string) error {
+	_, err := rewriteCodexConfigIfChanged(path, assignment, managed)
+	return err
+}
+
+func rewriteCodexConfigIfChanged(path string, assignment *regexp.Regexp, managed []string) (bool, error) {
 	var existing string
 	info, err := os.Lstat(path)
 	if err == nil {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxCodexConfig {
-			return errors.New("existing Codex config must be a bounded regular non-symlink file")
+			return false, errors.New("existing Codex config must be a bounded regular non-symlink file")
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return false, err
 		}
 		existing = string(data)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 
 	var preserved []string
@@ -448,10 +486,12 @@ func rewriteCodexConfig(path string, assignment *regexp.Regexp, managed []string
 			inTable = true
 		}
 		if !inTable {
-			if match := assignment.FindStringSubmatch(line); len(match) == 2 {
-				right := strings.TrimSpace(strings.SplitN(line, "=", 2)[1])
-				if strings.HasPrefix(right, `"""`) || strings.HasPrefix(right, `'''`) {
-					return fmt.Errorf("managed Codex key %s uses a multiline value", match[1])
+			if match := assignment.FindStringSubmatch(line); match != nil {
+				if len(match) == 2 && match[1] != "" {
+					right := strings.TrimSpace(strings.SplitN(line, "=", 2)[1])
+					if strings.HasPrefix(right, `"""`) || strings.HasPrefix(right, `'''`) {
+						return false, fmt.Errorf("managed Codex key %s uses a multiline value", match[1])
+					}
 				}
 				continue
 			}
@@ -459,14 +499,20 @@ func rewriteCodexConfig(path string, assignment *regexp.Regexp, managed []string
 		preserved = append(preserved, line)
 	}
 	if err := scanner.Err(); err != nil {
-		return err
+		return false, err
 	}
 	for len(preserved) > 0 && strings.TrimSpace(preserved[0]) == "" {
 		preserved = preserved[1:]
 	}
 	content := strings.Join(append(managed, preserved...), "\n")
 	content = strings.TrimRight(content, "\n") + "\n"
-	return writePrivateFileAtomic(path, []byte(content))
+	if existing == content {
+		return false, nil
+	}
+	if err := writePrivateFileAtomic(path, []byte(content)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func writePrivateFileAtomic(path string, data []byte) error {

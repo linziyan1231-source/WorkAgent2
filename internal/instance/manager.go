@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -244,6 +245,41 @@ func (m *Manager) ModelKeyIDs(ctx context.Context, sid string) (modelbootstrap.K
 		return modelbootstrap.KeyIDs{}, fmt.Errorf("UserHost applied model mapping did not match the requested Windows identity: %w", err)
 	}
 	return ids, nil
+}
+
+func (m *Manager) StorageUsage(ctx context.Context, sid string) (ipc.StorageUsage, error) {
+	if err := m.requireEnabled(ctx, sid); err != nil {
+		return ipc.StorageUsage{}, err
+	}
+	response, err := m.command(ctx, sid, "storage_usage")
+	if err != nil {
+		return ipc.StorageUsage{}, err
+	}
+	if response.StorageUsage == nil || response.StorageUsage.LimitBytes == 0 || response.StorageUsage.MeasuredAt == "" {
+		return ipc.StorageUsage{}, errors.New("UserHost returned invalid private storage usage")
+	}
+	expectedRemaining := uint64(0)
+	if response.StorageUsage.UsedBytes < response.StorageUsage.LimitBytes {
+		expectedRemaining = response.StorageUsage.LimitBytes - response.StorageUsage.UsedBytes
+	}
+	if response.StorageUsage.RemainingBytes != expectedRemaining {
+		return ipc.StorageUsage{}, errors.New("UserHost returned invalid private storage usage")
+	}
+	return *response.StorageUsage, nil
+}
+
+func (m *Manager) WriteUsageSnapshot(ctx context.Context, sid string, snapshot []byte) error {
+	if len(snapshot) == 0 || len(snapshot) > 64*1024 || !json.Valid(snapshot) {
+		return errors.New("usage snapshot is invalid")
+	}
+	response, err := m.request(ctx, sid, ipc.Request{Command: "usage_snapshot", UsageSnapshot: json.RawMessage(snapshot)})
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return errors.New("UserHost rejected usage snapshot")
+	}
+	return nil
 }
 
 func (m *Manager) OAuthStart(ctx context.Context, sid string, start ipc.OAuthStartRequest) (ipc.OAuthResult, error) {

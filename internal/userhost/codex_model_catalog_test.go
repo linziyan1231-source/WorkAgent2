@@ -83,7 +83,12 @@ func TestFetchManagedCodexCatalogRequiresExactThreeFullModels(t *testing.T) {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(realShapedManagedCodexCatalog())
+		fixture := realShapedManagedCodexCatalog()
+		for _, model := range fixture["models"].([]map[string]any)[:2] {
+			levels := model["supported_reasoning_levels"].([]map[string]string)
+			model["supported_reasoning_levels"] = append(levels, map[string]string{"effort": "ultra", "description": "Provider-only"})
+		}
+		_ = json.NewEncoder(w).Encode(fixture)
 	}))
 	defer server.Close()
 
@@ -96,6 +101,69 @@ func TestFetchManagedCodexCatalogRequiresExactThreeFullModels(t *testing.T) {
 	}
 	if err := validateManagedCodexCatalog(data); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"effort":"ultra"`) {
+		t.Fatalf("normalized catalog still contains ultra: %s", data)
+	}
+	var catalog managedCodexCatalog
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range catalog.Models {
+		var model managedCodexModelMetadata
+		if err := json.Unmarshal(raw, &model); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, 0, len(model.SupportedReasoningLevels))
+		for _, level := range model.SupportedReasoningLevels {
+			got = append(got, level.Effort)
+		}
+		if len(got) != len(managedCodexReasoningEfforts) || !sameStringSet(got, managedCodexReasoningEfforts) || got[len(got)-1] != "max" {
+			t.Fatalf("new-user reasoning levels for %s = %v", model.Slug, got)
+		}
+	}
+}
+
+func TestNormalizeManagedCodexCatalogRemovesUltraAndKeepsFiveSupportedLevels(t *testing.T) {
+	fixture := realShapedManagedCodexCatalog()
+	models := fixture["models"].([]map[string]any)
+	for _, model := range models[:2] {
+		levels := model["supported_reasoning_levels"].([]map[string]string)
+		model["supported_reasoning_levels"] = append(levels, map[string]string{"effort": "ultra", "description": "Provider-only"})
+	}
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, changed, err := normalizeManagedCodexCatalog(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("catalog with ultra was not reported as changed")
+	}
+	if strings.Contains(string(normalized), `"effort":"ultra"`) {
+		t.Fatalf("normalized catalog still contains ultra: %s", normalized)
+	}
+	if err := validateManagedCodexCatalog(normalized); err != nil {
+		t.Fatal(err)
+	}
+	var catalog managedCodexCatalog
+	if err := json.Unmarshal(normalized, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range catalog.Models {
+		var model managedCodexModelMetadata
+		if err := json.Unmarshal(raw, &model); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, 0, len(model.SupportedReasoningLevels))
+		for _, level := range model.SupportedReasoningLevels {
+			got = append(got, level.Effort)
+		}
+		if !sameStringSet(got, managedCodexReasoningEfforts) || len(got) != len(managedCodexReasoningEfforts) {
+			t.Fatalf("reasoning levels for %s = %v", model.Slug, got)
+		}
 	}
 }
 
@@ -129,16 +197,58 @@ model_catalog_json = "table-value-must-survive"
 		t.Fatal(err)
 	}
 	catalogPath := filepath.Join(directory, "managed-model-catalog-0.144.4.json")
-	if err := writeManagedCodexCatalogSetting(path, catalogPath); err != nil {
+	catalogData, err := json.Marshal(realShapedManagedCodexCatalog())
+	if err != nil {
 		t.Fatal(err)
+	}
+	changed, err := writeManagedCodexCatalogSetting(path, catalogPath, "2.1.0-beta.editfork.19", "0.144.4", catalogData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first managed catalog configuration was not reported as changed")
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(content)
-	if strings.Count(got, "model_catalog_json =") != 2 || !strings.Contains(got, "managed-model-catalog-0.144.4.json") || !strings.Contains(got, `model = "example-reasoning"`) || !strings.Contains(got, `approval_policy = "on-request"`) || !strings.Contains(got, `model_catalog_json = "table-value-must-survive"`) || strings.Contains(got, "old.json") {
+	if strings.Count(got, "# Managed Codex model catalog:") != 1 || strings.Count(got, "model_catalog_json =") != 2 || !strings.Contains(got, "release=2.1.0-beta.editfork.19") || !strings.Contains(got, "managed-model-catalog-0.144.4.json") || !strings.Contains(got, `model = "example-reasoning"`) || !strings.Contains(got, `approval_policy = "on-request"`) || !strings.Contains(got, `model_catalog_json = "table-value-must-survive"`) || strings.Contains(got, "old.json") {
 		t.Fatalf("unexpected rewritten Codex config:\n%s", got)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	changed, err = writeManagedCodexCatalogSetting(path, catalogPath, "2.1.0-beta.editfork.19", "0.144.4", catalogData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("unchanged managed catalog configuration was rewritten")
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("unchanged configuration modtime changed from %v to %v", before.ModTime(), after.ModTime())
+	}
+	changed, err = writeManagedCodexCatalogSetting(path, catalogPath, "2.1.0-beta.editfork.20", "0.144.4", catalogData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("release change did not require full managed catalog verification")
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = string(content)
+	if strings.Count(got, "# Managed Codex model catalog:") != 1 || !strings.Contains(got, "release=2.1.0-beta.editfork.20") || strings.Contains(got, "release=2.1.0-beta.editfork.19") {
+		t.Fatalf("release verification identity was not replaced:\n%s", got)
 	}
 }
 
@@ -156,7 +266,7 @@ func realShapedManagedCodexModel(slug string, priority int) map[string]any {
 		"display_name":                      strings.ToUpper(slug),
 		"description":                       "Managed GPT-5.6 model",
 		"default_reasoning_level":           "medium",
-		"supported_reasoning_levels":        []map[string]string{{"effort": "low", "description": "Fast"}, {"effort": "medium", "description": "Balanced"}, {"effort": "high", "description": "Deep"}, {"effort": "xhigh", "description": "Extra deep"}},
+		"supported_reasoning_levels":        []map[string]string{{"effort": "low", "description": "Fast"}, {"effort": "medium", "description": "Balanced"}, {"effort": "high", "description": "Deep"}, {"effort": "xhigh", "description": "Extra deep"}, {"effort": "max", "description": "Maximum"}},
 		"shell_type":                        "shell_command",
 		"visibility":                        "list",
 		"supported_in_api":                  true,

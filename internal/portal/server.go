@@ -44,6 +44,8 @@ type InstanceManager interface {
 	RenameProject(context.Context, string, string, string, bool, bool) (ipc.ProjectRenameResult, error)
 	BeginRequest(string, bool) (func(), error)
 	ModelKeyIDs(context.Context, string) (modelbootstrap.KeyIDs, error)
+	StorageUsage(context.Context, string) (ipc.StorageUsage, error)
+	WriteUsageSnapshot(context.Context, string, []byte) error
 }
 
 type UsageService interface {

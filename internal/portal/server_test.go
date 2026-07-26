@@ -61,6 +61,9 @@ type fakeInstances struct {
 	modelKeyIDs         map[string]modelbootstrap.KeyIDs
 	modelKeyIDSError    error
 	modelKeyIDSIDs      []string
+	storageUsage        ipc.StorageUsage
+	storageUsageError   error
+	storageUsageSIDs    []string
 }
 
 func (f *fakeInstances) Ensure(_ context.Context, sid string) (ipc.Status, error) {
@@ -161,6 +164,23 @@ func (f *fakeInstances) ModelKeyIDs(_ context.Context, sid string) (modelbootstr
 	}
 	return modelbootstrap.KeyIDsForSID(sid), nil
 }
+
+func (f *fakeInstances) StorageUsage(_ context.Context, sid string) (ipc.StorageUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.storageUsageSIDs = append(f.storageUsageSIDs, sid)
+	if f.storageUsage.LimitBytes == 0 {
+		f.storageUsage = ipc.StorageUsage{
+			LimitBytes:     20 * 1024 * 1024 * 1024,
+			UsedBytes:      2 * 1024 * 1024 * 1024,
+			RemainingBytes: 18 * 1024 * 1024 * 1024,
+			MeasuredAt:     "2026-07-26T08:00:00Z",
+		}
+	}
+	return f.storageUsage, f.storageUsageError
+}
+
+func (f *fakeInstances) WriteUsageSnapshot(_ context.Context, _ string, _ []byte) error { return nil }
 
 type fakeUsageService struct {
 	mu           sync.Mutex

@@ -46,12 +46,19 @@ api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Kimi thinking helper failed: %v: %s", err, output)
 	}
+	if _, ok := verified.Manifest.Files[agentcli.KimiCodeRelativePath]; ok {
+		doctor := exec.Command(filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiCodeRelativePath)), "doctor", "config", configPath)
+		doctor.Env = append(os.Environ(), "PYTHONUTF8=1")
+		if output, err := doctor.CombinedOutput(); err != nil {
+			t.Fatalf("Kimi Code rejected the generated effort configuration: %v: %s", err, output)
+		}
+	}
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{"# user comment must survive", `default_thinking = true`, `theme = "light"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi for Coding HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `display_name = "Kimi K3"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+	for _, required := range []string{"# user comment must survive", `default_model = "kimi-code/kimi-k3"`, `default_thinking = true`, `theme = "light"`, `support_efforts = ["low", "high", "max"]`, `default_effort = "high"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi for Coding HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `default_effort = "low"`, `display_name = "Kimi K3"`, `[thinking]`, `enabled = true`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
 		}

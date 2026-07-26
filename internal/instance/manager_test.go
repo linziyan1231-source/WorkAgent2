@@ -260,6 +260,37 @@ func TestModelKeyIDsRejectAnotherUsersWellFormedIDs(t *testing.T) {
 	}
 }
 
+func TestStorageUsageStaysBoundToRequestedSIDAndPipe(t *testing.T) {
+	data, cfg := managerStore(t)
+	want := ipc.StorageUsage{LimitBytes: 100, UsedBytes: 30, RemainingBytes: 70, MeasuredAt: "2026-07-26T08:00:00Z"}
+	var seenPipe string
+	var seenRequest ipc.Request
+	caller := func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
+		seenPipe, seenRequest = pipe, request
+		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true, StorageUsage: &want}, nil
+	}
+	manager := NewWithIPC(cfg, data, &fakeTask{}, caller)
+	got, err := manager.StorageUsage(context.Background(), managerSID)
+	if err != nil || got != want {
+		t.Fatalf("storage usage=%+v err=%v, want %+v", got, err, want)
+	}
+	if seenPipe != config.PipeNameForSID(managerSID) || seenRequest.Command != "storage_usage" || len(seenRequest.Nonce) < 16 {
+		t.Fatalf("storage usage IPC was not SID-bound: pipe=%q request=%+v", seenPipe, seenRequest)
+	}
+}
+
+func TestStorageUsageRejectsInconsistentRemainingBytes(t *testing.T) {
+	data, cfg := managerStore(t)
+	caller := func(_ context.Context, _ string, request ipc.Request) (ipc.Response, error) {
+		invalid := ipc.StorageUsage{LimitBytes: 100, UsedBytes: 30, RemainingBytes: 80, MeasuredAt: "2026-07-26T08:00:00Z"}
+		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true, StorageUsage: &invalid}, nil
+	}
+	manager := NewWithIPC(cfg, data, &fakeTask{}, caller)
+	if _, err := manager.StorageUsage(context.Background(), managerSID); err == nil {
+		t.Fatal("inconsistent storage usage was accepted")
+	}
+}
+
 func managerStore(t *testing.T) (*store.Store, config.Portal) {
 	t.Helper()
 	root := t.TempDir()

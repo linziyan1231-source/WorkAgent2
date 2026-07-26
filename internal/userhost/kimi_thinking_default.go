@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	kimiThinkingMarkerName    = "kimi-model-defaults-v4.applied"
-	kimiThinkingMarkerContent = "default_thinking=true\nmodels=kimi-for-coding,kimi-for-coding-highspeed,kimi-k3\nruntime-aware-config=true\n"
+	kimiThinkingMarkerName    = "kimi-model-defaults-v5.applied"
+	kimiThinkingMarkerContent = "default_model=kimi-k3\ndefault_thinking=true\nefforts=low,high,max\ndefaults=kimi-for-coding:high,kimi-for-coding-highspeed:high,kimi-k3:low\nruntime-aware-config=true\n"
 )
 
 const kimiThinkingDefaultScript = `
@@ -33,6 +33,7 @@ MODEL_KEY = "kimi-code/kimi-for-coding"
 HIGHSPEED_MODEL_KEY = "kimi-code/kimi-for-coding-highspeed"
 K3_MODEL_KEY = "kimi-code/kimi-k3"
 PROVIDER_KEY = "managed:kimi-code"
+THINKING_EFFORTS = ["low", "high", "max"]
 MAX_CONFIG_BYTES = 1024 * 1024
 
 config_path = Path(sys.argv[1])
@@ -43,12 +44,18 @@ if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES or getattr(
 document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
 current = load_config(config_path)
 model = current.models.get(MODEL_KEY)
-if current.default_model != MODEL_KEY or model is None or model.capabilities is None or "thinking" not in model.capabilities:
+if model is None or model.capabilities is None or "thinking" not in model.capabilities:
     raise RuntimeError("managed Kimi model does not support thinking")
 
 models = document.get("models")
 if not isinstance(models, dict):
     raise RuntimeError("managed Kimi model catalog is missing")
+model = models.get(MODEL_KEY)
+if not isinstance(model, dict):
+    raise RuntimeError("managed Kimi default model is missing")
+model["support_efforts"] = list(THINKING_EFFORTS)
+model["default_effort"] = "high"
+models[MODEL_KEY] = model
 highspeed = models.get(HIGHSPEED_MODEL_KEY)
 if not isinstance(highspeed, dict):
     highspeed = tomlkit.table()
@@ -61,6 +68,8 @@ if not isinstance(capabilities, list):
 elif "thinking" not in capabilities:
     capabilities.append("thinking")
 highspeed["capabilities"] = capabilities
+highspeed["support_efforts"] = list(THINKING_EFFORTS)
+highspeed["default_effort"] = "high"
 if "display_name" not in highspeed:
     highspeed["display_name"] = "Kimi for Coding HighSpeed"
 models[HIGHSPEED_MODEL_KEY] = highspeed
@@ -76,10 +85,18 @@ if not isinstance(k3_capabilities, list):
 elif "thinking" not in k3_capabilities:
     k3_capabilities.append("thinking")
 k3["capabilities"] = k3_capabilities
+k3["support_efforts"] = list(THINKING_EFFORTS)
+k3["default_effort"] = "low"
 if "display_name" not in k3:
     k3["display_name"] = "Kimi K3"
 models[K3_MODEL_KEY] = k3
+document["default_model"] = K3_MODEL_KEY
 document["default_thinking"] = True
+thinking = document.get("thinking")
+if not isinstance(thinking, dict):
+    thinking = tomlkit.table()
+thinking["enabled"] = True
+document["thinking"] = thinking
 fd, temporary_name = tempfile.mkstemp(prefix=".config.toml.tmp-", dir=config_path.parent)
 temporary_path = Path(temporary_name)
 try:
@@ -92,7 +109,10 @@ try:
     candidate_model = candidate.models.get(MODEL_KEY)
     candidate_highspeed = candidate.models.get(HIGHSPEED_MODEL_KEY)
     candidate_k3 = candidate.models.get(K3_MODEL_KEY)
-    if candidate.default_model != MODEL_KEY or candidate.default_thinking is not True or candidate_model is None or candidate_model.capabilities is None or "thinking" not in candidate_model.capabilities or candidate_highspeed is None or candidate_highspeed.provider != PROVIDER_KEY or candidate_highspeed.model != "kimi-for-coding-highspeed" or candidate_highspeed.capabilities is None or "thinking" not in candidate_highspeed.capabilities or candidate_k3 is None or candidate_k3.provider != PROVIDER_KEY or candidate_k3.model != "kimi-k3" or candidate_k3.max_context_size != 1048576 or candidate_k3.capabilities is None or "thinking" not in candidate_k3.capabilities:
+    candidate_document = tomlkit.parse(temporary_path.read_text(encoding="utf-8"))
+    candidate_models = candidate_document.get("models")
+    candidate_thinking = candidate_document.get("thinking")
+    if candidate.default_model != K3_MODEL_KEY or candidate.default_thinking is not True or candidate_model is None or candidate_model.capabilities is None or "thinking" not in candidate_model.capabilities or candidate_highspeed is None or candidate_highspeed.provider != PROVIDER_KEY or candidate_highspeed.model != "kimi-for-coding-highspeed" or candidate_highspeed.capabilities is None or "thinking" not in candidate_highspeed.capabilities or candidate_k3 is None or candidate_k3.provider != PROVIDER_KEY or candidate_k3.model != "kimi-k3" or candidate_k3.max_context_size != 1048576 or candidate_k3.capabilities is None or "thinking" not in candidate_k3.capabilities or not isinstance(candidate_models, dict) or any(candidate_models[key].get("support_efforts") != THINKING_EFFORTS for key in (MODEL_KEY, HIGHSPEED_MODEL_KEY, K3_MODEL_KEY)) or candidate_models[MODEL_KEY].get("default_effort") != "high" or candidate_models[HIGHSPEED_MODEL_KEY].get("default_effort") != "high" or candidate_models[K3_MODEL_KEY].get("default_effort") != "low" or not isinstance(candidate_thinking, dict) or candidate_thinking.get("enabled") is not True:
         raise RuntimeError("Kimi thinking default verification failed")
     os.replace(temporary_path, config_path)
 finally:
@@ -101,6 +121,11 @@ finally:
 
 if load_config(config_path).default_thinking is not True:
     raise RuntimeError("persisted Kimi thinking default verification failed")
+persisted_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+persisted_models = persisted_document.get("models")
+persisted_thinking = persisted_document.get("thinking")
+if load_config(config_path).default_model != K3_MODEL_KEY or not isinstance(persisted_models, dict) or any(persisted_models[key].get("support_efforts") != THINKING_EFFORTS for key in (MODEL_KEY, HIGHSPEED_MODEL_KEY, K3_MODEL_KEY)) or persisted_models[MODEL_KEY].get("default_effort") != "high" or persisted_models[HIGHSPEED_MODEL_KEY].get("default_effort") != "high" or persisted_models[K3_MODEL_KEY].get("default_effort") != "low" or not isinstance(persisted_thinking, dict) or persisted_thinking.get("enabled") is not True:
+    raise RuntimeError("persisted Kimi thinking effort verification failed")
 `
 
 func (h *Host) applyKimiThinkingDefault(ctx context.Context, env []string) (bool, error) {

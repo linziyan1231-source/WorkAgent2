@@ -30,6 +30,7 @@ type Request struct {
 	OAuthCancel     *OAuthCancelRequest   `json:"oauth_cancel,omitempty"`
 	ProjectCreate   *ProjectCreateRequest `json:"project_create,omitempty"`
 	ProjectRename   *ProjectRenameRequest `json:"project_rename,omitempty"`
+	UsageSnapshot   json.RawMessage       `json:"usage_snapshot,omitempty"`
 }
 
 type OAuthStartRequest struct {
@@ -117,6 +118,13 @@ type ModelKeyIDs struct {
 	KimiKeyID  string `json:"kimi_key_id"`
 }
 
+type StorageUsage struct {
+	LimitBytes     uint64 `json:"limit_bytes"`
+	UsedBytes      uint64 `json:"used_bytes"`
+	RemainingBytes uint64 `json:"remaining_bytes"`
+	MeasuredAt     string `json:"measured_at"`
+}
+
 type Response struct {
 	ProtocolVersion int                  `json:"protocol_version"`
 	Nonce           string               `json:"nonce"`
@@ -127,6 +135,7 @@ type Response struct {
 	Auth            *AuthMaterial        `json:"auth,omitempty"`
 	OAuth           *OAuthResult         `json:"oauth,omitempty"`
 	ModelKeyIDs     *ModelKeyIDs         `json:"model_key_ids,omitempty"`
+	StorageUsage    *StorageUsage        `json:"storage_usage,omitempty"`
 	ProjectCreate   *ProjectCreateResult `json:"project_create,omitempty"`
 	ProjectRename   *ProjectRenameResult `json:"project_rename,omitempty"`
 }

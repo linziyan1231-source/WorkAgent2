@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,12 +26,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const maxManagedCodexCatalog = 1024 * 1024
+const (
+	maxManagedCodexCatalog             = 1024 * 1024
+	managedCodexVerifierCleanupTimeout = 3 * time.Second
+)
 
 var (
-	managedCodexCatalogVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	managedCodexCatalogSetting = regexp.MustCompile(`^\s*(?:["']?(model_catalog_json)["']?)\s*=`)
-	managedCodexAPIKeyPattern  = regexp.MustCompile(`^cpa_[A-Za-z0-9_-]{20,256}$`)
+	managedCodexCatalogVersion   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	managedCodexCatalogSetting   = regexp.MustCompile(`^\s*(?:(?:["']?(model_catalog_json)["']?)\s*=|# Managed Codex model catalog:)`)
+	managedCodexAPIKeyPattern    = regexp.MustCompile(`^cpa_[A-Za-z0-9_-]{20,256}$`)
+	managedCodexReasoningEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 )
 
 type managedCodexCatalog struct {
@@ -38,18 +43,20 @@ type managedCodexCatalog struct {
 }
 
 type managedCodexModelMetadata struct {
-	Slug                     string `json:"slug"`
-	DisplayName              string `json:"display_name"`
-	BaseInstructions         string `json:"base_instructions"`
-	Visibility               string `json:"visibility"`
-	SupportedInAPI           bool   `json:"supported_in_api"`
-	Priority                 int    `json:"priority"`
-	ContextWindow            int64  `json:"context_window"`
-	MaxContextWindow         int64  `json:"max_context_window"`
-	SupportedReasoningLevels []struct {
-		Effort      string `json:"effort"`
-		Description string `json:"description"`
-	} `json:"supported_reasoning_levels"`
+	Slug                     string                       `json:"slug"`
+	DisplayName              string                       `json:"display_name"`
+	BaseInstructions         string                       `json:"base_instructions"`
+	Visibility               string                       `json:"visibility"`
+	SupportedInAPI           bool                         `json:"supported_in_api"`
+	Priority                 int                          `json:"priority"`
+	ContextWindow            int64                        `json:"context_window"`
+	MaxContextWindow         int64                        `json:"max_context_window"`
+	SupportedReasoningLevels []managedCodexReasoningLevel `json:"supported_reasoning_levels"`
+}
+
+type managedCodexReasoningLevel struct {
+	Effort      string `json:"effort"`
+	Description string `json:"description"`
 }
 
 type codexResponseEnvelope struct {
@@ -82,6 +89,7 @@ func (h *Host) applyManagedCodexModelCatalog(ctx context.Context, env []string, 
 	codexHome := filepath.Join(h.dirs.Config, "codex")
 	catalogPath := filepath.Join(codexHome, "managed-model-catalog-"+codexVersion+".json")
 	applied := false
+	var catalogData []byte
 	info, statErr := os.Lstat(catalogPath)
 	switch {
 	case statErr == nil:
@@ -92,9 +100,17 @@ func (h *Host) applyManagedCodexModelCatalog(ctx context.Context, env []string, 
 		if readErr != nil {
 			return false, readErr
 		}
-		if validateErr := validateManagedCodexCatalog(data); validateErr != nil {
-			return false, fmt.Errorf("validate existing managed Codex model catalog: %w", validateErr)
+		normalized, changed, normalizeErr := normalizeManagedCodexCatalog(data)
+		if normalizeErr != nil {
+			return false, fmt.Errorf("normalize existing managed Codex model catalog: %w", normalizeErr)
 		}
+		if changed {
+			if writeErr := writePrivateFileAtomic(catalogPath, normalized); writeErr != nil {
+				return false, fmt.Errorf("rewrite managed Codex model catalog: %w", writeErr)
+			}
+			applied = true
+		}
+		catalogData = normalized
 	case errors.Is(statErr, os.ErrNotExist):
 		apiKey, keyErr := loadCodexAPIKey(filepath.Join(codexHome, "auth.json"))
 		if keyErr != nil {
@@ -108,17 +124,26 @@ func (h *Host) applyManagedCodexModelCatalog(ctx context.Context, env []string, 
 		if writeErr := writePrivateFileAtomic(catalogPath, data); writeErr != nil {
 			return false, fmt.Errorf("write managed Codex model catalog: %w", writeErr)
 		}
+		catalogData = data
 		applied = true
 	case statErr != nil:
 		return false, fmt.Errorf("inspect managed Codex model catalog: %w", statErr)
 	}
 
-	if err := writeManagedCodexCatalogSetting(filepath.Join(codexHome, "config.toml"), catalogPath); err != nil {
+	configChanged, err := writeManagedCodexCatalogSetting(filepath.Join(codexHome, "config.toml"), catalogPath, h.release.Manifest.Version, codexVersion, catalogData)
+	if err != nil {
 		return false, fmt.Errorf("configure managed Codex model catalog: %w", err)
 	}
-	if err := h.verifyManagedCodexModelList(ctx, env); err != nil {
-		return false, err
+	if applied || configChanged {
+		if err := h.verifyManagedCodexModelList(ctx, env); err != nil {
+			return false, err
+		}
 	}
+	verification := "fast"
+	if applied || configChanged {
+		verification = "full"
+	}
+	h.log.Printf("Managed Codex model catalog checked verification=%s config_changed=%t catalog_fetched=%t", verification, configChanged, applied)
 	return applied, nil
 }
 
@@ -172,10 +197,79 @@ func fetchManagedCodexCatalog(ctx context.Context, baseURL, codexVersion string,
 	if len(data) > maxManagedCodexCatalog {
 		return nil, errors.New("managed Codex model catalog exceeded its size limit")
 	}
-	if err := validateManagedCodexCatalog(data); err != nil {
-		return nil, fmt.Errorf("validate fetched managed Codex model catalog: %w", err)
+	normalized, _, err := normalizeManagedCodexCatalog(data)
+	if err != nil {
+		return nil, fmt.Errorf("normalize fetched managed Codex model catalog: %w", err)
 	}
-	return append(bytes.TrimSpace(data), '\n'), nil
+	return normalized, nil
+}
+
+// normalizeManagedCodexCatalog removes provider-only reasoning levels before
+// the catalog reaches Codex. GPT-5.6 is intentionally limited to the five
+// product-supported levels, so an upstream `ultra` entry cannot leak into the
+// picker. Unknown model metadata is preserved byte-for-byte unless filtering
+// is required.
+func normalizeManagedCodexCatalog(data []byte) ([]byte, bool, error) {
+	if len(data) == 0 || len(data) > maxManagedCodexCatalog {
+		return nil, false, errors.New("managed Codex model catalog has an invalid size")
+	}
+	var catalog managedCodexCatalog
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&catalog); err != nil {
+		return nil, false, errors.New("managed Codex model catalog is invalid JSON")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, false, errors.New("managed Codex model catalog has a trailing JSON value")
+	}
+
+	changed := false
+	for index, raw := range catalog.Models {
+		var model map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &model); err != nil {
+			return nil, false, errors.New("managed Codex model metadata is invalid")
+		}
+		var levels []managedCodexReasoningLevel
+		if err := json.Unmarshal(model["supported_reasoning_levels"], &levels); err != nil {
+			return nil, false, errors.New("managed Codex reasoning metadata is invalid")
+		}
+		filtered := levels[:0]
+		for _, level := range levels {
+			if containsString(managedCodexReasoningEfforts, level.Effort) {
+				filtered = append(filtered, level)
+			} else {
+				changed = true
+			}
+		}
+		if len(filtered) != len(levels) {
+			encodedLevels, err := json.Marshal(filtered)
+			if err != nil {
+				return nil, false, errors.New("encode managed Codex reasoning metadata")
+			}
+			model["supported_reasoning_levels"] = encodedLevels
+			encodedModel, err := json.Marshal(model)
+			if err != nil {
+				return nil, false, errors.New("encode managed Codex model metadata")
+			}
+			catalog.Models[index] = encodedModel
+		}
+	}
+
+	if !changed {
+		if err := validateManagedCodexCatalog(data); err != nil {
+			return nil, false, err
+		}
+		return append(bytes.TrimSpace(data), '\n'), false, nil
+	}
+	encoded, err := json.Marshal(catalog)
+	if err != nil {
+		return nil, false, errors.New("encode managed Codex model catalog")
+	}
+	encoded = append(encoded, '\n')
+	if err := validateManagedCodexCatalog(encoded); err != nil {
+		return nil, false, err
+	}
+	return encoded, true, nil
 }
 
 func validateManagedCodexCatalog(data []byte) error {
@@ -209,6 +303,13 @@ func validateManagedCodexCatalog(data []byte) error {
 				return fmt.Errorf("managed Codex model %q has incomplete reasoning metadata", model.Slug)
 			}
 		}
+		reasoningEfforts := make([]string, 0, len(model.SupportedReasoningLevels))
+		for _, effort := range model.SupportedReasoningLevels {
+			reasoningEfforts = append(reasoningEfforts, effort.Effort)
+		}
+		if len(reasoningEfforts) != len(managedCodexReasoningEfforts) || !sameStringSet(reasoningEfforts, managedCodexReasoningEfforts) {
+			return fmt.Errorf("managed Codex model %q does not contain the exact supported reasoning levels", model.Slug)
+		}
 		seen = append(seen, model.Slug)
 	}
 	if !sameStringSet(seen, want) {
@@ -217,13 +318,26 @@ func validateManagedCodexCatalog(data []byte) error {
 	return nil
 }
 
-func writeManagedCodexCatalogSetting(configPath, catalogPath string) error {
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func writeManagedCodexCatalogSetting(configPath, catalogPath, releaseVersion, codexVersion string, catalogData []byte) (bool, error) {
+	if releaseVersion == "" || strings.ContainsAny(releaseVersion, "\r\n") || !managedCodexCatalogVersion.MatchString(codexVersion) {
+		return false, errors.New("managed Codex catalog verification identity is invalid")
+	}
+	digest := sha256.Sum256(catalogData)
 	managed := []string{
-		"# Managed Codex model catalog: only the authorized GPT-5.6 models are displayed.",
+		fmt.Sprintf("# Managed Codex model catalog: release=%s codex=%s sha256=%x", releaseVersion, codexVersion, digest),
 		"model_catalog_json = " + strconv.Quote(catalogPath),
 		"",
 	}
-	return rewriteCodexConfig(configPath, managedCodexCatalogSetting, managed)
+	return rewriteCodexConfigIfChanged(configPath, managedCodexCatalogSetting, managed)
 }
 
 func loadCodexAPIKey(path string) ([]byte, error) {
@@ -258,6 +372,7 @@ func (h *Host) verifyManagedCodexModelList(ctx context.Context, env []string) er
 	defer cancel()
 	executable := filepath.Join(agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), "codex.exe")
 	cmd := exec.CommandContext(verifyCtx, executable, "app-server", "--listen", "stdio://")
+	cmd.WaitDelay = managedCodexVerifierCleanupTimeout
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = env
 	cmd.Stderr = io.Discard
@@ -278,8 +393,10 @@ func (h *Host) verifyManagedCodexModelList(ctx context.Context, env []string) er
 	}
 	defer func() {
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		cancel()
+		if err := cmd.Wait(); errors.Is(err, exec.ErrWaitDelay) {
+			h.log.Printf("Codex model catalog verifier cleanup exceeded %s; inherited pipes were closed", managedCodexVerifierCleanupTimeout)
+		}
 	}()
 	if err := h.sandbox.VerifyProcess(uint32(cmd.Process.Pid), h.cfg.WindowsSID); err != nil {
 		return err
