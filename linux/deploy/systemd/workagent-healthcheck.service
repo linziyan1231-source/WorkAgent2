@@ -1,0 +1,51 @@
+[Unit]
+Description=WorkAgent2 production health metric collector
+After=network-online.target srv-workagent-users.mount
+Wants=network-online.target
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-healthcheck
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathIsDirectory=/var/lib/node_exporter/textfile_collector
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-healthcheck --required bin/workagent-release
+ExecStart=/opt/workagent/control/bin/workagent-healthcheck /var/lib/node_exporter/textfile_collector/workagent_host.prom
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-healthcheck
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_ADMIN
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+
+MemoryMax=128M
+CPUQuota=50%
+TasksMax=64

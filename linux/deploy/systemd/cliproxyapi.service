@@ -1,0 +1,67 @@
+[Unit]
+Description=WorkAgent2 CLIProxyAPI (loopback only)
+After=network-online.target mihomo.service
+Wants=network-online.target
+Requires=mihomo.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-release
+ConditionFileIsExecutable=/opt/workagent/shared/cliproxyapi/bin/cli-proxy-api
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/opt/workagent/shared/cliproxyapi/plugins/cpa-key-policy-v0.4.5.so
+ConditionPathExists=/opt/workagent/shared/manifest.sig
+ConditionPathExists=/etc/cliproxyapi/config.yaml
+ConditionPathIsReadWrite=/var/lib/cliproxyapi
+
+[Service]
+Type=exec
+User=cliproxyapi
+Group=cliproxyapi
+WorkingDirectory=/var/lib/cliproxyapi
+LoadCredentialEncrypted=cliproxy-management-key:/etc/credstore.encrypted/workagent/cliproxy-management-key.cred
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-cliproxy --required bin/workagent-release
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required cliproxyapi/bin/cli-proxy-api --required cliproxyapi/plugins/cpa-key-policy-v0.4.5.so
+ExecStartPre=+/opt/workagent/control/bin/workagent-cliproxy prepare --template /etc/cliproxyapi/config.yaml --output /var/lib/cliproxyapi/config.yaml --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --state-root /var/lib/cliproxyapi
+ExecStart=/usr/bin/flock --shared --nonblock --no-fork --conflict-exit-code 75 /run/workagent/cliproxy-migration.lock /opt/workagent/shared/cliproxyapi/bin/cli-proxy-api --config /var/lib/cliproxyapi/config.yaml
+ExecStartPost=+/opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --wait 30s
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cliproxyapi
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=300
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/cliproxyapi
+
+MemoryHigh=1536M
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+component=@agentclientprotocol/codex-acp
+version=1.1.2
+repository=https://github.com/agentclientprotocol/codex-acp.git
+tag=v1.1.2
+commit=8aff492d4b033ff2c02ad3b9d591994d57617463
+npm_integrity=sha512-qE/R1WdqJJ9OFHsHGvbmVmS2j9iCMZzpWT3g2XIViXrGHu1fLOALLINBIlW+WzKDllCh131aB6cqcIWSt0otbw==
+license_url=https://raw.githubusercontent.com/agentclientprotocol/codex-acp/8aff492d4b033ff2c02ad3b9d591994d57617463/LICENSE
+license_sha256=72ea310b40e1ee2c4aa61935d22065155c50bfde288b114c9cfd3e1fa34f8049

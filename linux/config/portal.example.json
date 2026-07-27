@@ -1,0 +1,87 @@
+{
+  "schema_version": 5,
+  "runtime_user": "workagent",
+  "brand_file": "/etc/workagent/branding/workagent/brand.json",
+  "policy_file": "/etc/workagent/policy.json",
+  "outbound_proxy_url": "http://127.0.0.1:8118",
+  "listener": {
+    "network": "tcp",
+    "address": "127.0.0.1:42580",
+    "public_origin": "https://workagent.example.invalid",
+    "trusted_proxy_cidrs": [
+      "127.0.0.1/32",
+      "::1/128"
+    ],
+    "require_forwarded_https": true
+  },
+  "session": {
+    "cookie_name": "__Host-aionui-portal",
+    "secure": true,
+    "http_only": true,
+    "same_site": "lax",
+    "idle_timeout_seconds": 1800,
+    "absolute_timeout_seconds": 43200
+  },
+  "paths": {
+    "portal_state": "/var/lib/workagent/portal",
+    "tenant_configs": "/etc/workagent/users",
+    "tenant_data": "/srv/workagent/users",
+    "runtime_sockets": "/run/workagent/users",
+    "release_root": "/opt/workagent"
+  },
+  "runtime": {
+    "max_concurrent_instances": 20,
+    "idle_reap_seconds": 1800,
+    "require_dedicated_uid": true,
+    "require_project_quota": true,
+    "require_release_hashes": true
+  },
+  "usage": {
+    "query_timeout_seconds": 3,
+    "cache_ttl_seconds": 15
+  },
+  "observability": {
+    "audit_retention_days": 365,
+    "audit_minimum_events": 10000
+  },
+  "renderer": {
+    "releases_root": "/opt/workagent/aionui/releases",
+    "pointer_file": "/opt/workagent/aionui/current.json",
+    "public_key_file": "/etc/workagent/trust/release-signing.pub",
+    "scope": "runtime",
+    "relative_root": "renderer"
+  },
+  "cli_proxy": {
+    "api_base_url": "http://127.0.0.1:8317/v1",
+    "management_url": "http://127.0.0.1:8317/v0/management/plugins/cpa-key-policy",
+    "management_credential_file": "/run/credentials/workagent-portal.service/cliproxy-management-key",
+    "core_version": "7.2.81",
+    "core_patch": "per-key-models.4",
+    "plugin_id": "cpa-key-policy",
+    "plugin_version": "0.4.5",
+    "auth_dir": "/var/lib/cliproxyapi/auth",
+    "plugin_dir": "/opt/workagent/shared/cliproxyapi/plugins",
+    "policy_state_file": "/var/lib/cliproxyapi/policy/cpa-key-policy-state.json",
+    "allow_remote": false
+  },
+  "chat_forward": {
+    "enabled": true,
+    "endpoint": "http://127.0.0.1:3210",
+    "credential_file": "/run/credentials/workagent-portal.service/chatforward-key",
+    "pro_models": [
+      "gpt-5-4-pro",
+      "gpt-5-5-pro",
+      "gpt-5-6-pro"
+    ],
+    "weekly_pro_limit": 7,
+    "max_pairs": 3,
+    "extension_protocol": "quota-v1",
+    "quota_protection": true,
+    "source_asset_proxy": true
+  },
+  "notifications": {
+    "enabled": true,
+    "endpoint": "http://127.0.0.1:25888/notification",
+    "credential_file": "/run/credentials/workagent-portal.service/notifications-key"
+  }
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "aioncore",
+    "version": "v0.1.42-editfork.10",
+    "source_revision": "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"
+  },
+  {
+    "name": "aionui",
+    "version": "2.1.0-beta.editfork.21",
+    "source_revision": "ec97e4aea496fdd7721e64e6c43e3d3ce97e181553961d8c2c63092d2b395f90"
+  },
+  {
+    "name": "codex",
+    "version": "0.144.4",
+    "source_revision": "9a4a45314e80b53c4761b80067e3a68c2302f9a9026059b5f54f22dec8f34323"
+  },
+  {
+    "name": "kimi-code",
+    "version": "0.29.1-fork-steer.1",
+    "source_revision": "d00c6a1eff46bfe4213fe9f0547b51d7d812f2e9acd2e335ef282bb8d78a97af"
+  },
+  {
+    "name": "noble-hashes",
+    "version": "2.2.0",
+    "source_revision": "b74fceb0006b617ed388254677b3d3847aeceb7e3f57db0cc9acc54644dabba6"
+  },
+  {
+    "name": "python",
+    "version": "3.13.13",
+    "source_revision": "2ab91ff401783ccca64f75d10c882e957bdfd60e2bf5a72f8421793729b78a71"
+  }
+]

@@ -1,0 +1,44 @@
+name: source-gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install exact Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.26.5
+          cache: true
+      - name: Install checksum-pinned scanners
+        env:
+          GO_BIN: go
+        run: scripts/install-ci-tools.sh "$RUNNER_TEMP/workagent-tools"
+      - name: Test, scan, and build
+        env:
+          GO_BIN: go
+          GITLEAKS_BIN: ${{ runner.temp }}/workagent-tools/gitleaks
+          SYFT_BIN: ${{ runner.temp }}/workagent-tools/syft
+          GOVULNCHECK_BIN: ${{ runner.temp }}/workagent-tools/govulncheck
+          SHELLCHECK_BIN: ${{ runner.temp }}/workagent-tools/shellcheck
+        run: scripts/source-gate.sh "$RUNNER_TEMP/workagent-artifacts"
+      - name: Preserve source-gate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: workagent-source-gate-${{ github.sha }}
+          path: ${{ runner.temp }}/workagent-artifacts
+          if-no-files-found: error
+          retention-days: 30

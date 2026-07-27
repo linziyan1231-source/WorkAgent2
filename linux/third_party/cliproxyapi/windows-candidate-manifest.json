@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "platform": "windows-amd64",
+  "core": {
+    "version": "7.2.81",
+    "commit": "per-key-models.4",
+    "file": "cli-proxy-api.exe",
+    "sha256": "ab8fd4f075358aea527f698f170cdbe3145c70a0ac1afd008f1ed9c537b51fe5"
+  },
+  "policy": {
+    "version": "0.4.5",
+    "abi_version": 1,
+    "file": "cpa-key-policy.dll",
+    "sha256": "51d42e4ac4b9ceb905de5c7c8ca1fed902a9dc4b684f281d291ccb79a67a73ab"
+  },
+  "trusted_inputs": {
+    "core_source_archive_sha256": "ca52365d3d123a1cff34a5020ce16507e3c2ef1032d57f171b9c26d2cd97eb16",
+    "per_key_models_patch_sha256": "1e2b8331b049d83bf8f4fcb91aa679234b35ea4b650de14e637c119008ec9fda",
+    "policy_source_archive_sha256": "e5b373279ee5f1c34f4e2ed2abc6d967d0b82bea8a924d74e9a62c0bdcabff44",
+    "policy_patch_sha256": "3d2d12b2febb34ad245d1ff042b6a68123d8c548ff90976f48d45b7352d8a4ab"
+  },
+  "migration_contract": {
+    "copy_existing_policy_state": true,
+    "copy_existing_management_key": true,
+    "copy_existing_oauth_auth_dir": true,
+    "converge_kimi_k3_alias_and_key_refs": true,
+    "rotate_downstream_keys": false,
+    "deployment_performed": false
+  }
+}

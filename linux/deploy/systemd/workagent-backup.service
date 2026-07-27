@@ -1,0 +1,53 @@
+[Unit]
+Description=WorkAgent2 verified encrypted backup
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/workagent-backup
+AssertPathIsMountPoint=/mnt/workagent-backup
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-backup
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/etc/workagent/backup.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-backup --required bin/workagent-release
+ExecStart=/opt/workagent/control/bin/workagent-backup create --portal-config /etc/workagent/portal.json --config /etc/workagent/backup.json --quiesce-systemd
+ExecStopPost=/opt/workagent/control/bin/workagent-backup resume
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-backup
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/workagent-backup /mnt/workagent-backup /var/lib/node_exporter/textfile_collector /run/workagent-backup
+
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=128

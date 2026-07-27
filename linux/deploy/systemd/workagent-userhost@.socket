@@ -1,0 +1,15 @@
+[Unit]
+Description=WorkAgent2 UserHost socket for tenant %i
+
+[Socket]
+ListenStream=/run/workagent/users/%i.sock
+SocketUser=workagent
+SocketGroup=workagent
+SocketMode=0600
+DirectoryMode=0700
+Backlog=64
+RemoveOnStop=yes
+Service=workagent-userhost@%i.service
+
+[Install]
+WantedBy=sockets.target

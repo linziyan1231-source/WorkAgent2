@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "component": "aioncore",
+  "version": "v0.1.42-editfork.10",
+  "source_tree_sha256": "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317",
+  "completed_at": "2026-07-27T12:37:47+08:00",
+  "result": "passed",
+  "records": [
+    {
+      "gate": "format",
+      "command": "cargo fmt --check",
+      "result": "passed"
+    },
+    {
+      "gate": "strict-clippy",
+      "command": "cargo clippy --workspace --all-targets --locked --offline -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "gate": "application-package",
+      "command": "cargo test -p aionui-app --locked --offline -- --test-threads=1",
+      "result": "passed",
+      "detail": "Library 20/20, binary 82/82, every integration suite and doc-test passed; WorkAgent runtime boundary 7/7 passed."
+    },
+    {
+      "gate": "ai-agent-package",
+      "command": "cargo test -p aionui-ai-agent --locked --offline -- --test-threads=1",
+      "result": "passed",
+      "detail": "Library 617 passed and 2 ignored; integration suites passed."
+    },
+    {
+      "gate": "runtime-package",
+      "command": "cargo test -p aionui-runtime --locked --offline -- --test-threads=1",
+      "result": "passed"
+    },
+    {
+      "gate": "auth-package",
+      "command": "cargo test -p aionui-auth --locked --offline -- --test-threads=1",
+      "result": "passed"
+    },
+    {
+      "gate": "cron-package",
+      "command": "cargo test -p aionui-cron --locked --offline -- --test-threads=1",
+      "result": "passed",
+      "detail": "Unit tests 179/179, prompt integration 5/5, service integration 68/68, skill-file integration 8/8, and doc-tests passed."
+    },
+    {
+      "gate": "task-manager-regressions",
+      "command": "cargo test -p aionui-ai-agent task_manager --lib --locked --offline -- --test-threads=1",
+      "result": "passed",
+      "detail": "36/36 passed."
+    },
+    {
+      "gate": "workagent-runtime-boundary",
+      "command": "cargo test -p aionui-app --test workagent_runtime_boundary --locked --offline -- --test-threads=1",
+      "result": "passed",
+      "detail": "7/7 passed, including the non-root, capability-free same-UID fd3 duplication boundary."
+    }
+  ]
+}

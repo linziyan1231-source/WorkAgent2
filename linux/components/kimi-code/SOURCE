@@ -1,0 +1,5 @@
+repository=https://github.com/MoonshotAI/kimi-code.git
+tag=@moonshot-ai/kimi-code@0.29.1
+tag_object=785c319619ad4cbf87d8598afaea36c989f6cb66
+source_revision=f4c3967a417a539372eadab6c809d27b8a14c005
+archive_root=MoonshotAI-kimi-code-785c319

@@ -1,0 +1,140 @@
+diff --git a/packages/minidb/src/server.ts b/packages/minidb/src/server.ts
+--- a/packages/minidb/src/server.ts
++++ b/packages/minidb/src/server.ts
+@@ -34,31 +34,91 @@
+ class RespParser {
+   private buf: Buffer = Buffer.alloc(0);
+   private readonly maxBuf: number;
++  private discard:
++    | { kind: 'array'; argsRemaining: number; bytesRemaining: number }
++    | { kind: 'inline' }
++    | null = null;
+ 
+   constructor({ maxBuf = 64 * 1024 * 1024 }: { maxBuf?: number } = {}) {
+     this.maxBuf = maxBuf;
+   }
+ 
+-  *feed(chunk: Buffer): Generator<Buffer[]> {
++  *feed(chunk: Buffer): Generator<Buffer[] | Error> {
+     this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
+-    if (this.buf.length > this.maxBuf) {
+-      // Drop the buffered oversized request before reporting: without the
+-      // reset every later chunk would fail with the same error and the giant
+-      // buffer would be retained for the life of the connection.
+-      this.buf = Buffer.alloc(0);
+-      throw new Error(`RESP request too large (>${this.maxBuf} bytes)`);
+-    }
+     while (this.buf.length) {
++      if (this.discard && !this.consumeDiscardedRequest()) break;
+       const parsed = this.tryParse();
+-      if (!parsed) break;
++      if (!parsed) {
++        if (this.buf.length > this.maxBuf) {
++          // A valid RESP array is rejected from its declared bulk length
++          // before reaching this fallback. This only handles an unterminated
++          // or otherwise malformed request whose boundary cannot be known.
++          this.buf = Buffer.alloc(0);
++          yield this.tooLargeError();
++        }
++        break;
++      }
+       yield parsed;
+     }
+   }
+ 
+-  private tryParse(): Buffer[] | null {
++  private consumeDiscardedRequest(): boolean {
++    const discard = this.discard;
++    if (!discard) return true;
++
++    if (discard.kind === 'inline') {
++      const end = this.buf.indexOf(CRLF);
++      if (end === -1) {
++        this.buf = Buffer.alloc(0);
++        return false;
++      }
++      this.buf = this.buf.subarray(end + 2);
++      this.discard = null;
++      return true;
++    }
++
++    while (true) {
++      if (discard.bytesRemaining > 0) {
++        const consumed = Math.min(discard.bytesRemaining, this.buf.length);
++        this.buf = this.buf.subarray(consumed);
++        discard.bytesRemaining -= consumed;
++        if (discard.bytesRemaining > 0) return false;
++      }
++      if (discard.argsRemaining === 0) {
++        this.discard = null;
++        return true;
++      }
++      if (this.buf.length === 0) return false;
++      if (this.buf[0] !== 0x24 /* '$' */) throw new Error('malformed RESP bulk header after oversized request');
++      const end = this.buf.indexOf(CRLF, 1);
++      if (end === -1) return false;
++      const len = Number(this.buf.subarray(1, end).toString());
++      if (!Number.isSafeInteger(len) || len < 0) throw new Error('invalid RESP bulk length after oversized request');
++      this.buf = this.buf.subarray(end + 2);
++      discard.argsRemaining--;
++      discard.bytesRemaining = len + 2;
++    }
++  }
++
++  private tooLargeError(): Error {
++    return new Error(`RESP request too large (>${this.maxBuf} bytes)`);
++  }
++
++  private tryParse(): Buffer[] | Error | null {
+     if (this.buf[0] !== 0x2a /* '*' */) {
+       const idx = this.buf.indexOf(CRLF);
+-      if (idx === -1) return null;
++      if (idx === -1) {
++        if (this.buf.length > this.maxBuf) {
++          this.buf = Buffer.alloc(0);
++          this.discard = { kind: 'inline' };
++          return this.tooLargeError();
++        }
++        return null;
++      }
++      if (idx + 2 > this.maxBuf) {
++        this.buf = this.buf.subarray(idx + 2);
++        return this.tooLargeError();
++      }
+       const line = this.buf.subarray(0, idx).toString();
+       this.buf = this.buf.subarray(idx + 2);
+       return line.split(' ').filter(Boolean).map((s) => Buffer.from(s));
+@@ -78,6 +138,19 @@
+       if (end === -1) return null;
+       const len = Number(this.buf.subarray(pos, end).toString());
+       pos = end + 2;
++      if (!Number.isSafeInteger(len) || len < 0) throw new Error('invalid RESP bulk length');
++      if (len > this.maxBuf - pos - 2) {
++        // Reject from the declared length, before buffering and repeatedly
++        // copying a giant payload. Keep enough state to discard this exact
++        // array frame across chunks, then resume at the next pipelined command.
++        this.buf = this.buf.subarray(pos);
++        this.discard = {
++          kind: 'array',
++          argsRemaining: argc - i - 1,
++          bytesRemaining: len + 2,
++        };
++        return this.tooLargeError();
++      }
+       if (this.buf.length - pos < len + 2) return null;
+       args.push(this.buf.subarray(pos, pos + len));
+       pos += len + 2;
+@@ -188,7 +261,12 @@
+     socket.on('data', (chunk: Buffer) => {
+       queue = queue.then(async () => {
+         try {
+-          for (const args of parser.feed(chunk)) {
++          for (const parsed of parser.feed(chunk)) {
++            if (parsed instanceof Error) {
++              send(reply.err(parsed.message));
++              continue;
++            }
++            const args = parsed;
+             if (socket.destroyed) return;
+             let res: string | Buffer | null;
+             try {

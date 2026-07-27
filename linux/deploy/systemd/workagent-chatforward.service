@@ -1,0 +1,66 @@
+[Unit]
+Description=WorkAgent2 ChatForward loopback bridge
+After=network-online.target mihomo.service
+Wants=network-online.target
+Requires=mihomo.service
+Before=workagent-chatforward-browser.service workagent-portal.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-release
+ConditionFileIsExecutable=/opt/workagent/shared/chatforward/integration/run-server.sh
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/opt/workagent/shared/manifest.sig
+ConditionPathExists=/etc/workagent/chatforward.env
+
+[Service]
+Type=exec
+User=workagent-chatforward
+Group=workagent-chatforward
+WorkingDirectory=/opt/workagent/shared/chatforward/app
+EnvironmentFile=/etc/workagent/chatforward.env
+LoadCredentialEncrypted=chatforward-key:/etc/credstore.encrypted/workagent/chatforward-key.cred
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-release
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required chatforward/app/src/server.js --required chatforward/integration/run-server.sh --required chatforward/node/bin/node
+ExecStart=/opt/workagent/shared/chatforward/integration/run-server.sh %d/chatforward-key
+ExecStartPost=/opt/workagent/shared/chatforward/node/bin/node --jitless /opt/workagent/shared/chatforward/integration/readiness.mjs --timeout-ms 15000
+Restart=always
+RestartSec=3s
+TimeoutStartSec=25s
+TimeoutStopSec=20s
+KillMode=control-group
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-chatforward
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+InaccessiblePaths=-/srv/workagent/users
+
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

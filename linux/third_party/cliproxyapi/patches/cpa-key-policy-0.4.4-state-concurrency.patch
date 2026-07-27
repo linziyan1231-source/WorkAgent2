@@ -1,0 +1,439 @@
+diff --git a/internal/policy/config.go b/internal/policy/config.go
+--- a/internal/policy/config.go
++++ b/internal/policy/config.go
+@@ -676,11 +676,7 @@ func SaveState(path string, keys []KeyConfig, usage map[string]*UsageState, alia
+ 	if err != nil {
+ 		return err
+ 	}
+-	tmp := path + ".tmp"
+-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+-		return err
+-	}
+-	return os.Rename(tmp, path)
++	return writeStateFile(path, raw)
+ }
+ 
+ // SaveUsageOnly atomically writes only the usage ledger to the state file,
+@@ -715,9 +711,38 @@ func SaveUsageOnly(path string, usage map[string]*UsageState) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	tmp := path + ".tmp"
+-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
++	return writeStateFile(path, raw)
++}
++
++// writeStateFile writes through a unique temporary file in the state
++// directory, then atomically replaces the destination. A unique name avoids
++// one writer renaming or deleting another writer's temporary file.
++func writeStateFile(path string, raw []byte) (err error) {
++	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
++	if err != nil {
++		return err
++	}
++	tmpPath := tmp.Name()
++	defer func() {
++		_ = tmp.Close()
++		if err != nil {
++			_ = os.Remove(tmpPath)
++		}
++	}()
++	if err = tmp.Chmod(0o600); err != nil {
++		return err
++	}
++	if _, err = tmp.Write(raw); err != nil {
+ 		return err
+ 	}
+-	return os.Rename(tmp, path)
++	if err = tmp.Sync(); err != nil {
++		return err
++	}
++	if err = tmp.Close(); err != nil {
++		return err
++	}
++	if err = replaceFile(tmpPath, path); err != nil {
++		return err
++	}
++	return nil
+ }
+diff --git a/internal/policy/replace_file.go b/internal/policy/replace_file.go
+new file mode 100644
+--- /dev/null
++++ b/internal/policy/replace_file.go
+@@ -0,0 +1,9 @@
++//go:build !windows
++
++package policy
++
++import "os"
++
++func replaceFile(from, to string) error {
++	return os.Rename(from, to)
++}
+diff --git a/internal/policy/replace_file_windows.go b/internal/policy/replace_file_windows.go
+new file mode 100644
+--- /dev/null
++++ b/internal/policy/replace_file_windows.go
+@@ -0,0 +1,50 @@
++//go:build windows
++
++package policy
++
++import (
++	"syscall"
++	"time"
++	"unsafe"
++)
++
++const (
++	moveFileReplaceExisting = 0x1
++	moveFileWriteThrough    = 0x8
++	errorSharingViolation   = syscall.Errno(32)
++)
++
++var moveFileExW = syscall.NewLazyDLL("kernel32.dll").NewProc("MoveFileExW")
++
++func replaceFile(from, to string) error {
++	fromPtr, err := syscall.UTF16PtrFromString(from)
++	if err != nil {
++		return err
++	}
++	toPtr, err := syscall.UTF16PtrFromString(to)
++	if err != nil {
++		return err
++	}
++	for attempt := 0; attempt < 10; attempt++ {
++		result, _, callErr := moveFileExW.Call(
++			uintptr(unsafe.Pointer(fromPtr)),
++			uintptr(unsafe.Pointer(toPtr)),
++			moveFileReplaceExisting|moveFileWriteThrough,
++		)
++		if result != 0 {
++			return nil
++		}
++		errno, ok := callErr.(syscall.Errno)
++		if !ok || (errno != syscall.ERROR_ACCESS_DENIED && errno != errorSharingViolation) {
++			if callErr != nil && callErr != syscall.Errno(0) {
++				return callErr
++			}
++			return syscall.EINVAL
++		}
++		if attempt == 9 {
++			return errno
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	return syscall.EINVAL
++}
+diff --git a/internal/policy/store.go b/internal/policy/store.go
+--- a/internal/policy/store.go
++++ b/internal/policy/store.go
+@@ -13,6 +13,7 @@ import (
+ 
+ type Store struct {
+ 	mu        sync.RWMutex
++	persistMu sync.Mutex
+ 	enabled   bool
+ 	statePath string
+ 	keys      map[string]*KeyConfig
+@@ -886,12 +887,9 @@ func (s *Store) UpsertKey(input KeyConfig, persist bool) error {
+ 	s.keys[key.ID] = &key
+ 	// Update the store's global alias table if migration added new aliases.
+ 	s.updateAliasesLocked(cfg.Aliases)
+-	keys := s.keysSnapshotLocked()
+-	path := s.statePath
+-	usage := s.usageSnapshotLocked()
+ 	s.mu.Unlock()
+ 	if persist {
+-		return SaveState(path, keys, usage, s.aliasesSnapshotLocked(), s.classifyRulesSnapshotLocked())
++		return s.persistState()
+ 	}
+ 	return nil
+ }
+@@ -907,9 +905,6 @@ func (s *Store) DeleteKey(id string) error {
+ 		return ErrUnknownKey
+ 	}
+ 	delete(s.keys, id)
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+ 	if s.limiter != nil {
+ 		s.limiter.Reset(id)
+@@ -917,5 +912,5 @@ func (s *Store) DeleteKey(id string) error {
+ 	if s.usage != nil {
+ 		s.usage.resetUsage(id)
+ 	}
+-	return SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot())
++	return s.persistState()
+ }
+@@ -944,13 +939,10 @@ func (s *Store) RotateKey(id string) (string, KeyConfig, error) {
+ 	key.UpdatedAt = time.Now().UTC()
+ 	copy := *key
+ 	copy.Models = append([]ModelRule(nil), key.Models...)
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+ 	if s.limiter != nil {
+ 		s.limiter.Reset(id)
+ 	}
+-	if err := SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot()); err != nil {
++	if err := s.persistState(); err != nil {
+ 		return "", KeyConfig{}, err
+ 	}
+@@ -995,9 +987,6 @@ func (s *Store) UpsertAlias(alias AliasMapping) error {
+ 	s.updateAliasesLocked(tmp.Aliases)
+ 	// Re-resolve all keys' Models from the updated alias table.
+ 	s.resolveAllModelsLocked()
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+-	return SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot())
++	return s.persistState()
+ }
+@@ -1032,9 +1021,6 @@ func (s *Store) DeleteAlias(aliasName string) error {
+ 	}
+ 	s.mu.Lock()
+ 	s.updateAliasesLocked(filtered)
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+-	return SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot())
++	return s.persistState()
+ }
+@@ -1064,9 +1050,6 @@ func (s *Store) UpsertClassifyRule(rule ClassifyRule) error {
+ 	s.classifyRules = tmp.ClassifyRules
+ 	// Clear the classify cache since rules changed.
+ 	s.onClassifyRulesChangedSafe()
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+-	return SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot())
++	return s.persistState()
+ }
+@@ -1087,9 +1070,6 @@ func (s *Store) DeleteClassifyRule(name string) error {
+ 	s.mu.Lock()
+ 	s.classifyRules = filtered
+ 	s.onClassifyRulesChangedSafe()
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+-	return SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot())
++	return s.persistState()
+ }
+@@ -1118,9 +1098,6 @@ func (s *Store) ReorderClassifyRules(names []string) error {
+ 	s.mu.Lock()
+ 	s.classifyRules = reordered
+ 	s.onClassifyRulesChangedSafe()
+-	keys := s.keysSnapshotLocked()
+-	usage := s.usageSnapshotLocked()
+-	path := s.statePath
+ 	s.mu.Unlock()
+-	return SaveState(path, keys, usage, s.AliasesSnapshot(), s.ClassifyRulesSnapshot())
++	return s.persistState()
+ }
+@@ -1189,10 +1166,12 @@ func (s *Store) usageSnapshotLocked() map[string]*UsageState {
+ // current key list. Called by the background flusher and at lifecycle points
+ // (reconfigure / shutdown).
+ func (s *Store) FlushUsage() error {
+-	s.mu.Lock()
++	s.persistMu.Lock()
++	defer s.persistMu.Unlock()
++	s.mu.RLock()
+ 	usage := s.usageSnapshotLocked()
+ 	path := s.statePath
+-	s.mu.Unlock()
++	s.mu.RUnlock()
+ 	if path == "" {
+ 		return nil
+ 	}
+@@ -1204,4 +1183,24 @@ func (s *Store) FlushUsage() error {
+ 	return SaveUsageOnly(path, usage)
+ }
++
++// persistState serializes full-state writes with usage-only flushes and takes
++// its snapshot only after obtaining that serialization lock. This prevents a
++// periodic flush from restoring stale keys or aliases after a management
++// mutation has already been persisted.
++func (s *Store) persistState() error {
++	s.persistMu.Lock()
++	defer s.persistMu.Unlock()
++	s.mu.RLock()
++	keys := s.keysSnapshotLocked()
++	usage := s.usageSnapshotLocked()
++	aliases := s.aliasesSnapshotLocked()
++	rules := s.classifyRulesSnapshotLocked()
++	path := s.statePath
++	s.mu.RUnlock()
++	if path == "" {
++		return nil
++	}
++	return SaveState(path, keys, usage, aliases, rules)
++}
+ 
+ // StartUsageFlusher launches a goroutine that periodically persists the usage
+@@ -1217,4 +1216,4 @@ func (s *Store) StartUsageFlusher() func() {
+ 	stopCh := make(chan struct{})
+ 	var stopOnce sync.Once
+ 	stop := func() { stopOnce.Do(func() { close(stopCh) }) }
+-	f := &usageFlusher{stop: stop, stopCh: stopCh, store: s}
++	f := &usageFlusher{stop: stop, stopCh: stopCh, doneCh: make(chan struct{}), store: s}
+@@ -1234,14 +1233,17 @@ func (s *Store) StopUsageFlusher() {
+ 		return
+ 	}
+ 	f.stop()
++	<-f.doneCh
+ 	_ = s.FlushUsage()
+ }
+ 
+ type usageFlusher struct {
+ 	stop   func()
+ 	stopCh chan struct{}
++	doneCh chan struct{}
+ 	store  *Store
+ }
+ 
+ func (f *usageFlusher) loop() {
++	defer close(f.doneCh)
+ 	t := time.NewTicker(usageFlushInterval)
+diff --git a/internal/policy/store_test.go b/internal/policy/store_test.go
+--- a/internal/policy/store_test.go
++++ b/internal/policy/store_test.go
+@@ -3,5 +3,6 @@ import (
+ 	"net/http"
+ 	"path/filepath"
++	"sync"
+ 	"testing"
+ 	"time"
+ )
+@@ -333,4 +334,55 @@ func TestFlushUsagePreservesDiskKeys(t *testing.T) {
+ 	}
+ }
++
++func TestConcurrentAliasPersistAndUsageFlushRemainConsistent(t *testing.T) {
++	store, _ := newTestStore(t)
++	path := store.StatePath()
++	for i := 0; i < 50; i++ {
++		aliasName := "concurrent-" + itoa(i)
++		start := make(chan struct{})
++		errs := make(chan error, 2)
++		var wg sync.WaitGroup
++		wg.Add(2)
++		go func() {
++			defer wg.Done()
++			<-start
++			errs <- store.UpsertAlias(AliasMapping{
++				Alias:                    aliasName,
++				Targets:                  []AliasTarget{{Provider: "kimi", TargetModel: "kimi-k3"}},
++				BillingMode:              "tokens",
++				InputPricePerMillion:     3,
++				OutputPricePerMillion:    15,
++				CacheReadPricePerMillion: 0.3,
++			})
++		}()
++		go func() {
++			defer wg.Done()
++			<-start
++			errs <- store.FlushUsage()
++		}()
++		close(start)
++		wg.Wait()
++		close(errs)
++		for err := range errs {
++			if err != nil {
++				t.Fatalf("iteration %d persistence error: %v", i, err)
++			}
++		}
++		state, err := LoadState(path)
++		if err != nil {
++			t.Fatalf("iteration %d state load: %v", i, err)
++		}
++		found := false
++		for _, alias := range state.Aliases {
++			if alias.Alias == aliasName {
++				found = true
++				break
++			}
++		}
++		if !found {
++			t.Fatalf("iteration %d alias %q was lost from persisted state", i, aliasName)
++		}
++	}
++}
+ 
+ // TestKeysSnapshotSortedByID (Bug 5): Keys() returns a deterministic order
+diff --git a/internal/plugin/app.go b/internal/plugin/app.go
+--- a/internal/plugin/app.go
++++ b/internal/plugin/app.go
+@@ -676,4 +676,10 @@ func (a *App) patchKey(body []byte) ManagementResponse {
+ 	}
+ 	if req.Aliases != nil {
+ 		current.Aliases = req.Aliases
++		if req.Models == nil {
++			// Models is derived from Aliases. An aliases-only PATCH must clear the
++			// old derived snapshot or normalizeConfig will reconcile the newly
++			// submitted refs back to that stale model list.
++			current.Models = nil
++		}
+ 	}
+diff --git a/internal/plugin/app_test.go b/internal/plugin/app_test.go
+--- a/internal/plugin/app_test.go
++++ b/internal/plugin/app_test.go
+@@ -368,4 +368,42 @@ func TestAppPatchKeySetsLimits(t *testing.T) {
+ 	}
+ }
++
++func TestAppPatchKeyAliasesUsesSubmittedCanonicalRefs(t *testing.T) {
++	app, _ := configureTestApp(t)
++	if err := app.store.UpsertAlias(policy.AliasMapping{
++		Alias:                    "kimi-k3",
++		Targets:                  []policy.AliasTarget{{Provider: "kimi", TargetModel: "kimi-k3"}},
++		BillingMode:              "tokens",
++		InputPricePerMillion:     3,
++		OutputPricePerMillion:    15,
++		CacheReadPricePerMillion: 0.3,
++	}); err != nil {
++		t.Fatal(err)
++	}
++	patchBody, _ := json.Marshal(map[string]any{
++		"id":      "team-a",
++		"aliases": []map[string]any{{"alias": "fast"}, {"alias": "kimi-k3"}},
++	})
++	req, _ := json.Marshal(ManagementRequest{
++		Method: http.MethodPatch,
++		Path:   "/v0/management/plugins/cpa-key-policy/keys",
++		Body:   patchBody,
++	})
++	raw, err := app.HandleMethod(MethodManagementHandle, req)
++	if err != nil {
++		t.Fatal(err)
++	}
++	resp := managementResponseFromEnvelope(t, raw)
++	if resp.StatusCode != http.StatusOK {
++		t.Fatalf("status = %d body = %s", resp.StatusCode, resp.Body)
++	}
++	keys := app.store.Keys()
++	if len(keys) != 1 || len(keys[0].Aliases) != 2 || len(keys[0].Models) != 2 {
++		t.Fatalf("aliases-only PATCH did not preserve submitted refs: %+v", keys)
++	}
++	if keys[0].Aliases[0].Alias != "fast" || keys[0].Aliases[1].Alias != "kimi-k3" || keys[0].Models[1].TargetModel != "kimi-k3" {
++		t.Fatalf("aliases-only PATCH readback mismatch: %+v", keys[0])
++	}
++}
+ 
+ func TestManagementRegistrationDeclaresResource(t *testing.T) {
+diff --git a/internal/plugin/types.go b/internal/plugin/types.go
+--- a/internal/plugin/types.go
++++ b/internal/plugin/types.go
+@@ -43,5 +43,5 @@ const (
+ const (
+ 	PluginID   = "cpa-key-policy"
+ 	PluginName = "cpa-key-policy"
+-	Version    = "0.4.4"
++	Version    = "0.4.5"
+ )

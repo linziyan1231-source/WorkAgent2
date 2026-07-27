@@ -1,0 +1,101 @@
+groups:
+  - name: workagent
+    rules:
+      - alert: WorkAgentPortalNotReady
+        expr: workagent_portal_readiness != 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: WorkAgent2 Portal readiness is failing
+      - alert: WorkAgentPortalHighServerErrorRate
+        expr: rate(workagent_portal_http_responses_total{class="5xx"}[10m]) / clamp_min(rate(workagent_portal_http_requests_total[10m]), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: WorkAgent2 Portal 5xx ratio is above 5 percent
+      - alert: WorkAgentBackupMissing
+        expr: (time() - workagent_backup_last_success_timestamp_seconds > 90000) or absent(workagent_backup_last_success_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: No verified off-host WorkAgent2 backup completed in 25 hours
+      - alert: WorkAgentPortalAbsent
+        expr: absent(workagent_portal_http_requests_total)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: WorkAgent2 Portal metrics are absent
+      - alert: WorkAgentHostHealthcheckStale
+        expr: (time() - workagent_host_healthcheck_timestamp_seconds > 900) or absent(workagent_host_healthcheck_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: WorkAgent2 host health metrics are stale
+      - alert: WorkAgentRequiredServiceDown
+        expr: workagent_host_service_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A required WorkAgent2 host service is down
+      - alert: WorkAgentPrivateListenerUnsafe
+        expr: workagent_host_loopback_listener == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A private WorkAgent2 listener is missing or exposed beyond loopback
+      - alert: WorkAgentLocalDependencyNotReady
+        expr: (workagent_portal_local_ready == 0) or (workagent_chatforward_local_ready == 0) or (workagent_notification_local_ready == 0) or (workagent_mihomo_proxy_reachable == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A required WorkAgent2 local dependency is not ready
+      - alert: WorkAgentProjectQuotaDisabled
+        expr: workagent_storage_project_quota_enabled != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: WorkAgent2 tenant project-quota enforcement is disabled
+      - alert: WorkAgentTenantBackingSpaceLow
+        expr: workagent_storage_backing_available_bytes < 34359738368
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Sparse tenant image backing storage has less than 32 GiB available
+      - alert: WorkAgentRemoteBackupUnmounted
+        expr: workagent_backup_remote_mount_ready != 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: WorkAgent2 off-host backup filesystem is unavailable
+      - alert: WorkAgentPublicTLSInvalid
+        expr: workagent_public_tls_valid != 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: WorkAgent2 local TLS boundary has no trusted production certificate
+      - alert: WorkAgentPublicTLSExpiringSoon
+        expr: workagent_public_tls_expiry_timestamp_seconds - time() < 1209600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: WorkAgent2 public certificate expires within 14 days
+      - alert: WorkAgentPublicHTTPSExternalDown
+        expr: (probe_success{job="workagent-public"} != 1) or absent(probe_success{job="workagent-public"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Independent external WorkAgent2 HTTPS probing is absent or failing

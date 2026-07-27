@@ -1,0 +1,1194 @@
+package release
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
+)
+
+const ManifestSchemaVersion = 3
+
+// A production runtime includes the pinned Python standard library plus the
+// AionCore Node/ACP resource trees.  Their per-file evidence remains below the
+// 10,000-entry validation limit but does not fit safely in the old 1 MiB JSON
+// envelope. Keep the manifest bounded while allowing the complete release to
+// be represented and signed without dropping files from verification.
+const maxManifestBytes = 8 * 1024 * 1024
+
+const (
+	ScopePortal   = "portal"
+	ScopeRuntime  = "runtime"
+	ScopeShared   = "shared"
+	ScopeCombined = "combined"
+)
+
+func ProductionRuntimeComponents() map[string]string {
+	return map[string]string{
+		"aionui":       "2.1.0-beta.editfork.21",
+		"aioncore":     "v0.1.42-editfork.10",
+		"noble-hashes": "2.2.0",
+		"codex":        "0.144.4",
+		"kimi-code":    "0.29.1-fork-steer.1",
+		"python":       "3.13.13",
+	}
+}
+
+func ProductionSharedComponents() map[string]string {
+	return map[string]string{
+		"cliproxyapi":           "7.2.81",
+		"cliproxyapi-patch":     "per-key-models.4",
+		"cpa-key-policy":        "0.4.5",
+		"chatforward":           "zombie-reap-20260725-2329",
+		"chatforward-extension": "0.16.0",
+		"node":                  "24.15.0",
+		"ws":                    "8.21.1",
+	}
+}
+
+func RequiredComponentsForScope(scope string) map[string]string {
+	switch scope {
+	case ScopeRuntime:
+		return ProductionRuntimeComponents()
+	case ScopeShared:
+		return ProductionSharedComponents()
+	case ScopeCombined:
+		components := ProductionRuntimeComponents()
+		for name, version := range ProductionSharedComponents() {
+			components[name] = version
+		}
+		return components
+	default:
+		return nil
+	}
+}
+
+type Manifest struct {
+	SchemaVersion             int         `json:"schema_version"`
+	ReleaseID                 string      `json:"release_id"`
+	SourceRevision            string      `json:"source_revision"`
+	TargetOS                  string      `json:"target_os"`
+	TargetArch                string      `json:"target_arch"`
+	BuiltAt                   time.Time   `json:"built_at"`
+	BrandingVersion           string      `json:"branding_version"`
+	PolicyVersion             string      `json:"policy_version"`
+	ComponentScope            string      `json:"component_scope"`
+	DataSchemaVersion         int         `json:"data_schema_version"`
+	MinimumReadableDataSchema int         `json:"minimum_readable_data_schema"`
+	MaximumReadableDataSchema int         `json:"maximum_readable_data_schema"`
+	Components                []Component `json:"components"`
+	SBOMPath                  string      `json:"sbom_path"`
+	ProvenancePath            string      `json:"provenance_path"`
+	LicenseReportPath         string      `json:"license_report_path"`
+	Files                     []File      `json:"files"`
+}
+
+type Component struct {
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	SourceRevision string `json:"source_revision"`
+}
+
+type Provenance struct {
+	SchemaVersion  int                  `json:"schema_version"`
+	ReleaseID      string               `json:"release_id"`
+	SourceRevision string               `json:"source_revision"`
+	BuilderID      string               `json:"builder_id"`
+	BuildType      string               `json:"build_type"`
+	InvocationID   string               `json:"invocation_id"`
+	Reproducible   bool                 `json:"reproducible"`
+	Materials      []ProvenanceMaterial `json:"materials"`
+}
+
+type ProvenanceMaterial struct {
+	URI      string `json:"uri"`
+	Revision string `json:"revision"`
+}
+
+type LicenseReport struct {
+	SchemaVersion int            `json:"schema_version"`
+	Approved      bool           `json:"approved"`
+	ReviewedAt    time.Time      `json:"reviewed_at"`
+	Entries       []LicenseEntry `json:"entries"`
+}
+
+type LicenseEntry struct {
+	Component      string `json:"component"`
+	SPDXExpression string `json:"spdx_expression"`
+	Copyright      string `json:"copyright"`
+	NoticePath     string `json:"notice_path,omitempty"`
+}
+
+// NewProvenance creates deterministic release provenance from the exact
+// component list. Reproducibility is an explicit attestation: production
+// evidence cannot silently omit or negate it.
+func NewProvenance(releaseID, sourceRevision, sourceURI, builderID, buildType, invocationID string, reproducible bool, components []Component) (Provenance, error) {
+	value := Provenance{
+		SchemaVersion: 1, ReleaseID: releaseID, SourceRevision: sourceRevision,
+		BuilderID: builderID, BuildType: buildType, InvocationID: invocationID,
+		Reproducible: reproducible,
+		Materials:    []ProvenanceMaterial{{URI: sourceURI, Revision: sourceRevision}},
+	}
+	ordered := append([]Component(nil), components...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
+	for _, component := range ordered {
+		value.Materials = append(value.Materials, ProvenanceMaterial{
+			URI:      "component:" + component.Name + "@" + component.Version,
+			Revision: component.SourceRevision,
+		})
+	}
+	if err := value.Validate(); err != nil {
+		return Provenance{}, err
+	}
+	return value, nil
+}
+
+func (p Provenance) Validate() error {
+	if p.SchemaVersion != 1 || !validIdentifier(p.ReleaseID) || !validRevision(p.SourceRevision) ||
+		!validEvidenceText(p.BuilderID) || !validEvidenceText(p.BuildType) || !validEvidenceText(p.InvocationID) || !p.Reproducible ||
+		len(p.Materials) == 0 || len(p.Materials) > 256 {
+		return errors.New("release provenance is invalid or is not reproducible")
+	}
+	seen := make(map[string]bool, len(p.Materials))
+	for _, material := range p.Materials {
+		if !validEvidenceText(material.URI) || !validRevision(material.Revision) {
+			return errors.New("release provenance contains an invalid material")
+		}
+		identity := material.URI + "\x00" + material.Revision
+		if seen[identity] {
+			return errors.New("release provenance contains a duplicate material")
+		}
+		seen[identity] = true
+	}
+	return nil
+}
+
+func WriteProvenance(path string, value Provenance) error {
+	if !cleanAbsolute(path) {
+		return errors.New("release provenance path must be clean and absolute")
+	}
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, append(payload, '\n'), 0o444)
+}
+
+// NewLicenseReviewTemplate deliberately emits an unapproved, incomplete
+// document. Only an authorized reviewer may fill its fields, set reviewed_at,
+// and change approved to true before it is copied into a release.
+func NewLicenseReviewTemplate(components []Component) (LicenseReport, error) {
+	if len(components) == 0 || len(components) > 64 {
+		return LicenseReport{}, errors.New("license review template requires components")
+	}
+	ordered := append([]Component(nil), components...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
+	value := LicenseReport{SchemaVersion: 1, Approved: false}
+	seen := make(map[string]bool, len(ordered))
+	for _, component := range ordered {
+		if !validIdentifier(component.Name) || !validIdentifier(component.Version) || !validRevision(component.SourceRevision) || seen[component.Name] {
+			return LicenseReport{}, errors.New("license review template contains an invalid component")
+		}
+		seen[component.Name] = true
+		value.Entries = append(value.Entries, LicenseEntry{Component: component.Name})
+	}
+	return value, nil
+}
+
+func WriteLicenseReviewTemplate(path string, value LicenseReport) error {
+	if !cleanAbsolute(path) || value.SchemaVersion != 1 || value.Approved || !value.ReviewedAt.IsZero() || len(value.Entries) == 0 {
+		return errors.New("license review template path or state is invalid")
+	}
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, append(payload, '\n'), 0o600)
+}
+
+type File struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Mode   string `json:"mode"`
+	Size   int64  `json:"size"`
+	UID    uint32 `json:"uid"`
+	GID    uint32 `json:"gid"`
+}
+
+type VerifyOptions struct {
+	ExpectedReleaseID  string
+	RequiredPaths      []string
+	RequireRootOwner   bool
+	RequireSignature   bool
+	SignaturePath      string
+	PublicKeyPath      string
+	AllowedScopes      []string
+	RequiredComponents map[string]string
+}
+
+type Verified struct {
+	Path     string
+	Manifest Manifest
+}
+
+type ResolveOptions struct {
+	Scope                  string
+	RequiredPaths          []string
+	RequireRootOwner       bool
+	RequiredComponents     map[string]string
+	RequireCurrentMatch    bool
+	ExpectedCurrentRelease string
+}
+
+type Pointer struct {
+	SchemaVersion int       `json:"schema_version"`
+	Scope         string    `json:"scope"`
+	Current       string    `json:"current"`
+	Previous      string    `json:"previous,omitempty"`
+	ActivatedAt   time.Time `json:"activated_at"`
+}
+
+func LoadComponents(path string, requireRootOwner bool) ([]Component, error) {
+	payload, err := readProtectedBoundedFile(path, 1024*1024, requireRootOwner, false)
+	if err != nil {
+		return nil, fmt.Errorf("read release component list: %w", err)
+	}
+	var components []Component
+	if err := decodeStrictJSON(payload, &components); err != nil {
+		return nil, fmt.Errorf("decode release component list: %w", err)
+	}
+	test := Manifest{
+		SchemaVersion: ManifestSchemaVersion, ReleaseID: "validation", SourceRevision: strings.Repeat("0", 40), TargetOS: "linux", TargetArch: "amd64",
+		BuiltAt: time.Unix(1, 0).UTC(), BrandingVersion: "validation", PolicyVersion: "validation", ComponentScope: ScopeRuntime,
+		DataSchemaVersion: 1, MinimumReadableDataSchema: 1, MaximumReadableDataSchema: 1, Components: components,
+		SBOMPath: "sbom.json", ProvenancePath: "provenance.json", LicenseReportPath: "licenses.json",
+		Files: []File{
+			{Path: "sbom.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
+			{Path: "provenance.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
+			{Path: "licenses.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
+		},
+	}
+	if err := test.Validate(); err != nil {
+		return nil, fmt.Errorf("validate release component list: %w", err)
+	}
+	return components, nil
+}
+
+func LoadManifest(path string) (Manifest, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxManifestBytes {
+		return Manifest{}, errors.New("release manifest is missing or unsafe")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("open release manifest: %w", err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, maxManifestBytes))
+	decoder.DisallowUnknownFields()
+	var value Manifest
+	if err := decoder.Decode(&value); err != nil {
+		return Manifest{}, fmt.Errorf("decode release manifest: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Manifest{}, errors.New("release manifest must contain one JSON value")
+	}
+	if err := value.Validate(); err != nil {
+		return Manifest{}, err
+	}
+	return value, nil
+}
+
+func (m Manifest) Validate() error {
+	if m.SchemaVersion != ManifestSchemaVersion {
+		return fmt.Errorf("release manifest schema_version must be %d", ManifestSchemaVersion)
+	}
+	if !validIdentifier(m.ReleaseID) || !validRevision(m.SourceRevision) {
+		return errors.New("release identity is invalid")
+	}
+	if m.TargetOS != "linux" || m.TargetArch != "amd64" {
+		return errors.New("release target must be linux/amd64")
+	}
+	if m.BuiltAt.IsZero() || m.BrandingVersion == "" || m.PolicyVersion == "" {
+		return errors.New("release metadata is incomplete")
+	}
+	if m.ComponentScope != ScopePortal && m.ComponentScope != ScopeRuntime && m.ComponentScope != ScopeShared && m.ComponentScope != ScopeCombined {
+		return errors.New("release component scope is invalid")
+	}
+	if m.DataSchemaVersion < 1 || m.DataSchemaVersion > 1_000_000 || m.MinimumReadableDataSchema < 1 || m.MinimumReadableDataSchema > m.DataSchemaVersion || m.MaximumReadableDataSchema < m.DataSchemaVersion || m.MaximumReadableDataSchema > 1_000_000 {
+		return errors.New("release data-schema compatibility range is invalid")
+	}
+	if len(m.Components) == 0 || len(m.Components) > 64 {
+		return errors.New("release component list is empty or too large")
+	}
+	componentNames := make(map[string]bool, len(m.Components))
+	for _, component := range m.Components {
+		if !validIdentifier(component.Name) || component.Name != strings.ToLower(component.Name) || !validIdentifier(component.Version) || !validRevision(component.SourceRevision) || componentNames[component.Name] {
+			return fmt.Errorf("release component %q is invalid or duplicated", component.Name)
+		}
+		componentNames[component.Name] = true
+	}
+	for name, value := range map[string]string{"SBOM": m.SBOMPath, "provenance": m.ProvenancePath, "license report": m.LicenseReportPath} {
+		if err := validRelativePath(value); err != nil {
+			return fmt.Errorf("invalid %s path: %w", name, err)
+		}
+	}
+	if m.SBOMPath == m.ProvenancePath || m.SBOMPath == m.LicenseReportPath || m.ProvenancePath == m.LicenseReportPath {
+		return errors.New("release metadata paths must be distinct")
+	}
+	if len(m.Files) == 0 || len(m.Files) > 10000 {
+		return errors.New("release file list is empty or too large")
+	}
+	seen := make(map[string]struct{}, len(m.Files))
+	requiredMetadata := map[string]bool{m.SBOMPath: false, m.ProvenancePath: false, m.LicenseReportPath: false}
+	for _, file := range m.Files {
+		if err := validRelativePath(file.Path); err != nil {
+			return fmt.Errorf("invalid release file path %q: %w", file.Path, err)
+		}
+		if _, exists := seen[file.Path]; exists {
+			return fmt.Errorf("duplicate release file %q", file.Path)
+		}
+		seen[file.Path] = struct{}{}
+		if _, ok := requiredMetadata[file.Path]; ok {
+			requiredMetadata[file.Path] = true
+		}
+		if len(file.SHA256) != sha256.Size*2 {
+			return fmt.Errorf("invalid SHA-256 for %q", file.Path)
+		}
+		if _, err := hex.DecodeString(file.SHA256); err != nil || strings.ToLower(file.SHA256) != file.SHA256 {
+			return fmt.Errorf("invalid SHA-256 for %q", file.Path)
+		}
+		mode, err := parseMode(file.Mode)
+		if err != nil || mode&0o022 != 0 {
+			return fmt.Errorf("unsafe mode for %q", file.Path)
+		}
+		if file.Size < 0 || file.UID != 0 || file.GID != 0 {
+			return fmt.Errorf("invalid size or ownership for %q", file.Path)
+		}
+	}
+	for name, found := range requiredMetadata {
+		if !found {
+			return fmt.Errorf("release metadata file %q is not covered by the file hashes", name)
+		}
+	}
+	return nil
+}
+
+func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || filepath.Clean(manifestPath) != manifestPath || manifestPath != filepath.Join(root, "manifest.json") {
+		return Verified{}, errors.New("release and manifest paths are not canonical")
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return Verified{}, fmt.Errorf("inspect release root: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() || rootInfo.Mode().Perm()&0o022 != 0 {
+		return Verified{}, errors.New("release root is not a protected real directory")
+	}
+	if options.RequireRootOwner {
+		stat, ok := rootInfo.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 {
+			return Verified{}, errors.New("release root is not owned by root")
+		}
+	}
+	if options.RequireSignature {
+		signaturePath := options.SignaturePath
+		if signaturePath == "" {
+			signaturePath = filepath.Join(root, "manifest.sig")
+		}
+		if signaturePath != filepath.Join(root, "manifest.sig") || !filepath.IsAbs(options.PublicKeyPath) || filepath.Clean(options.PublicKeyPath) != options.PublicKeyPath {
+			return Verified{}, errors.New("release signature paths are not canonical")
+		}
+		if err := VerifyManifestSignature(manifestPath, signaturePath, options.PublicKeyPath, options.RequireRootOwner); err != nil {
+			return Verified{}, err
+		}
+	}
+	manifest, err := LoadManifest(manifestPath)
+	if err != nil {
+		return Verified{}, err
+	}
+	if options.ExpectedReleaseID != "" && manifest.ReleaseID != options.ExpectedReleaseID {
+		return Verified{}, errors.New("release ID does not match tenant configuration")
+	}
+	if manifest.TargetOS != runtime.GOOS || manifest.TargetArch != runtime.GOARCH {
+		return Verified{}, errors.New("release target does not match this host")
+	}
+	if len(options.AllowedScopes) != 0 {
+		allowed := false
+		for _, scope := range options.AllowedScopes {
+			allowed = allowed || manifest.ComponentScope == scope
+		}
+		if !allowed {
+			return Verified{}, errors.New("release component scope is not permitted for this consumer")
+		}
+	}
+	components := make(map[string]string, len(manifest.Components))
+	for _, component := range manifest.Components {
+		components[component.Name] = component.Version
+	}
+	for name, version := range options.RequiredComponents {
+		if components[name] != version {
+			return Verified{}, fmt.Errorf("release component %s version does not match the required baseline", name)
+		}
+	}
+	secureRoot, err := projectfs.OpenRoot(root)
+	if err != nil {
+		return Verified{}, err
+	}
+	defer secureRoot.Close()
+	listed := make(map[string]struct{}, len(manifest.Files))
+	for _, expected := range manifest.Files {
+		file, err := secureRoot.Open(filepath.FromSlash(expected.Path), unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return Verified{}, fmt.Errorf("verify release file %q: %w", expected.Path, err)
+		}
+		info, statErr := file.Stat()
+		if statErr != nil || !info.Mode().IsRegular() {
+			file.Close()
+			return Verified{}, fmt.Errorf("release file %q is not regular", expected.Path)
+		}
+		stat, statOK := info.Sys().(*syscall.Stat_t)
+		if !statOK || stat.Uid != expected.UID || stat.Gid != expected.GID {
+			file.Close()
+			return Verified{}, fmt.Errorf("release file ownership mismatch for %q", expected.Path)
+		}
+		if options.RequireRootOwner {
+			if stat.Uid != 0 || stat.Gid != 0 {
+				file.Close()
+				return Verified{}, fmt.Errorf("release file %q is not owned by root", expected.Path)
+			}
+		}
+		mode, _ := parseMode(expected.Mode)
+		if info.Mode().Perm() != mode || info.Size() != expected.Size {
+			file.Close()
+			return Verified{}, fmt.Errorf("release file metadata mismatch for %q", expected.Path)
+		}
+		hash := sha256.New()
+		if _, err := io.Copy(hash, file); err != nil {
+			file.Close()
+			return Verified{}, fmt.Errorf("hash release file %q: %w", expected.Path, err)
+		}
+		file.Close()
+		if hex.EncodeToString(hash.Sum(nil)) != expected.SHA256 {
+			return Verified{}, fmt.Errorf("release file hash mismatch for %q", expected.Path)
+		}
+		listed[filepath.FromSlash(expected.Path)] = struct{}{}
+	}
+	for _, required := range options.RequiredPaths {
+		if _, ok := listed[filepath.Clean(required)]; !ok {
+			return Verified{}, fmt.Errorf("required release file %q is not in the manifest", required)
+		}
+	}
+	if err := verifyReleaseMetadata(secureRoot, manifest); err != nil {
+		return Verified{}, err
+	}
+	if err := rejectUnlisted(root, listed, options.RequireRootOwner); err != nil {
+		return Verified{}, err
+	}
+	return Verified{Path: root, Manifest: manifest}, nil
+}
+
+// ResolveActive resolves an immutable release through its protected channel
+// pointer and verifies the signature and complete release contents before the
+// caller is allowed to execute anything from it.
+func ResolveActive(releasesRoot, pointerPath, publicKeyPath string, options ResolveOptions) (Verified, error) {
+	if !cleanAbsolute(releasesRoot) || !cleanAbsolute(pointerPath) || !cleanAbsolute(publicKeyPath) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") {
+		return Verified{}, errors.New("release channel paths are not canonical")
+	}
+	if options.Scope != ScopePortal && options.Scope != ScopeRuntime && options.Scope != ScopeShared && options.Scope != ScopeCombined {
+		return Verified{}, errors.New("release channel scope is invalid")
+	}
+	pointer, err := LoadProtectedPointer(pointerPath, options.RequireRootOwner)
+	if err != nil {
+		return Verified{}, fmt.Errorf("load active release pointer: %w", err)
+	}
+	if pointer.Scope != options.Scope {
+		return Verified{}, errors.New("active release pointer scope does not match its consumer")
+	}
+	releaseRoot := filepath.Join(releasesRoot, pointer.Current)
+	return Verify(releaseRoot, filepath.Join(releaseRoot, "manifest.json"), VerifyOptions{
+		ExpectedReleaseID:  pointer.Current,
+		RequiredPaths:      options.RequiredPaths,
+		RequireRootOwner:   options.RequireRootOwner,
+		RequireSignature:   true,
+		SignaturePath:      filepath.Join(releaseRoot, "manifest.sig"),
+		PublicKeyPath:      publicKeyPath,
+		AllowedScopes:      []string{options.Scope},
+		RequiredComponents: options.RequiredComponents,
+	})
+}
+
+func verifyReleaseMetadata(root *projectfs.Root, manifest Manifest) error {
+	sbomPayload, err := root.ReadFile(filepath.FromSlash(manifest.SBOMPath), 16*1024*1024)
+	if err != nil {
+		return fmt.Errorf("read release SBOM: %w", err)
+	}
+	var sbom struct {
+		SPDXVersion       string            `json:"spdxVersion"`
+		DocumentNamespace string            `json:"documentNamespace"`
+		Packages          []json.RawMessage `json:"packages"`
+	}
+	if err := json.Unmarshal(sbomPayload, &sbom); err != nil || !strings.HasPrefix(sbom.SPDXVersion, "SPDX-2.") || strings.TrimSpace(sbom.DocumentNamespace) == "" || len(sbom.Packages) == 0 {
+		return errors.New("release SBOM is not a usable SPDX document")
+	}
+	provenancePayload, err := root.ReadFile(filepath.FromSlash(manifest.ProvenancePath), 4*1024*1024)
+	if err != nil {
+		return fmt.Errorf("read release provenance: %w", err)
+	}
+	var provenance Provenance
+	if err := decodeStrictJSON(provenancePayload, &provenance); err != nil || provenance.Validate() != nil || provenance.ReleaseID != manifest.ReleaseID || provenance.SourceRevision != manifest.SourceRevision {
+		return errors.New("release provenance is invalid or does not match the manifest")
+	}
+	materialRevisions := make(map[string]bool)
+	for _, material := range provenance.Materials {
+		materialRevisions[material.Revision] = true
+	}
+	if !materialRevisions[manifest.SourceRevision] {
+		return errors.New("release provenance omits the release source revision")
+	}
+	for _, component := range manifest.Components {
+		if !materialRevisions[component.SourceRevision] {
+			return fmt.Errorf("release provenance omits component %s source revision", component.Name)
+		}
+	}
+	licensePayload, err := root.ReadFile(filepath.FromSlash(manifest.LicenseReportPath), 4*1024*1024)
+	if err != nil {
+		return fmt.Errorf("read release license report: %w", err)
+	}
+	var license LicenseReport
+	if err := decodeStrictJSON(licensePayload, &license); err != nil || license.SchemaVersion != 1 || !license.Approved || license.ReviewedAt.IsZero() || len(license.Entries) == 0 {
+		return errors.New("release license report is absent or not approved")
+	}
+	licensed := make(map[string]bool)
+	for _, entry := range license.Entries {
+		if !validIdentifier(entry.Component) || !validApprovedLicenseText(entry.SPDXExpression) || !validApprovedLicenseText(entry.Copyright) || licensed[entry.Component] {
+			return errors.New("release license report contains an invalid entry")
+		}
+		if entry.NoticePath != "" {
+			if err := validRelativePath(entry.NoticePath); err != nil {
+				return errors.New("release license notice path is invalid")
+			}
+			found := false
+			for _, file := range manifest.Files {
+				found = found || file.Path == entry.NoticePath
+			}
+			if !found {
+				return errors.New("release license notice is not covered by the manifest")
+			}
+		}
+		licensed[entry.Component] = true
+	}
+	for _, component := range manifest.Components {
+		if !licensed[component.Name] {
+			return fmt.Errorf("release license report omits component %s", component.Name)
+		}
+	}
+	return nil
+}
+
+func decodeStrictJSON(payload []byte, destination any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return errors.New("JSON document contains trailing data")
+	}
+	return nil
+}
+
+func rejectUnlisted(root string, listed map[string]struct{}, requireRootOwner bool) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("release contains a symbolic link: %s", relative)
+		}
+		if requireRootOwner {
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || stat.Uid != 0 {
+				return fmt.Errorf("release path is not owned by root: %s", relative)
+			}
+		}
+		if entry.IsDir() {
+			if info.Mode().Perm()&0o022 != 0 {
+				return fmt.Errorf("release directory is writable outside its owner: %s", relative)
+			}
+			return nil
+		}
+		if relative == "manifest.json" || relative == "manifest.sig" {
+			return nil
+		}
+		if _, ok := listed[relative]; !ok {
+			return fmt.Errorf("release contains unlisted file: %s", relative)
+		}
+		return nil
+	})
+}
+
+func BuildManifest(root string, metadata Manifest) (Manifest, error) {
+	metadata.SchemaVersion = ManifestSchemaVersion
+	metadata.TargetOS = "linux"
+	metadata.TargetArch = "amd64"
+	metadata.Files = nil
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root || entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if relative == "manifest.json" || relative == "manifest.sig" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("release contains unsupported entry: %s", relative)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		_, copyErr := io.Copy(hash, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("release file ownership is unavailable: %s", relative)
+		}
+		metadata.Files = append(metadata.Files, File{Path: filepath.ToSlash(relative), SHA256: hex.EncodeToString(hash.Sum(nil)), Mode: fmt.Sprintf("%04o", info.Mode().Perm()), Size: info.Size(), UID: stat.Uid, GID: stat.Gid})
+		return nil
+	}); err != nil {
+		return Manifest{}, err
+	}
+	sort.Slice(metadata.Files, func(i, j int) bool { return metadata.Files[i].Path < metadata.Files[j].Path })
+	if err := metadata.Validate(); err != nil {
+		return Manifest{}, err
+	}
+	return metadata, nil
+}
+
+func WriteManifest(path string, manifest Manifest) error {
+	if err := manifest.Validate(); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	return atomicWrite(path, payload, 0o444)
+}
+
+func GenerateSigningKey(publicPath, privatePath string) error {
+	if !cleanAbsolute(publicPath) || !cleanAbsolute(privatePath) || publicPath == privatePath {
+		return errors.New("signing key paths must be distinct, clean, and absolute")
+	}
+	for _, path := range []string{publicPath, privatePath} {
+		if _, err := os.Lstat(path); err == nil {
+			return fmt.Errorf("refusing to overwrite signing key: %s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	defer clear(privateKey)
+	privatePayload := append([]byte(base64.RawStdEncoding.EncodeToString(privateKey)), '\n')
+	defer clear(privatePayload)
+	if err := atomicWrite(privatePath, privatePayload, 0o600); err != nil {
+		return err
+	}
+	publicPayload := append([]byte(base64.RawStdEncoding.EncodeToString(publicKey)), '\n')
+	if err := atomicWrite(publicPath, publicPayload, 0o444); err != nil {
+		return fmt.Errorf("write public signing key (private key was already created): %w", err)
+	}
+	return nil
+}
+
+func SignManifest(manifestPath, signaturePath, privateKeyPath string, requireRootOwner bool) error {
+	manifest, err := readProtectedBoundedFile(manifestPath, maxManifestBytes, requireRootOwner, false)
+	if err != nil {
+		return fmt.Errorf("read manifest for signing: %w", err)
+	}
+	privatePayload, err := readProtectedBoundedFile(privateKeyPath, 1024, requireRootOwner, true)
+	if err != nil {
+		return fmt.Errorf("read release signing key: %w", err)
+	}
+	defer clear(privatePayload)
+	privateKey, err := decodeKey(privatePayload, ed25519.PrivateKeySize)
+	if err != nil {
+		return errors.New("release private signing key is invalid")
+	}
+	defer clear(privateKey)
+	signature := ed25519.Sign(ed25519.PrivateKey(privateKey), manifest)
+	payload := append([]byte(base64.RawStdEncoding.EncodeToString(signature)), '\n')
+	if err := atomicWrite(signaturePath, payload, 0o444); err != nil {
+		return fmt.Errorf("write release signature: %w", err)
+	}
+	return nil
+}
+
+func VerifyManifestSignature(manifestPath, signaturePath, publicKeyPath string, requireRootOwner bool) error {
+	manifest, err := readProtectedBoundedFile(manifestPath, maxManifestBytes, requireRootOwner, false)
+	if err != nil {
+		return err
+	}
+	signaturePayload, err := readProtectedBoundedFile(signaturePath, 1024, requireRootOwner, false)
+	if err != nil {
+		return fmt.Errorf("read release signature: %w", err)
+	}
+	publicPayload, err := readProtectedBoundedFile(publicKeyPath, 1024, requireRootOwner, false)
+	if err != nil {
+		return fmt.Errorf("read release public key: %w", err)
+	}
+	publicKey, err := decodeKey(publicPayload, ed25519.PublicKeySize)
+	if err != nil {
+		return errors.New("release public key is invalid")
+	}
+	signature, err := decodeKey(signaturePayload, ed25519.SignatureSize)
+	if err != nil || !ed25519.Verify(ed25519.PublicKey(publicKey), manifest, signature) {
+		return errors.New("release manifest signature is invalid")
+	}
+	return nil
+}
+
+func readProtectedBoundedFile(path string, maximum int64, requireRootOwner, requirePrivate bool) ([]byte, error) {
+	if !cleanAbsolute(path) {
+		return nil, errors.New("protected file path must be clean and absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximum || info.Mode().Perm()&0o022 != 0 || (requirePrivate && info.Mode().Perm()&0o077 != 0) {
+		return nil, errors.New("protected file is missing or unsafe")
+	}
+	if requireRootOwner {
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 {
+			return nil, errors.New("protected file is not root-owned")
+		}
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil || int64(len(payload)) > maximum {
+		return nil, errors.New("protected file could not be read")
+	}
+	return payload, nil
+}
+
+func decodeKey(payload []byte, size int) ([]byte, error) {
+	value := strings.TrimSpace(string(payload))
+	decoded, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil {
+		decoded, err = base64.StdEncoding.DecodeString(value)
+	}
+	if err != nil || len(decoded) != size {
+		return nil, errors.New("encoded key has the wrong size")
+	}
+	return decoded, nil
+}
+
+func Activate(pointerPath, nextRelease string, now time.Time) error {
+	return ActivateScoped(pointerPath, nextRelease, ScopeCombined, now)
+}
+
+func ActivateScoped(pointerPath, nextRelease, scope string, now time.Time) error {
+	return withPointerLock(pointerPath, func() error {
+		return activateScopedUnlocked(pointerPath, nextRelease, scope, now)
+	})
+}
+
+func activateScopedUnlocked(pointerPath, nextRelease, scope string, now time.Time) error {
+	if !validIdentifier(nextRelease) || !filepath.IsAbs(pointerPath) || filepath.Clean(pointerPath) != pointerPath {
+		return errors.New("invalid activation target")
+	}
+	if scope != ScopePortal && scope != ScopeRuntime && scope != ScopeShared && scope != ScopeCombined {
+		return errors.New("invalid activation component scope")
+	}
+	current, err := LoadPointer(pointerPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("refuse to replace invalid current release pointer: %w", err)
+	}
+	if current.Current != "" && current.Scope != scope {
+		return errors.New("release pointer component scope cannot be changed")
+	}
+	pointer := Pointer{SchemaVersion: 1, Scope: scope, Current: nextRelease, ActivatedAt: now.UTC()}
+	if current.Current != "" && current.Current != nextRelease {
+		pointer.Previous = current.Current
+	} else {
+		pointer.Previous = current.Previous
+	}
+	payload, err := json.MarshalIndent(pointer, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(pointerPath, append(payload, '\n'), 0o600)
+}
+
+func Rollback(pointerPath string, now time.Time) (Pointer, error) {
+	var result Pointer
+	err := withPointerLock(pointerPath, func() error {
+		var err error
+		result, err = rollbackUnlocked(pointerPath, now)
+		return err
+	})
+	return result, err
+}
+
+func rollbackUnlocked(pointerPath string, now time.Time) (Pointer, error) {
+	current, err := LoadPointer(pointerPath)
+	if err != nil {
+		return Pointer{}, err
+	}
+	if current.Previous == "" || current.Previous == current.Current {
+		return Pointer{}, errors.New("release pointer has no distinct previous release")
+	}
+	next := Pointer{SchemaVersion: 1, Scope: current.Scope, Current: current.Previous, Previous: current.Current, ActivatedAt: now.UTC()}
+	payload, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return Pointer{}, err
+	}
+	if err := atomicWrite(pointerPath, append(payload, '\n'), 0o600); err != nil {
+		return Pointer{}, err
+	}
+	return next, nil
+}
+
+func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath string, options ResolveOptions, now time.Time) (Verified, error) {
+	var verified Verified
+	err := withPointerLock(pointerPath, func() error {
+		if !cleanAbsolute(releasesRoot) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") || !validIdentifier(nextRelease) {
+			return errors.New("release channel paths are not canonical")
+		}
+		if options.RequireCurrentMatch {
+			current, err := LoadPointer(pointerPath)
+			if errors.Is(err, os.ErrNotExist) && options.ExpectedCurrentRelease == "" {
+				// An explicitly requested first activation has no prior pointer.
+			} else if err != nil {
+				return fmt.Errorf("load current release for compare-and-swap activation: %w", err)
+			} else if current.Current != options.ExpectedCurrentRelease || current.Scope != options.Scope {
+				return errors.New("active release changed after preflight")
+			}
+		}
+		releaseRoot := filepath.Join(releasesRoot, nextRelease)
+		var err error
+		verified, err = Verify(releaseRoot, filepath.Join(releaseRoot, "manifest.json"), VerifyOptions{
+			ExpectedReleaseID: nextRelease, RequiredPaths: options.RequiredPaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
+			SignaturePath: filepath.Join(releaseRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+		})
+		if err != nil {
+			return err
+		}
+		if options.ExpectedCurrentRelease != "" {
+			currentRoot := filepath.Join(releasesRoot, options.ExpectedCurrentRelease)
+			current, currentErr := Verify(currentRoot, filepath.Join(currentRoot, "manifest.json"), VerifyOptions{
+				ExpectedReleaseID: options.ExpectedCurrentRelease, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
+				SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+			})
+			if currentErr != nil {
+				return fmt.Errorf("verify active release before activation: %w", currentErr)
+			}
+			if err := requireReadableDataSchema(verified.Manifest, current.Manifest.DataSchemaVersion); err != nil {
+				return fmt.Errorf("target release cannot safely upgrade active data: %w", err)
+			}
+		}
+		return activateScopedUnlocked(pointerPath, nextRelease, options.Scope, now)
+	})
+	return verified, err
+}
+
+func RollbackVerified(releasesRoot, pointerPath, publicKeyPath string, options ResolveOptions, now time.Time) (Pointer, Verified, error) {
+	var next Pointer
+	var verified Verified
+	err := withPointerLock(pointerPath, func() error {
+		if !cleanAbsolute(releasesRoot) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") {
+			return errors.New("release channel paths are not canonical")
+		}
+		current, err := LoadProtectedPointer(pointerPath, options.RequireRootOwner)
+		if err != nil {
+			return err
+		}
+		if current.Scope != options.Scope || current.Previous == "" || current.Previous == current.Current {
+			return errors.New("release pointer has no distinct previous release in the requested scope")
+		}
+		root := filepath.Join(releasesRoot, current.Previous)
+		verified, err = Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
+			ExpectedReleaseID: current.Previous, RequiredPaths: options.RequiredPaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
+			SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+		})
+		if err != nil {
+			return err
+		}
+		currentRoot := filepath.Join(releasesRoot, current.Current)
+		active, activeErr := Verify(currentRoot, filepath.Join(currentRoot, "manifest.json"), VerifyOptions{
+			ExpectedReleaseID: current.Current, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
+			SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+		})
+		if activeErr != nil {
+			return fmt.Errorf("verify active release before rollback: %w", activeErr)
+		}
+		if err := requireReadableDataSchema(verified.Manifest, active.Manifest.DataSchemaVersion); err != nil {
+			return fmt.Errorf("previous release cannot safely read data written by the active release; restore is required: %w", err)
+		}
+		next, err = rollbackUnlocked(pointerPath, now)
+		return err
+	})
+	return next, verified, err
+}
+
+func requireReadableDataSchema(reader Manifest, storedVersion int) error {
+	if storedVersion < reader.MinimumReadableDataSchema || storedVersion > reader.MaximumReadableDataSchema {
+		return fmt.Errorf("data schema %d is outside release %s readable range %d..%d", storedVersion, reader.ReleaseID, reader.MinimumReadableDataSchema, reader.MaximumReadableDataSchema)
+	}
+	return nil
+}
+
+func withPointerLock(pointerPath string, operation func() error) error {
+	if !cleanAbsolute(pointerPath) || operation == nil {
+		return errors.New("invalid release pointer lock request")
+	}
+	parent := filepath.Dir(pointerPath)
+	info, err := os.Lstat(parent)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
+		return errors.New("release pointer parent is missing or unsafe")
+	}
+	lockPath := pointerPath + ".lock"
+	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("open release pointer lock: %w", err)
+	}
+	lock := os.NewFile(uintptr(fd), lockPath)
+	defer lock.Close()
+	lockInfo, err := lock.Stat()
+	if err != nil || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0o600 {
+		return errors.New("release pointer lock is unsafe")
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+		return fmt.Errorf("lock release pointer: %w", err)
+	}
+	defer unix.Flock(fd, unix.LOCK_UN)
+	return operation()
+}
+
+func LoadPointer(path string) (Pointer, error) {
+	return loadPointer(path, false)
+}
+
+func LoadProtectedPointer(path string, requireRootOwner bool) (Pointer, error) {
+	if !cleanAbsolute(path) {
+		return Pointer{}, errors.New("release pointer path must be clean and absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Pointer{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64*1024 || info.Mode().Perm()&0o022 != 0 {
+		return Pointer{}, errors.New("release pointer is missing or unsafe")
+	}
+	if requireRootOwner {
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 {
+			return Pointer{}, errors.New("release pointer is not owned by root")
+		}
+	}
+	return loadPointer(path, true)
+}
+
+func loadPointer(path string, noFollow bool) (Pointer, error) {
+	var file *os.File
+	var err error
+	if noFollow {
+		file, err = os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	} else {
+		file, err = os.Open(path)
+	}
+	if err != nil {
+		return Pointer{}, err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, 64*1024))
+	decoder.DisallowUnknownFields()
+	var value Pointer
+	if err := decoder.Decode(&value); err != nil {
+		return Pointer{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Pointer{}, errors.New("release pointer must contain one JSON value")
+	}
+	if value.SchemaVersion != 1 || (value.Scope != ScopePortal && value.Scope != ScopeRuntime && value.Scope != ScopeShared && value.Scope != ScopeCombined) || !validIdentifier(value.Current) || (value.Previous != "" && !validIdentifier(value.Previous)) || value.ActivatedAt.IsZero() {
+		return Pointer{}, errors.New("invalid release pointer")
+	}
+	return value, nil
+}
+
+func cleanAbsolute(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+
+func atomicWrite(path string, payload []byte, mode os.FileMode) error {
+	parent := filepath.Dir(path)
+	info, err := os.Lstat(parent)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("atomic write parent is not a real directory")
+	}
+	temporary, err := os.CreateTemp(parent, ".workagent-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	cleanup := func() {
+		temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := temporary.Write(payload); err != nil {
+		cleanup()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	directory, err := os.Open(parent)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func parseMode(value string) (os.FileMode, error) {
+	if len(value) != 4 || value[0] != '0' {
+		return 0, errors.New("file mode must use four octal digits")
+	}
+	parsed, err := strconv.ParseUint(value, 8, 12)
+	return os.FileMode(parsed), err
+}
+
+func validIdentifier(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validRevision(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && strings.ToLower(value) == value
+}
+
+func validEvidenceText(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 1024 {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validApprovedLicenseText(value string) bool {
+	if !validEvidenceText(value) {
+		return false
+	}
+	lower := strings.ToLower(value)
+	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(lower)
+	switch compact {
+	case "none", "noassertion", "unknown", "todo", "tbd", "reviewrequired", "unresolved":
+		return false
+	}
+	words := strings.FieldsFunc(lower, func(character rune) bool {
+		return !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9'))
+	})
+	for index, word := range words {
+		switch word {
+		case "none", "noassertion", "unknown", "todo", "tbd", "unresolved":
+			return false
+		case "reviewrequired":
+			return false
+		case "review":
+			if index+1 < len(words) && words[index+1] == "required" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validRelativePath(value string) error {
+	if value == "" || filepath.IsAbs(value) || filepath.Clean(filepath.FromSlash(value)) != filepath.FromSlash(value) || value == "." || strings.Contains(value, "\\") || strings.HasPrefix(value, "../") {
+		return errors.New("path must be clean and relative")
+	}
+	return nil
+}

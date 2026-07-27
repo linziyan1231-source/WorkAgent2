@@ -1,0 +1,16 @@
+scrape_configs:
+  - job_name: workagent-node
+    scheme: http
+    static_configs:
+      - targets:
+          - 127.0.0.1:9100
+  - job_name: workagent-portal
+    scheme: http
+    metrics_path: /internal/metrics
+    static_configs:
+      - targets:
+          - 127.0.0.1:42580
+
+# `workagent-public` is intentionally not defined here. It must run from a
+# genuinely external network and probe the production HTTPS URL with hostname
+# verification. The alert rules fail when that independent probe is absent.

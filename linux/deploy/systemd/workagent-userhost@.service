@@ -1,0 +1,67 @@
+[Unit]
+Description=WorkAgent2 UserHost for tenant %i
+Requires=workagent-userhost@%i.socket mihomo.service
+After=network-online.target mihomo.service srv-workagent-users.mount
+RequiresMountsFor=/srv/workagent/users
+AssertPathIsMountPoint=/srv/workagent/users
+StartLimitIntervalSec=60
+StartLimitBurst=5
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-userhost
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/etc/workagent/users/%i.json
+ConditionPathIsDirectory=/srv/workagent/users/%i
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=60s
+# A root-owned per-tenant drop-in must override both values with the tenant's
+# dedicated locked runtime account. The disabled account makes omission fail closed.
+User=workagent-disabled
+Group=workagent-disabled
+SupplementaryGroups=workagent-slots
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-admin --required bin/workagent-release --required bin/workagent-userhost
+ExecStartPre=+/opt/workagent/control/bin/workagent-admin verify-tenant --tenant-id %i --require-quiescent
+ExecStart=/opt/workagent/control/bin/workagent-userhost --tenant-id %i --config /etc/workagent/users/%i.json
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-userhost-%i
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=300
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+LimitCORE=0
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+# On this systemd build RestrictSUIDSGID installs a seccomp rule that also
+# blocks openat2. UserHost requires openat2 for fail-closed path traversal;
+# NoNewPrivileges and an empty capability set still prevent privilege gain.
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=/srv/workagent/users/%i /run/workagent/users /run/workagent/capacity
+
+MemoryHigh=6G
+MemoryMax=6G
+CPUQuota=50%
+TasksMax=64

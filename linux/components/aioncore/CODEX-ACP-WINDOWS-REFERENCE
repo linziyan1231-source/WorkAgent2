@@ -1,0 +1,17 @@
+Read-only Windows reference captured from C:\projects\WorkAgent2\.tools\codex-steer-patch-test3 on 2026-07-27.
+
+Original @agentclientprotocol/codex-acp 1.1.2 tgz SHA-256:
+fb5892908471f1cd63e970817e4df1b821a54ffc45759516201c26ce8b4fd24c
+
+Original dist/index.js SHA-256:
+d05351bc8c47367969a340ac92b013f6fdce538cdf89f38ec046847bd6c2ef84
+
+Exploratory Windows patched dist/index.js SHA-256:
+31f0aac7fd69b87393351319e3fee144987d0c65e0f1ad68f5f4fccc9d3494d9
+
+The exploratory patched file registers fork and both steer route spellings, but calls
+CodexAcpClient.turnSteer without defining that wrapper and falls back from a native
+turn/steer race to turn/start. It is retained as read-only comparison evidence, not as
+the production Linux input. AionUi 2.1.0-beta.editfork.20's checked-in patch is the
+authoritative corrected build chain: it adds the missing wrapper and performs bounded
+native turn/steer retries before failing closed.

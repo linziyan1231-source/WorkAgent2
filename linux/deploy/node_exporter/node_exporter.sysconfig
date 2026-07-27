@@ -1,0 +1,4 @@
+# Install as /etc/sysconfig/node_exporter, root-owned mode 0644.
+# Metrics remain loopback-only; use a host-local approved collector/remote-write
+# agent rather than exposing node_exporter to the public network.
+OPTIONS="--web.listen-address=127.0.0.1:9100 --collector.textfile.directory=/var/lib/node_exporter/textfile_collector"

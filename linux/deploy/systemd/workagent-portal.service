@@ -1,0 +1,64 @@
+[Unit]
+Description=WorkAgent2 Portal
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/workagent/portal
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-portal
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathIsReadWrite=/var/lib/workagent/portal
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=60s
+User=workagent
+Group=workagent
+WorkingDirectory=/var/lib/workagent/portal
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-release --required bin/workagent-portal
+ExecStart=/opt/workagent/control/bin/workagent-portal --config /etc/workagent/portal.json
+# Provider credentials are intentionally absent from the deny-all staging
+# baseline. Production adds LoadCredential entries in a root-owned drop-in.
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-portal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=300
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/workagent/portal /run/workagent
+InaccessiblePaths=-/srv/workagent/users
+
+MemoryHigh=1536M
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

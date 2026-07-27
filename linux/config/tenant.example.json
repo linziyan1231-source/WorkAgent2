@@ -1,0 +1,93 @@
+{
+  "schema_version": 5,
+  "tenant_id": "11111111-1111-4111-8111-111111111111",
+  "runtime_user": "workagent_tenant_one",
+  "data_root": "/srv/workagent/users/11111111-1111-4111-8111-111111111111",
+  "socket_path": "/run/workagent/users/11111111-1111-4111-8111-111111111111.sock",
+  "socket_activation": true,
+  "portal_uid": 991,
+  "portal_origin": "https://workagent.example.invalid",
+  "idle_reap_seconds": 1800,
+  "capacity": {
+    "slot_directory": "/run/workagent/capacity",
+    "max_instances": 20,
+    "project_id": 10001,
+    "disk_hard_limit_bytes": 21474836480
+  },
+  "limits": {
+    "memory_bytes": 6442450944,
+    "cpu_percent": 50,
+    "active_processes": 64
+  },
+  "outbound_proxy_url": "http://127.0.0.1:8118",
+  "release": {
+    "releases_root": "/opt/workagent/aionui/releases",
+    "pointer_file": "/opt/workagent/aionui/current.json",
+    "public_key_file": "/etc/workagent/trust/release-signing.pub",
+    "scope": "runtime"
+  },
+  "backend": {
+    "executable": "bin/aionui-web",
+    "arguments": [
+      "start",
+      "--port",
+      "{listen_port}",
+      "--data-dir",
+      "{data_root}/data",
+      "--work-dir",
+      "{data_root}/workspace",
+      "--log-dir",
+      "{data_root}/logs",
+      "--static-dir",
+      "{release_root}/static",
+      "--backend-bin",
+      "{release_root}/bin/aioncore",
+      "--no-open"
+    ],
+    "required_release_files": [
+      "static/index.html",
+      "workagent-builtin-assistants/assistants.json",
+      "workagent-builtin-assistants/rules/aionui-assistant.en-US.md",
+      "workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md",
+      "workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md"
+    ],
+    "working_directory": "/srv/workagent/users/11111111-1111-4111-8111-111111111111/workspace",
+    "health_path": "/healthz",
+    "activity_probe": "aionui",
+    "startup_timeout_seconds": 60,
+    "require_model_bootstrap": true,
+    "model_bootstrap_timeout_seconds": 120,
+    "environment": {},
+    "agent_cli": {
+      "bin_directory": "bin",
+      "codex_executable": "bin/codex",
+      "kimi_executable": "bin/kimi",
+      "python_executable": "bin/python3",
+      "probe_timeout_seconds": 30
+    },
+    "migration": {
+      "enabled": true,
+      "executable": "bin/aioncore",
+      "arguments": [
+        "--port",
+        "{listen_port}",
+        "--data-dir",
+        "{data_root}/data",
+        "--work-dir",
+        "{data_root}/workspace",
+        "--log-dir",
+        "{data_root}/logs",
+        "--managed-resources-mode",
+        "bundled"
+      ],
+      "working_directory": "/srv/workagent/users/11111111-1111-4111-8111-111111111111/workspace",
+      "health_path": "/health",
+      "startup_timeout_seconds": 60,
+      "shutdown_timeout_seconds": 10
+    },
+    "internal_auth": {
+      "enabled": true,
+      "database_path": "/srv/workagent/users/11111111-1111-4111-8111-111111111111/data/aionui-backend.db"
+    }
+  }
+}

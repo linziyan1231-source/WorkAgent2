@@ -1,0 +1,28 @@
+title = "WorkAgent2 release secret-scan policy"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+description = "Public SHA-256 provenance field in the byte-preserved Windows candidate manifest"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)third_party/cliproxyapi/windows-candidate-manifest\.json$''']
+regexes = ['''^per_key_models_patch_sha256":\s*"[0-9a-f]{64}"$''']
+
+  [[rules.allowlists]]
+description = "Public SHA-256 pin for the audited Google Linux signing-key file"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)scripts/verify-host-rpms\.sh$''']
+regexes = ['''^expected_google_key_sha256=54dea5f6c2a26091578cf52a999cebc6b64df478d37ad4dce96376b711e3b27c$''']
+
+  [[rules.allowlists]]
+description = "RFC 6455 sample nonce in the byte-pinned AionUi test patch"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)components/aionui/aionui-webhost-workagent-runtime-auth\.patch$''']
+regexes = ['''^Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='$''']

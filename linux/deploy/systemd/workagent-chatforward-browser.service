@@ -1,0 +1,64 @@
+[Unit]
+Description=WorkAgent2 ChatForward dedicated Chromium source
+After=network-online.target mihomo.service workagent-chatforward.service
+Wants=network-online.target
+BindsTo=mihomo.service workagent-chatforward.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-release
+ConditionFileIsExecutable=/opt/workagent/shared/chatforward/integration/run-browser.sh
+ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/opt/workagent/shared/manifest.sig
+ConditionPathExists=/etc/workagent/chatforward.env
+ConditionPathIsReadWrite=/var/lib/workagent/chatforward/chromium
+
+[Service]
+Type=exec
+User=workagent-chatforward
+Group=workagent-chatforward
+WorkingDirectory=/var/lib/workagent/chatforward
+EnvironmentFile=/etc/workagent/chatforward.env
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-release
+ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required chatforward/app/extension/manifest.json --required chatforward/integration/run-browser.sh --required chatforward/node/bin/node
+ExecStart=/opt/workagent/shared/chatforward/integration/run-browser.sh
+ExecStartPost=/opt/workagent/shared/chatforward/node/bin/node /opt/workagent/shared/chatforward/integration/readiness.mjs --require-controller --timeout-ms 45000
+Restart=always
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-chatforward-browser
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=300
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=user pid net
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/workagent/chatforward /var/cache/workagent/chatforward /run/workagent/chatforward
+InaccessiblePaths=-/srv/workagent/users
+
+MemoryHigh=3G
+MemoryMax=4G
+CPUQuota=300%
+TasksMax=1024
+
+[Install]
+WantedBy=multi-user.target

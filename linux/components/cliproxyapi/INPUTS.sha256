@@ -1,0 +1,6 @@
+ca52365d3d123a1cff34a5020ce16507e3c2ef1032d57f171b9c26d2cd97eb16  cliproxyapi-7.2.81-per-key-models.4-source.tar.gz
+e5b373279ee5f1c34f4e2ed2abc6d967d0b82bea8a924d74e9a62c0bdcabff44  cpa-key-policy-0.4.4-src.tar.gz
+1e2b8331b049d83bf8f4fcb91aa679234b35ea4b650de14e637c119008ec9fda  cliproxyapi-per-key-models.patch
+3d2d12b2febb34ad245d1ff042b6a68123d8c548ff90976f48d45b7352d8a4ab  cpa-key-policy-0.4.4-state-concurrency.patch
+7707fee5123c5311523b219f9a1e7b20911a399a756a25233f14154ef3339cfe  cpa-key-policy-0.4.5-linux-directory-fsync.patch
+49f48a11c3c9e704ec31198b02cc65c0eba163b14c2e2f2442c60d3d6247d529  cliproxyapi-go1.26-hardening.patch

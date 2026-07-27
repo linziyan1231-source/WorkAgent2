@@ -1,0 +1,13 @@
+CLIProxyAPI source archive: read-only Windows WorkAgent2 migration input
+Archive root: router-for-me-CLIProxyAPI-106270b
+Archive SHA-256: ca52365d3d123a1cff34a5020ce16507e3c2ef1032d57f171b9c26d2cd97eb16
+Runtime identity: version 7.2.81, commit per-key-models.4
+
+cpa-key-policy source archive: read-only Windows WorkAgent2 migration input
+Base version: 0.4.4
+Archive SHA-256: e5b373279ee5f1c34f4e2ed2abc6d967d0b82bea8a924d74e9a62c0bdcabff44
+Patched runtime version: 0.4.5, ABI 1
+
+The byte-identical Windows provenance inputs, Linux durability patch, and Go
+1.26 compatibility hardening patch are recorded under third_party/cliproxyapi
+and locked by SHA-256.
