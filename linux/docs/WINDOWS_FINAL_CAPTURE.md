@@ -108,10 +108,32 @@ Run from the Linux migration host as root:
   --check
 ```
 
+Although this mode cannot declare or produce a final frozen capture, a useful
+rehearsal still needs an operator-established temporary quiescence window. Stop
+or otherwise fence every WorkAgent writer outside this tool, including
+CLIProxyAPI OAuth refreshes, for the complete invocation. Do not pass
+`--windows-frozen`: temporary rehearsal quiescence is not the final continuous
+cutover freeze and the tool remains strictly read-only.
+
 Run at least three separate successful rehearsals before establishing the
-external freeze. Rebuildable exclusions, the private local manifest, all
-source bounds, same-filesystem confinement, stable content hashes, and the
-anonymous OAuth evidence must converge each time. A rehearsal still is not a
+final external freeze. Each successful invocation independently proves that
+its own before/after source, approved-exclusion, and anonymous OAuth evidence
+converged. If production writers resume between separate rehearsal windows,
+the anonymous aggregate and OAuth summaries may legitimately differ across
+their reports; do not reject those successes merely because the reports are
+not byte-identical. If all three invocations run inside one continuous
+quiescence window, their summaries must remain identical. Preserve each JSON
+report together with its UTC start/end, exit status, source revision, and the
+binary and private-spec SHA-256 values in a root-only evidence directory. The
+report's `completed_at` is the tool-recorded successful completion time.
+
+Any nonzero invocation is a failed attempt and does not count toward the three
+successes. One failure reports every detected anonymous drift class: OAuth
+file-count, aggregate-byte, and digest changes plus source and
+approved-exclusion slot numbers. It never emits a Windows path, tenant leaf,
+OAuth filename, digest value, or content. Do not immediately repeat a drift
+failure while known writers remain active. All three successes must bind the
+same binary, private-spec digest, and source count. A rehearsal still is not a
 snapshot and must never be substituted for the frozen final capture.
 
 The command invokes only the fixed SSH target and a static `bash -s` program.

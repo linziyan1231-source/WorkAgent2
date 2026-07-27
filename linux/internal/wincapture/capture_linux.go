@@ -13,6 +13,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,7 +126,22 @@ func (engine *captureEngine) check(ctx context.Context, options CheckOptions) (R
 	if err != nil || aggregate.Files > loaded.value.Limits.MaxTotalFiles || aggregate.Bytes > loaded.value.Limits.MaxTotalBytes {
 		return Report{}, errors.New("read-only rehearsal exceeds aggregate capture limits")
 	}
-	return Report{SchemaVersion: 1, Status: "rehearsal-only-not-frozen", SpecSHA256: loaded.digest, Sources: len(before), Summary: aggregate, OAuth: oauthBefore}, nil
+	reloaded, err := loadSpec(options.SpecPath, engine.expectedUID)
+	if err != nil || reloaded.digest != loaded.digest {
+		return Report{}, errors.New("private capture spec drifted during the read-only rehearsal")
+	}
+	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, engine.expectedUID); err != nil {
+		return Report{}, errors.New("private local capture input drifted during the read-only rehearsal")
+	}
+	return Report{
+		SchemaVersion: 1,
+		Status:        "rehearsal-only-not-frozen",
+		SpecSHA256:    loaded.digest,
+		Sources:       len(before),
+		Summary:       aggregate,
+		OAuth:         oauthBefore,
+		CompletedAt:   engine.now().UTC(),
+	}, nil
 }
 
 func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions) (report Report, returnedErr error) {
@@ -449,13 +466,38 @@ func (engine *captureEngine) collectSource(ctx context.Context, index int, sourc
 }
 
 func compareCollection(before []inventory, exclusionsBefore []exclusionEvidence, oauthBefore OAuthSummary, after []inventory, exclusionsAfter []exclusionEvidence, oauthAfter OAuthSummary) error {
-	if len(before) != len(after) || len(exclusionsBefore) != len(exclusionsAfter) || oauthBefore != oauthAfter {
-		return errors.New("Windows sources or OAuth evidence drifted during the read-only window")
+	drift := make([]string, 0, 6)
+	if len(before) != len(after) || len(exclusionsBefore) != len(exclusionsAfter) || len(before) != len(exclusionsBefore) {
+		drift = append(drift, "cardinality")
 	}
-	for index := range before {
-		if err := compareInventories(before[index], after[index]); err != nil || exclusionsBefore[index] != exclusionsAfter[index] {
-			return errors.New("Windows source or approved exclusion drifted during the read-only window")
+	if oauthBefore.Files != oauthAfter.Files {
+		drift = append(drift, "oauth-file-count")
+	}
+	if oauthBefore.Bytes != oauthAfter.Bytes {
+		drift = append(drift, "oauth-aggregate-bytes")
+	}
+	if oauthBefore.SHA256 != oauthAfter.SHA256 {
+		drift = append(drift, "oauth-digest")
+	}
+	comparisonCount := min(len(before), len(after), len(exclusionsBefore), len(exclusionsAfter))
+	sourceSlots := make([]string, 0)
+	exclusionSlots := make([]string, 0)
+	for index := range comparisonCount {
+		if err := compareInventories(before[index], after[index]); err != nil {
+			sourceSlots = append(sourceSlots, strconv.Itoa(index+1))
 		}
+		if exclusionsBefore[index] != exclusionsAfter[index] {
+			exclusionSlots = append(exclusionSlots, strconv.Itoa(index+1))
+		}
+	}
+	if len(sourceSlots) > 0 {
+		drift = append(drift, "source-slots="+strings.Join(sourceSlots, ","))
+	}
+	if len(exclusionSlots) > 0 {
+		drift = append(drift, "approved-exclusion-slots="+strings.Join(exclusionSlots, ","))
+	}
+	if len(drift) > 0 {
+		return errors.New("Windows sources or OAuth evidence drifted during the read-only window: " + strings.Join(drift, "; "))
 	}
 	return nil
 }
