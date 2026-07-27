@@ -1,6 +1,8 @@
 * text=auto
 *.go text eol=lf
 *.md text eol=lf
+*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
 go.mod text eol=lf
 go.sum text eol=lf
 *.ps1 text eol=crlf
+patches/licenses/*.txt text eol=lf

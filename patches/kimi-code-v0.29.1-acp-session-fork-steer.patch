@@ -1,0 +1,107 @@
+diff --git a/packages/acp-adapter/src/server.ts b/packages/acp-adapter/src/server.ts
+index a9ef407be..962ee8626 100644
+--- a/packages/acp-adapter/src/server.ts
++++ b/packages/acp-adapter/src/server.ts
+@@ -20,6 +20,9 @@ import {
+   type AvailableCommand,
+   type CancelNotification,
+   type ClientCapabilities,
++  type ContentBlock,
++  type ForkSessionRequest,
++  type ForkSessionResponse,
+   type Implementation,
+   type InitializeRequest,
+   type InitializeResponse,
+@@ -318,6 +321,7 @@ export class AcpServer implements Agent {
+         sse: true,
+       },
+       sessionCapabilities: {
++        fork: {},
+         list: {},
+         resume: {},
+       },
+@@ -422,6 +426,42 @@ export class AcpServer implements Agent {
+     };
+   }
+ 
++  async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
++    if (!(await harnessIsAuthed(this.harness))) {
++      throw RequestError.authRequired();
++    }
++
++    const aionui = params._meta?.['aionui'];
++    const turnIndex =
++      typeof aionui === 'object' && aionui !== null && 'turnIndex' in aionui
++        ? (aionui as { turnIndex?: unknown }).turnIndex
++        : undefined;
++    if (!Number.isInteger(turnIndex) || (turnIndex as number) < 0) {
++      throw RequestError.invalidParams(
++        { _meta: params._meta },
++        'AionUI session/fork requires a non-negative _meta.aionui.turnIndex',
++      );
++    }
++
++    try {
++      const session = await this.harness.forkSession({
++        id: params.sessionId,
++        turnIndex: turnIndex as number,
++        metadata: { source: 'aionui' },
++      });
++      return { sessionId: session.id };
++    } catch (err) {
++      const code = (err as { code?: string } | undefined)?.code;
++      if (code === 'session.not_found') {
++        throw RequestError.invalidParams(
++          { sessionId: params.sessionId },
++          `Unknown sessionId: ${params.sessionId}`,
++        );
++      }
++      throw err;
++    }
++  }
++
+   /**
+    * Handle ACP `session/load`. Mirrors {@link newSession}'s auth gate
+    * and connection guard, but resumes an existing on-disk session
+@@ -843,8 +883,24 @@ export class AcpServer implements Agent {
+    */
+   async extMethod(
+     method: string,
+-    _params: Record<string, unknown>,
++    params: Record<string, unknown>,
+   ): Promise<Record<string, unknown>> {
++    if (method === '_aionui/session/steer') {
++      const sessionId = params['sessionId'];
++      const prompt = params['prompt'];
++      if (typeof sessionId !== 'string' || !Array.isArray(prompt)) {
++        throw RequestError.invalidParams(
++          { sessionId },
++          'AionUI steer requires sessionId and prompt',
++        );
++      }
++      const acpSession = this.sessions.get(sessionId);
++      if (!acpSession) {
++        throw RequestError.invalidParams({ sessionId }, `Unknown sessionId: ${sessionId}`);
++      }
++      await acpSession.steer(prompt as ContentBlock[]);
++      return {};
++    }
+     throw RequestError.methodNotFound(method);
+   }
+ 
+diff --git a/packages/acp-adapter/src/session.ts b/packages/acp-adapter/src/session.ts
+index 747b44ea9..472690803 100644
+--- a/packages/acp-adapter/src/session.ts
++++ b/packages/acp-adapter/src/session.ts
+@@ -284,6 +284,11 @@ export class AcpSession {
+     await this.session.cancel();
+   }
+ 
++  /** Inject additional user guidance into the currently running turn. */
++  async steer(blocks: readonly ContentBlock[]): Promise<void> {
++    await this.session.steer(acpBlocksToPromptParts(blocks));
++  }
++
+   /**
+    * Seed the per-session `slash command name → skill name` map used by
+    * {@link prompt} to intercept `/skill:<name> ...` inputs. Called by
