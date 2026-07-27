@@ -535,6 +535,12 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		`export GIT_CONFIG_NOSYSTEM=1`,
 		`export GIT_ATTR_NOSYSTEM=1`,
 		`unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT`,
+		`syft_version_output=$("$syft_binary" version)`,
+		`govulncheck_version_output=$("$govulncheck_binary" -version)`,
+		`shellcheck_version_output=$("$shellcheck_binary" --version)`,
+		`grep -Fxq 'Version:       1.29.0' <<< "$syft_version_output"`,
+		`grep -Fq 'v1.6.0' <<< "$govulncheck_version_output"`,
+		`grep -Fq 'version: 0.11.0' <<< "$shellcheck_version_output"`,
 		`GIT_OBJECT_DIRECTORY`,
 		`GIT_ALTERNATE_OBJECT_DIRECTORIES`,
 		`source_gate_cache_root=$(mktemp -d /tmp/workagent-source-gate-go-cache.XXXXXX)`,
@@ -575,6 +581,15 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 	for _, forbidden := range []string{`git clone`, `git -C "$repo_root" archive`, `git checkout`} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("source gate still uses attribute/filter-sensitive Git source materialization %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		`$syft_binary version | grep`,
+		`$govulncheck_binary -version | grep`,
+		`$shellcheck_binary --version | grep`,
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("source gate uses a SIGPIPE-prone short-circuiting version pipeline %q", forbidden)
 		}
 	}
 	wantControl := []string{

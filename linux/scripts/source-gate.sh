@@ -163,9 +163,13 @@ if [[ $($go_binary version) != go\ version\ go1.26.5\ linux/amd64 ]]; then
   exit 1
 fi
 [[ $($gitleaks_binary version) == 8.28.0 ]]
-$syft_binary version | grep -Fxq 'Version:       1.29.0'
-$govulncheck_binary -version | grep -Fq 'v1.6.0'
-$shellcheck_binary --version | grep -Fq 'version: 0.11.0'
+syft_version_output=$("$syft_binary" version)
+govulncheck_version_output=$("$govulncheck_binary" -version)
+shellcheck_version_output=$("$shellcheck_binary" --version)
+grep -Fxq 'Version:       1.29.0' <<< "$syft_version_output"
+grep -Fq 'v1.6.0' <<< "$govulncheck_version_output"
+grep -Fq 'version: 0.11.0' <<< "$shellcheck_version_output"
+unset syft_version_output govulncheck_version_output shellcheck_version_output
 
 export SYFT_CHECK_FOR_APP_UPDATE=false
 
