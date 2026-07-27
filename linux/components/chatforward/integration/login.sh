@@ -23,6 +23,7 @@ profile_directory=/var/lib/workagent/chatforward/chromium
 cache_directory=/var/cache/workagent/chatforward/chromium
 runtime_directory=/run/workagent/chatforward
 configuration_file=/etc/workagent/chatforward.env
+activation_guard=/opt/workagent/control/bin/workagent-admin
 target_url=https://chatgpt.com/g/g-p-6a2bacd1b27c8191b25aa2ba5f614b83-workagent/project
 script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 release_directory=$(dirname -- "$script_directory")
@@ -93,6 +94,18 @@ if [[ ! -f $extension_directory/manifest.json || ! -x $node_binary || ! -f $read
   echo "ChatForward release is incomplete" >&2
   exit 1
 fi
+if [[ ! -x $activation_guard ]]; then
+  echo "WorkAgent activation guard is unavailable" >&2
+  exit 1
+fi
+
+# The signed fixed-root supervisor passes only its already exclusively locked
+# activation descriptor to this child. The verifier authenticates that exact
+# open-file description and rejects either durable activation journal before
+# the first profile or service mutation. The root supervisor retains the lock
+# until this interactive child exits.
+"$activation_guard" assert-activation-clean --lock-fd 3
+exec 3<&-
 
 install -d -m 0700 -o "$service_uid" -g "$service_gid" "$runtime_directory"
 login_xauthority=$(mktemp --tmpdir="$runtime_directory" login-xauthority.XXXXXX)

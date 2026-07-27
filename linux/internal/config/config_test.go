@@ -52,7 +52,7 @@ func TestPortalRendererChannelMustBeCompleteAndCanonical(t *testing.T) {
 		PointerFile:   filepath.Join(root, "runtime", "current.json"),
 		PublicKeyFile: filepath.Join(root, "trust", "release.pub"),
 		Scope:         "runtime",
-		RelativeRoot:  "renderer",
+		RelativeRoot:  "static",
 	}
 	if err := value.Validate(); err != nil {
 		t.Fatalf("valid Renderer release channel rejected: %v", err)
@@ -61,7 +61,7 @@ func TestPortalRendererChannelMustBeCompleteAndCanonical(t *testing.T) {
 	if err := value.Validate(); err == nil {
 		t.Fatal("Renderer path escape was accepted")
 	}
-	value.Renderer.RelativeRoot = "renderer"
+	value.Renderer.RelativeRoot = "static"
 	value.Renderer.PointerFile = filepath.Join(root, "other", "current.json")
 	if err := value.Validate(); err == nil {
 		t.Fatal("unbound Renderer pointer was accepted")
@@ -151,6 +151,9 @@ func TestCheckedInPortalAndTenantExamplesValidate(t *testing.T) {
 	}
 	if err := portal.ValidateProductionLayout("/etc/workagent/portal.json"); err != nil {
 		t.Fatalf("checked-in Portal example is not production-shaped: %v", err)
+	}
+	if portal.Renderer.Scope != "runtime" || portal.Renderer.RelativeRoot != "static" {
+		t.Fatalf("checked-in Portal Renderer does not target the assembled runtime static tree: %#v", portal.Renderer)
 	}
 	if _, err := LoadTenant(filepath.Join(repositoryRoot, "config", "tenant.example.json")); err != nil {
 		t.Fatalf("checked-in tenant example is invalid: %v", err)

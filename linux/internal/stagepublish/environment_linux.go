@@ -24,7 +24,9 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/systemdctl"
 )
 
-type productionEnvironment struct{}
+type productionEnvironment struct {
+	catalog *admin.TenantFileCatalogTransaction
+}
 
 func (productionEnvironment) EffectiveUID() uint32 { return uint32(os.Geteuid()) }
 func (productionEnvironment) LoadPortal(path string) (config.Portal, error) {
@@ -99,27 +101,44 @@ func (productionEnvironment) EnsureCapacity(ctx context.Context, directory strin
 	return admin.EnsureCapacitySlots(ctx, directory, maximum)
 }
 
-func (productionEnvironment) EnsureTenantConfig(ctx context.Context, portal config.Portal, tenant config.Tenant) error {
-	configPath := filepath.Join(portal.Paths.TenantConfigs, tenant.TenantID+".json")
-	existing, err := config.LoadTenant(configPath)
-	if err == nil {
-		if !reflect.DeepEqual(existing, tenant) {
-			return errors.New("existing tenant configuration conflicts with the migration identity")
+// PrepareTenantCatalog closes an interrupted tenant-file publication before
+// the migration runner performs its strict UUID-only namespace scan. Apply
+// owns the callback-scoped C_EX capability; check owns C_SH and therefore only
+// proves that no durable transaction is pending.
+func (environment productionEnvironment) PrepareTenantCatalog(ctx context.Context, portal config.Portal) error {
+	if environment.catalog == nil {
+		return admin.AssertTenantFileCatalogClean(portal)
+	}
+	_, err := environment.catalog.ReconcilePendingTenantFiles(ctx, portal, systemdctl.Default())
+	return err
+}
+
+func (environment productionEnvironment) UpdateTenantConfigs(ctx context.Context, portal config.Portal, tenants []config.Tenant) error {
+	if environment.catalog == nil {
+		return errors.New("tenant catalog transaction is unavailable")
+	}
+	for _, tenant := range tenants {
+		configPath := filepath.Join(portal.Paths.TenantConfigs, tenant.TenantID+".json")
+		existing, err := config.LoadTenant(configPath)
+		if err == nil {
+			if !reflect.DeepEqual(existing, tenant) {
+				return errors.New("existing tenant configuration conflicts with the migration identity")
+			}
+			continue
 		}
-		return admin.VerifyTenantConfigPath(portal, tenant, configPath)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect existing tenant configuration: %w", err)
-	}
-	dropIn := filepath.Join("/etc/systemd/system", "workagent-userhost@"+tenant.TenantID+".service.d")
-	for _, name := range []string{"identity.conf", "resources.conf"} {
-		if _, statErr := os.Lstat(filepath.Join(dropIn, name)); statErr == nil {
-			return errors.New("tenant systemd drop-in exists without its protected configuration")
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return statErr
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect existing tenant configuration: %w", err)
+		}
+		dropIn := filepath.Join("/etc/systemd/system", "workagent-userhost@"+tenant.TenantID+".service.d")
+		for _, name := range []string{"identity.conf", "resources.conf"} {
+			if _, statErr := os.Lstat(filepath.Join(dropIn, name)); statErr == nil {
+				return errors.New("tenant systemd drop-in exists without its protected configuration")
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return statErr
+			}
 		}
 	}
-	return admin.WriteTenantFiles(ctx, portal, tenant)
+	return environment.catalog.UpdateTenantFiles(ctx, portal, tenants, systemdctl.Default())
 }
 
 func (productionEnvironment) VerifyTenantConfig(ctx context.Context, portal config.Portal, tenant config.Tenant) error {

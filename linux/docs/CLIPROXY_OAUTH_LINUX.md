@@ -17,9 +17,11 @@ credential are reported by the authenticated management API.
 Complete these checks from a trusted root console:
 
 ```bash
-/usr/bin/systemctl start cliproxyapi.service
+/opt/workagent/control/bin/workagent-admin service-action \
+  --action start --unit cliproxyapi.service
 /usr/bin/systemctl show cliproxyapi.service \
   --property=ActiveState --property=SubState --property=MainPID
+/usr/bin/test -x /usr/libexec/workagent-fixed-root-exec-v1
 /usr/bin/test -x /opt/workagent/shared/cliproxyapi/bin/cli-proxy-api
 /usr/bin/test -r /var/lib/cliproxyapi/config.yaml
 ```
@@ -30,17 +32,40 @@ the service must already have passed its pre-OAuth startup contract. Do not
 copy an auth directory from Windows or another Linux host, and do not run the
 OAuth binary as root.
 
-The fixed transient unit names below make the operation auditable. Run only
-one flow at a time and first confirm that the corresponding unit is not
-already active. `--collect` removes the stopped transient unit after the
-command completes; an unexpectedly existing or active unit is a reason to
-investigate rather than start a second flow.
+Each invocation below reads a fresh non-secret kernel UUID into a task-specific
+unit name. This makes concurrent or stale attempts visible without reusing a
+transient unit identity. `--collect` removes the stopped unit after the command
+completes. The fixed supervisor enforces one authorization flow at a time; a
+second Codex or Kimi flow fails immediately with status 75 instead of sharing
+the writable auth directory.
+
+Every transient unit receives the catalog, control, shared, and CLIProxy
+migration locks as named read-only descriptors 3, 4, 5, and 6. Codex and Kimi
+authorization units additionally receive the dedicated CLIProxy OAuth writer
+lock as descriptor 7. The immutable installed
+`/usr/libexec/workagent-fixed-root-exec-v1` validates the exact descriptor
+names, paths, inodes, modes, and read-only access plus the closed profile's
+complete command arguments. It acquires the three release locks shared in
+order, acquires the migration lock shared and nonblockingly, then acquires the
+OAuth writer lock exclusively and nonblockingly for authorization profiles.
+Every OAuth and doctor profile retains its complete lock set through child
+exit. This is deliberately
+stricter than relying on the operator's active-service check: the login
+children read the catalog-derived runtime configuration, while
+`workagent-cliproxy doctor` reads the protected Portal and policy catalog
+directly. Therefore fixed-root switching and catalog publication cannot
+overlap any OAuth/doctor command, and the CLIProxy migration writer cannot
+change policy state underneath any flow. The OAuth writer gate also prevents
+two provider login children from concurrently changing host-local credential
+files. Do not remove or reorder these `OpenFile` properties or bypass the
+versioned supervisor.
 
 ## Authorize Codex
 
 ```bash
+read -r workagent_codex_oauth_run_id < /proc/sys/kernel/random/uuid
 /usr/bin/systemd-run --quiet --wait --pty --collect --service-type=exec \
-  --unit=workagent-cliproxy-oauth-codex.service \
+  --unit="workagent-cliproxy-oauth-codex-${workagent_codex_oauth_run_id}.service" \
   --uid=cliproxyapi --gid=cliproxyapi \
   --working-directory=/var/lib/cliproxyapi \
   --setenv=HOME=/var/lib/cliproxyapi \
@@ -51,6 +76,12 @@ investigate rather than start a second flow.
   --property=PrivateTmp=yes \
   --property='ReadWritePaths=/var/lib/cliproxyapi' \
   --property='RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
+  --property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only' \
+  --property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only' \
+  --property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only' \
+  --property='OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only' \
+  --property='OpenFile=/run/workagent/cliproxy-oauth.lock:workagent-cliproxy-oauth-lock:read-only' \
+  /usr/libexec/workagent-fixed-root-exec-v1 cliproxy-oauth-codex \
   /opt/workagent/shared/cliproxyapi/bin/cli-proxy-api \
   --config /var/lib/cliproxyapi/config.yaml \
   --codex-device-login --no-browser
@@ -63,8 +94,9 @@ identifier, token, or resulting auth filename into logs, tickets, or chat.
 ## Authorize Kimi
 
 ```bash
+read -r workagent_kimi_oauth_run_id < /proc/sys/kernel/random/uuid
 /usr/bin/systemd-run --quiet --wait --pty --collect --service-type=exec \
-  --unit=workagent-cliproxy-oauth-kimi.service \
+  --unit="workagent-cliproxy-oauth-kimi-${workagent_kimi_oauth_run_id}.service" \
   --uid=cliproxyapi --gid=cliproxyapi \
   --working-directory=/var/lib/cliproxyapi \
   --setenv=HOME=/var/lib/cliproxyapi \
@@ -75,6 +107,12 @@ identifier, token, or resulting auth filename into logs, tickets, or chat.
   --property=PrivateTmp=yes \
   --property='ReadWritePaths=/var/lib/cliproxyapi' \
   --property='RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
+  --property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only' \
+  --property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only' \
+  --property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only' \
+  --property='OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only' \
+  --property='OpenFile=/run/workagent/cliproxy-oauth.lock:workagent-cliproxy-oauth-lock:read-only' \
+  /usr/libexec/workagent-fixed-root-exec-v1 cliproxy-oauth-kimi \
   /opt/workagent/shared/cliproxyapi/bin/cli-proxy-api \
   --config /var/lib/cliproxyapi/config.yaml \
   --kimi-login --no-browser
@@ -94,10 +132,12 @@ the host-local auth directory, then run the full authenticated doctor inside a
 separate credential namespace:
 
 ```bash
-/usr/bin/systemctl restart cliproxyapi.service
+/opt/workagent/control/bin/workagent-admin service-action \
+  --action restart --unit cliproxyapi.service
 
+read -r workagent_oauth_doctor_run_id < /proc/sys/kernel/random/uuid
 /usr/bin/systemd-run --quiet --wait --pipe --collect --service-type=exec \
-  --unit=workagent-cliproxy-oauth-doctor.service \
+  --unit="workagent-cliproxy-oauth-doctor-${workagent_oauth_doctor_run_id}.service" \
   --property=UMask=0077 \
   --property=NoNewPrivileges=yes \
   --property=ProtectSystem=strict \
@@ -105,6 +145,11 @@ separate credential namespace:
   --property=PrivateTmp=yes \
   --property='RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
   --property=LoadCredentialEncrypted=cliproxy-management-key:/etc/credstore.encrypted/workagent/cliproxy-management-key.cred \
+  --property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only' \
+  --property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only' \
+  --property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only' \
+  --property='OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only' \
+  /usr/libexec/workagent-fixed-root-exec-v1 cliproxy-oauth-doctor \
   /opt/workagent/control/bin/workagent-cliproxy doctor \
   --portal-config /etc/workagent/portal.json \
   --credential %d/cliproxy-management-key \

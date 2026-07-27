@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 type runtimeProcessRead struct {
@@ -189,7 +190,7 @@ func TestRuntimeUIDProcessAuditLiveRejectsAnUnprivilegedResidualProcess(t *testi
 	}
 	var runtimeUID uint32
 	for candidate := uint32(65520); candidate < 65532; candidate++ {
-		if VerifyRuntimeUIDQuiescent(candidate) == nil {
+		if waitForLiveRuntimeUIDQuiescence(candidate, 2*time.Second) == nil {
 			runtimeUID = candidate
 			break
 		}
@@ -221,7 +222,25 @@ func TestRuntimeUIDProcessAuditLiveRejectsAnUnprivilegedResidualProcess(t *testi
 		t.Fatal("killed runtime process unexpectedly exited successfully")
 	}
 	process.Process = nil
-	if err := VerifyRuntimeUIDQuiescent(runtimeUID); err != nil {
+	if err := waitForLiveRuntimeUIDQuiescence(runtimeUID, 15*time.Second); err != nil {
 		t.Fatalf("stopped runtime UID remained non-quiescent: %v", err)
+	}
+}
+
+// A live /proc scan is deliberately fail-closed when unrelated PIDs churn.
+// Under `go test -race ./...`, other package test processes may keep the
+// global table unstable for one bounded audit even after our child is reaped.
+// Retrying the complete production audit preserves that contract: success is
+// returned only after one invocation itself proves two consecutive clean full
+// scans; no individual unstable or ambiguous scan is ever admitted.
+func waitForLiveRuntimeUIDQuiescence(runtimeUID uint32, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		lastErr = VerifyRuntimeUIDQuiescent(runtimeUID)
+		if lastErr == nil || !strings.Contains(lastErr.Error(), "stable process-table view") || !time.Now().Before(deadline) {
+			return lastErr
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

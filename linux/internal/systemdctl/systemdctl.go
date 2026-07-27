@@ -33,7 +33,7 @@ func Default() Client {
 }
 
 func (c Client) Properties(ctx context.Context, unit string, names ...string) (map[string]string, error) {
-	if !validUnit(unit) || len(names) == 0 || len(names) > 32 {
+	if !validUnit(unit) || len(names) == 0 || len(names) > 64 {
 		return nil, errors.New("systemd property request is invalid")
 	}
 	arguments := []string{"show"}
@@ -83,16 +83,23 @@ func (c Client) Action(ctx context.Context, arguments ...string) error {
 	if len(arguments) < 2 {
 		return errors.New("systemd action requires a unit")
 	}
+	noBlock := 0
 	for _, argument := range arguments[1:] {
 		if strings.HasPrefix(argument, "--") {
-			if argument != "--now" {
+			if argument != "--now" && argument != "--no-block" {
 				return errors.New("systemd action option is not permitted")
+			}
+			if argument == "--no-block" {
+				noBlock++
 			}
 			continue
 		}
 		if !validUnit(argument) {
 			return errors.New("systemd action unit is invalid")
 		}
+	}
+	if noBlock != 0 && (noBlock != 1 || len(arguments) != 3 || arguments[0] != "start" || arguments[1] != "--no-block" || arguments[2] != "caddy.service") {
+		return errors.New("nonblocking systemd action is restricted to the guarded Caddy start")
 	}
 	_, err := c.run(ctx, arguments...)
 	return err
@@ -157,7 +164,9 @@ func (c Client) run(ctx context.Context, arguments ...string) (string, error) {
 func validUnit(value string) bool {
 	switch value {
 	case "workagent-portal.service", "workagent-backup.service", "workagent-backup.timer", "workagent-healthcheck.service", "workagent-healthcheck.timer",
-		"workagent-notification.service", "workagent-chatforward.service", "workagent-chatforward-browser.service", "cliproxyapi.service", "caddy.service", "mihomo.service":
+		"workagent-notification.service", "workagent-chatforward.service", "workagent-chatforward-browser.service", "workagent-tenant-config-reconcile.service",
+		"workagent-tenant-catalog-ready.target",
+		"cliproxyapi.service", "caddy.service", "mihomo.service":
 		return true
 	}
 	for _, suffix := range []string{".service", ".socket"} {

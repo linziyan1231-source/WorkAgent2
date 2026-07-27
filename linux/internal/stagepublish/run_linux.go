@@ -15,7 +15,10 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/admin"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/backup"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/servicelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/systemdctl"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/tenantprovision"
@@ -23,7 +26,31 @@ import (
 )
 
 func Run(ctx context.Context, options Options) (Result, error) {
-	return (&runner{env: productionEnvironment{}, layout: productionLayout(), verifyStage: winmigration.VerifyPublicationStage, production: true}).run(ctx, options)
+	if err := options.validate(); err != nil {
+		return Result{}, err
+	}
+	var result Result
+	if options.Apply {
+		activation, err := lifecyclelock.AcquireActivationExclusive(ctx)
+		if err != nil {
+			return Result{}, fmt.Errorf("acquire tenant activation lifecycle lock for migration publication: %w", err)
+		}
+		if err := errors.Join(backup.AssertNoPendingRecoveryActivation(), admin.AssertTenantActivationClean()); err != nil {
+			return Result{}, errors.Join(err, activation.Close())
+		}
+		runErr := admin.WithTenantFileCatalogTransaction(ctx, func(transaction *admin.TenantFileCatalogTransaction) error {
+			var runErr error
+			result, runErr = (&runner{env: productionEnvironment{catalog: transaction}, layout: productionLayout(), verifyStage: winmigration.VerifyPublicationStage, production: true}).run(ctx, options)
+			return runErr
+		})
+		return result, errors.Join(runErr, activation.Close())
+	}
+	guard, err := lifecyclelock.AcquireCatalogShared(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("acquire tenant configuration snapshot lock: %w", err)
+	}
+	result, runErr := (&runner{env: productionEnvironment{}, layout: productionLayout(), verifyStage: winmigration.VerifyPublicationStage, production: true}).run(ctx, options)
+	return result, errors.Join(runErr, guard.Close())
 }
 
 func (r *runner) run(ctx context.Context, options Options) (Result, error) {
@@ -83,7 +110,25 @@ func (r *runner) run(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// Reconciliation is mutating in Apply mode. Prove every boot entrypoint is
+	// disabled/static and process-free before it can replay even one file from
+	// an earlier durable intent.
+	if err := r.requireAllServicesStopped(ctx, verified); err != nil {
+		return Result{}, err
+	}
+	// The global intent deliberately lives in the protected tenant namespace.
+	// Replay it while the outer catalog lock is still held, before the strict
+	// UUID-only scan can interpret a legitimate crash marker as foreign data.
+	if err := r.env.PrepareTenantCatalog(ctx, portal); err != nil {
+		return Result{}, fmt.Errorf("prepare tenant catalog before publication namespace validation: %w", err)
+	}
 	if err := r.validateTenantConfigNamespace(tenants, portalAccount.GID); err != nil {
+		return Result{}, err
+	}
+	// Re-prove the stopped topology after replay and strict namespace readback.
+	// This makes an inter-step reboot fail closed before the publication journal
+	// for this migration attempt exists.
+	if err := r.requireAllServicesStopped(ctx, verified); err != nil {
 		return Result{}, err
 	}
 	journalReady, err := ensureProtectedDirectory(r.layout.journalRoot, r.env.EffectiveUID(), options.Apply)
@@ -176,13 +221,8 @@ func (r *runner) run(ctx context.Context, options Options) (Result, error) {
 	if err := r.env.EnsureCapacity(ctx, "/run/workagent/capacity", portal.Runtime.MaxConcurrentInstances); err != nil {
 		return Result{}, err
 	}
-	if err := r.env.Systemd().Action(ctx, "daemon-reload"); err != nil {
+	if err := r.env.UpdateTenantConfigs(ctx, portal, tenants); err != nil {
 		return Result{}, err
-	}
-	for _, tenant := range tenants {
-		if err := r.env.VerifyTenantConfig(ctx, portal, tenant); err != nil {
-			return Result{}, err
-		}
 	}
 	tenantLocks := make([]io.Closer, 0, len(value.Tenants))
 	defer func() {
@@ -438,21 +478,29 @@ func (r *runner) validateTenantDropInNamespace(wantedConfigs map[string]bool) er
 	}
 	for _, entry := range entries {
 		const prefix = "workagent-userhost@"
-		if !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".d") {
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		// Only the two package templates and an authenticated tenant's service
+		// drop-in directory may occupy the UserHost top-level namespace. Exact
+		// instance fragments and dependency directories override or extend the
+		// template while retaining an apparently valid tenant unit name.
+		if name == prefix+".service" || name == prefix+".socket" {
 			continue
 		}
 		const suffix = ".service.d"
-		if !strings.HasSuffix(entry.Name(), suffix) {
-			return errors.New("systemd root contains an unexpected UserHost instance drop-in")
+		if !strings.HasSuffix(name, suffix) {
+			return errors.New("systemd root contains an unexpected UserHost top-level entry")
 		}
-		identity := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), prefix), suffix)
+		identity := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
 		if identity == "" {
 			return errors.New("systemd root contains a template-wide UserHost drop-in")
 		}
 		if !wantedConfigs[identity+".json"] || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			return errors.New("systemd root contains a tenant identity outside this migration report")
 		}
-		directory := filepath.Join(r.layout.systemdRoot, entry.Name())
+		directory := filepath.Join(r.layout.systemdRoot, name)
 		directoryInfo, err := os.Lstat(directory)
 		directoryStat, typed := fileStat(directoryInfo)
 		if err != nil || !typed || directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() || directoryInfo.Mode().Perm()&0o022 != 0 || directoryStat.Uid != 0 || directoryStat.Gid != 0 {
@@ -522,7 +570,7 @@ func requireUnitsStopped(ctx context.Context, controller systemdctl.Controller, 
 	}
 	units := []string{
 		"caddy.service", "workagent-portal.service", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", "workagent-chatforward-browser.service",
-		"workagent-backup.service", "workagent-backup.timer", "workagent-healthcheck.service", "workagent-healthcheck.timer",
+		"workagent-backup.service", "workagent-backup.timer", "workagent-healthcheck.service", "workagent-healthcheck.timer", "workagent-tenant-catalog-ready.target", "workagent-tenant-config-reconcile.service",
 	}
 	for _, tenant := range verified.Report.Tenants {
 		units = append(units, "workagent-userhost@"+tenant.TenantID+".service", "workagent-userhost@"+tenant.TenantID+".socket")
@@ -535,14 +583,28 @@ func requireUnitsStopped(ctx context.Context, controller systemdctl.Controller, 
 			continue
 		}
 		previous = unit
-		properties, err := controller.Properties(ctx, unit, "LoadState", "ActiveState", "SubState", "MainPID", "ControlPID")
+		propertyNames := []string{"LoadState", "ActiveState", "SubState", "UnitFileState"}
+		if !strings.HasSuffix(unit, ".target") {
+			propertyNames = append(propertyNames, "MainPID", "ControlPID")
+		}
+		properties, err := controller.Properties(ctx, unit, propertyNames...)
 		if err != nil {
 			return fmt.Errorf("inspect required stopped unit: %w", err)
 		}
-		mainPID, mainErr := strconv.ParseUint(properties["MainPID"], 10, 64)
-		controlPID, controlErr := strconv.ParseUint(properties["ControlPID"], 10, 64)
-		if properties["LoadState"] != "loaded" || properties["ActiveState"] != "inactive" || properties["SubState"] != "dead" || mainErr != nil || controlErr != nil || mainPID != 0 || controlPID != 0 {
-			return errors.New("every WorkAgent service, socket, timer, Caddy and CLIProxy unit must be loaded and explicitly inactive/dead with zero PIDs")
+		expectedUnitFileState := "disabled"
+		if unit == "workagent-backup.service" || unit == "workagent-healthcheck.service" || unit == "workagent-tenant-catalog-ready.target" || unit == "workagent-tenant-config-reconcile.service" ||
+			(strings.HasPrefix(unit, "workagent-userhost@") && strings.HasSuffix(unit, ".service")) {
+			expectedUnitFileState = "static"
+		}
+		processFree := true
+		if !strings.HasSuffix(unit, ".target") {
+			mainPID, mainErr := strconv.ParseUint(properties["MainPID"], 10, 64)
+			controlPID, controlErr := strconv.ParseUint(properties["ControlPID"], 10, 64)
+			processFree = mainErr == nil && controlErr == nil && mainPID == 0 && controlPID == 0
+		}
+		if properties["LoadState"] != "loaded" || properties["ActiveState"] != "inactive" || properties["SubState"] != "dead" ||
+			properties["UnitFileState"] != expectedUnitFileState || !processFree {
+			return errors.New("every WorkAgent service, socket, timer, Caddy and CLIProxy unit must be loaded, disabled or static as prescribed, and inactive/dead with zero PIDs")
 		}
 	}
 	return nil
@@ -696,11 +758,6 @@ func (r *runner) ensureAccountsAndConfigs(ctx context.Context, portal config.Por
 		item.UID, item.GID = account.UID, account.GID
 		accounts[tenant.TenantID] = account
 		if err := writeJournal(r.layout.journalPath, value, r.env.EffectiveUID(), r.env.Now()); err != nil {
-			return nil, err
-		}
-	}
-	for _, tenant := range tenants {
-		if err := r.env.EnsureTenantConfig(ctx, portal, tenant); err != nil {
 			return nil, err
 		}
 	}

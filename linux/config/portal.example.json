@@ -49,7 +49,7 @@
     "pointer_file": "/opt/workagent/aionui/current.json",
     "public_key_file": "/etc/workagent/trust/release-signing.pub",
     "scope": "runtime",
-    "relative_root": "renderer"
+    "relative_root": "static"
   },
   "cli_proxy": {
     "api_base_url": "http://127.0.0.1:8317/v1",

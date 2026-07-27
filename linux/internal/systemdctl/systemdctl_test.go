@@ -1,6 +1,9 @@
 package systemdctl
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestUnitValidationIsFailClosed(t *testing.T) {
 	for _, value := range []string{
@@ -12,6 +15,8 @@ func TestUnitValidationIsFailClosed(t *testing.T) {
 		"workagent-notification.service",
 		"workagent-chatforward.service",
 		"workagent-chatforward-browser.service",
+		"workagent-tenant-config-reconcile.service",
+		"workagent-tenant-catalog-ready.target",
 		"cliproxyapi.service",
 		"caddy.service",
 		"mihomo.service",
@@ -32,6 +37,26 @@ func TestUnitValidationIsFailClosed(t *testing.T) {
 	} {
 		if validUnit(value) {
 			t.Fatalf("unsafe unit accepted: %s", value)
+		}
+	}
+}
+
+func TestNonblockingActionIsRestrictedToExactGuardedCaddyStart(t *testing.T) {
+	client := Client{Command: "/bin/true"}
+	if err := client.Action(context.Background(), "start", "--no-block", "caddy.service"); err != nil {
+		t.Fatalf("exact guarded Caddy start was rejected: %v", err)
+	}
+	for _, arguments := range [][]string{
+		{"stop", "--no-block", "caddy.service"},
+		{"restart", "--no-block", "caddy.service"},
+		{"enable", "--no-block", "caddy.service"},
+		{"start", "--no-block", "--no-block", "caddy.service"},
+		{"start", "caddy.service", "--no-block"},
+		{"start", "--no-block", "caddy.service", "workagent-portal.service"},
+		{"start", "--no-block", "workagent-portal.service"},
+	} {
+		if err := client.Action(context.Background(), arguments...); err == nil {
+			t.Fatalf("unsafe nonblocking action was accepted: %v", arguments)
 		}
 	}
 }

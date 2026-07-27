@@ -9,17 +9,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
 )
 
 const (
-	PreflightSchemaVersion   = 2
+	PreflightSchemaVersion   = 4
 	MaintenanceNoticeMessage = "系统正在升级，正在进行的任务可能会中断"
 )
 
-var requiredPreflightChecks = []string{"active_tenants", "backup_destination", "host", "portal_config", "portal_readiness", "target_release"}
+var requiredPreflightChecks = []string{"backup_destination", "host", "portal_config", "target_release", "tenants"}
 
 type MaintenanceNotice struct {
 	ID          string    `json:"id"`
@@ -28,19 +29,53 @@ type MaintenanceNotice struct {
 	ObservedAt  time.Time `json:"observed_at"`
 }
 
+type PreflightInputs struct {
+	TargetManifestPath  string
+	TargetSignaturePath string
+	PublicKeyPath       string
+	PortalConfigPath    string
+	TenantConfigPaths   map[string]string
+	BackupConfigPath    string
+	BackupKeyPath       string
+	BrandID             string
+	BrandConfigPath     string
+	BrandAssetPaths     map[string]string
+	PolicyID            string
+	PolicyConfigPath    string
+}
+
+type ProtectedFileEvidence struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type PreflightEvidence struct {
+	TargetManifest  ProtectedFileEvidence            `json:"target_manifest"`
+	TargetSignature ProtectedFileEvidence            `json:"target_signature"`
+	PublicKey       ProtectedFileEvidence            `json:"public_key"`
+	PortalConfig    ProtectedFileEvidence            `json:"portal_config"`
+	TenantConfigs   map[string]ProtectedFileEvidence `json:"tenant_configs"`
+	BackupConfig    ProtectedFileEvidence            `json:"backup_config"`
+	BackupKey       ProtectedFileEvidence            `json:"backup_key"`
+	BrandID         string                           `json:"brand_id"`
+	BrandConfig     ProtectedFileEvidence            `json:"brand_config"`
+	BrandAssets     map[string]ProtectedFileEvidence `json:"brand_assets"`
+	PolicyID        string                           `json:"policy_id"`
+	PolicyConfig    ProtectedFileEvidence            `json:"policy_config"`
+}
+
 type PreflightReport struct {
-	SchemaVersion        int                `json:"schema_version"`
-	TargetReleaseID      string             `json:"target_release_id"`
-	CurrentReleaseID     string             `json:"current_release_id,omitempty"`
-	Scope                string             `json:"scope"`
-	PointerFile          string             `json:"pointer_file"`
-	CreatedAt            time.Time          `json:"created_at"`
-	ExpiresAt            time.Time          `json:"expires_at"`
-	TargetManifestSHA256 string             `json:"target_manifest_sha256"`
-	PortalConfigSHA256   string             `json:"portal_config_sha256"`
-	TenantConfigSHA256   map[string]string  `json:"tenant_config_sha256"`
-	MaintenanceNotice    *MaintenanceNotice `json:"maintenance_notice,omitempty"`
-	Checks               []PreflightCheck   `json:"checks"`
+	SchemaVersion     int                `json:"schema_version"`
+	TargetReleaseID   string             `json:"target_release_id"`
+	CurrentReleaseID  string             `json:"current_release_id,omitempty"`
+	Scope             string             `json:"scope"`
+	PointerFile       string             `json:"pointer_file"`
+	CreatedAt         time.Time          `json:"created_at"`
+	ExpiresAt         time.Time          `json:"expires_at"`
+	Evidence          PreflightEvidence  `json:"evidence"`
+	ConsumerContract  ConsumerContract   `json:"consumer_contract"`
+	MaintenanceNotice *MaintenanceNotice `json:"maintenance_notice,omitempty"`
+	Checks            []PreflightCheck   `json:"checks"`
 }
 
 type PreflightCheck struct {
@@ -48,26 +83,147 @@ type PreflightCheck struct {
 	Passed bool   `json:"passed"`
 }
 
-func NewPreflightReport(targetReleaseID, currentReleaseID, scope, pointerFile, targetManifestPath, portalConfigPath string, tenantConfigs map[string]string, notice *MaintenanceNotice, now time.Time) (PreflightReport, error) {
-	manifestHash, err := ProtectedFileSHA256(targetManifestPath, true)
-	if err != nil {
-		return PreflightReport{}, err
+var requiredBrandAssetNames = []string{"app-icon", "favicon", "logo", "logo-dark"}
+
+func (i PreflightInputs) Validate() error {
+	for label, path := range map[string]string{
+		"target manifest": i.TargetManifestPath, "target signature": i.TargetSignaturePath,
+		"public key": i.PublicKeyPath, "Portal config": i.PortalConfigPath,
+		"backup config": i.BackupConfigPath, "backup key": i.BackupKeyPath,
+		"brand config": i.BrandConfigPath, "policy config": i.PolicyConfigPath,
+	} {
+		if !cleanAbsolute(path) {
+			return fmt.Errorf("preflight %s path is invalid", label)
+		}
 	}
-	portalHash, err := ProtectedFileSHA256(portalConfigPath, true)
+	if filepath.Base(i.TargetManifestPath) != "manifest.json" || i.TargetSignaturePath != filepath.Join(filepath.Dir(i.TargetManifestPath), "manifest.sig") {
+		return errors.New("preflight target manifest and signature paths are not canonical")
+	}
+	if !validIdentifier(i.BrandID) || !validIdentifier(i.PolicyID) {
+		return errors.New("preflight product identity is invalid")
+	}
+	if len(i.TenantConfigPaths) == 0 || len(i.TenantConfigPaths) > 10000 {
+		return errors.New("preflight tenant input set is missing or too large")
+	}
+	for tenantID, path := range i.TenantConfigPaths {
+		if !validIdentifier(tenantID) || !cleanAbsolute(path) {
+			return errors.New("preflight tenant input is invalid")
+		}
+	}
+	if len(i.BrandAssetPaths) != len(requiredBrandAssetNames) {
+		return errors.New("preflight brand asset input set is incomplete")
+	}
+	for _, name := range requiredBrandAssetNames {
+		if !cleanAbsolute(i.BrandAssetPaths[name]) {
+			return fmt.Errorf("preflight brand asset %s path is invalid", name)
+		}
+	}
+	return nil
+}
+
+func (e ProtectedFileEvidence) Validate() error {
+	if !cleanAbsolute(e.Path) || !validSHA256(e.SHA256) {
+		return errors.New("protected preflight file evidence is invalid")
+	}
+	return nil
+}
+
+func (e PreflightEvidence) Validate() error {
+	if !validIdentifier(e.BrandID) || !validIdentifier(e.PolicyID) {
+		return errors.New("release preflight product identity evidence is invalid")
+	}
+	for _, file := range []ProtectedFileEvidence{
+		e.TargetManifest, e.TargetSignature, e.PublicKey, e.PortalConfig,
+		e.BackupConfig, e.BackupKey, e.BrandConfig, e.PolicyConfig,
+	} {
+		if err := file.Validate(); err != nil {
+			return err
+		}
+	}
+	if len(e.TenantConfigs) == 0 || len(e.TenantConfigs) > 10000 {
+		return errors.New("release preflight tenant evidence is missing or too large")
+	}
+	for tenantID, file := range e.TenantConfigs {
+		if !validIdentifier(tenantID) || file.Validate() != nil {
+			return errors.New("release preflight tenant evidence is invalid")
+		}
+	}
+	if len(e.BrandAssets) != len(requiredBrandAssetNames) {
+		return errors.New("release preflight brand asset evidence is incomplete")
+	}
+	for _, name := range requiredBrandAssetNames {
+		if err := e.BrandAssets[name].Validate(); err != nil {
+			return fmt.Errorf("release preflight brand asset %s evidence is invalid", name)
+		}
+	}
+	return nil
+}
+
+func capturePreflightEvidence(inputs PreflightInputs, requireRootOwner bool) (PreflightEvidence, error) {
+	if err := inputs.Validate(); err != nil {
+		return PreflightEvidence{}, err
+	}
+	capture := func(label, path string) (ProtectedFileEvidence, error) {
+		hash, err := ProtectedFileSHA256(path, requireRootOwner)
+		if err != nil {
+			return ProtectedFileEvidence{}, fmt.Errorf("hash preflight %s: %w", label, err)
+		}
+		return ProtectedFileEvidence{Path: path, SHA256: hash}, nil
+	}
+	evidence := PreflightEvidence{
+		BrandID: inputs.BrandID, PolicyID: inputs.PolicyID,
+		TenantConfigs: make(map[string]ProtectedFileEvidence, len(inputs.TenantConfigPaths)),
+		BrandAssets:   make(map[string]ProtectedFileEvidence, len(inputs.BrandAssetPaths)),
+	}
+	files := []struct {
+		label string
+		path  string
+		set   func(ProtectedFileEvidence)
+	}{
+		{"target manifest", inputs.TargetManifestPath, func(value ProtectedFileEvidence) { evidence.TargetManifest = value }},
+		{"target signature", inputs.TargetSignaturePath, func(value ProtectedFileEvidence) { evidence.TargetSignature = value }},
+		{"public key", inputs.PublicKeyPath, func(value ProtectedFileEvidence) { evidence.PublicKey = value }},
+		{"Portal config", inputs.PortalConfigPath, func(value ProtectedFileEvidence) { evidence.PortalConfig = value }},
+		{"backup config", inputs.BackupConfigPath, func(value ProtectedFileEvidence) { evidence.BackupConfig = value }},
+		{"backup key", inputs.BackupKeyPath, func(value ProtectedFileEvidence) { evidence.BackupKey = value }},
+		{"brand config", inputs.BrandConfigPath, func(value ProtectedFileEvidence) { evidence.BrandConfig = value }},
+		{"policy config", inputs.PolicyConfigPath, func(value ProtectedFileEvidence) { evidence.PolicyConfig = value }},
+	}
+	for _, file := range files {
+		value, err := capture(file.label, file.path)
+		if err != nil {
+			return PreflightEvidence{}, err
+		}
+		file.set(value)
+	}
+	for tenantID, path := range inputs.TenantConfigPaths {
+		value, err := capture("tenant "+tenantID+" config", path)
+		if err != nil {
+			return PreflightEvidence{}, err
+		}
+		evidence.TenantConfigs[tenantID] = value
+	}
+	for name, path := range inputs.BrandAssetPaths {
+		value, err := capture("brand asset "+name, path)
+		if err != nil {
+			return PreflightEvidence{}, err
+		}
+		evidence.BrandAssets[name] = value
+	}
+	if err := evidence.Validate(); err != nil {
+		return PreflightEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func NewPreflightReport(targetReleaseID, currentReleaseID, scope, pointerFile string, inputs PreflightInputs, contract ConsumerContract, notice *MaintenanceNotice, now time.Time) (PreflightReport, error) {
+	evidence, err := capturePreflightEvidence(inputs, true)
 	if err != nil {
 		return PreflightReport{}, err
 	}
 	report := PreflightReport{
 		SchemaVersion: PreflightSchemaVersion, TargetReleaseID: targetReleaseID, CurrentReleaseID: currentReleaseID, Scope: scope, PointerFile: pointerFile,
-		CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(30 * time.Minute), TargetManifestSHA256: manifestHash, PortalConfigSHA256: portalHash,
-		TenantConfigSHA256: make(map[string]string, len(tenantConfigs)),
-	}
-	for tenantID, path := range tenantConfigs {
-		hash, err := ProtectedFileSHA256(path, true)
-		if err != nil {
-			return PreflightReport{}, err
-		}
-		report.TenantConfigSHA256[tenantID] = hash
+		CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(30 * time.Minute), Evidence: evidence, ConsumerContract: contract,
 	}
 	for _, name := range requiredPreflightChecks {
 		report.Checks = append(report.Checks, PreflightCheck{Name: name, Passed: true})
@@ -78,9 +234,12 @@ func NewPreflightReport(targetReleaseID, currentReleaseID, scope, pointerFile, t
 		}
 		copy := *notice
 		report.MaintenanceNotice = &copy
+		report.Checks = append(report.Checks, PreflightCheck{Name: "portal_readiness", Passed: true})
 		report.Checks = append(report.Checks, PreflightCheck{Name: "maintenance_notice", Passed: true})
 	} else if notice != nil {
 		return PreflightReport{}, errors.New("initial release preflight must not contain upgrade-notice evidence")
+	} else {
+		report.Checks = append(report.Checks, PreflightCheck{Name: "portal_bootstrap", Passed: true})
 	}
 	if err := report.Validate(); err != nil {
 		return PreflightReport{}, err
@@ -95,18 +254,11 @@ func (r PreflightReport) Validate() error {
 	if r.Scope != ScopePortal && r.Scope != ScopeRuntime && r.Scope != ScopeShared && r.Scope != ScopeCombined {
 		return errors.New("release preflight scope is invalid")
 	}
-	for _, value := range []string{r.TargetManifestSHA256, r.PortalConfigSHA256} {
-		if !validSHA256(value) {
-			return errors.New("release preflight contains an invalid hash")
-		}
+	if err := r.ConsumerContract.Validate(); err != nil {
+		return fmt.Errorf("release preflight consumer contract is invalid: %w", err)
 	}
-	if len(r.TenantConfigSHA256) == 0 || len(r.TenantConfigSHA256) > 10000 {
-		return errors.New("release preflight tenant evidence is missing or too large")
-	}
-	for tenantID, hash := range r.TenantConfigSHA256 {
-		if !validIdentifier(tenantID) || !validSHA256(hash) {
-			return errors.New("release preflight tenant evidence is invalid")
-		}
+	if err := r.Evidence.Validate(); err != nil {
+		return err
 	}
 	checks := make(map[string]bool)
 	for _, check := range r.Checks {
@@ -121,11 +273,11 @@ func (r PreflightReport) Validate() error {
 		}
 	}
 	if r.CurrentReleaseID == "" {
-		if r.MaintenanceNotice != nil || checks["maintenance_notice"] {
+		if r.MaintenanceNotice != nil || checks["maintenance_notice"] || checks["portal_readiness"] || !checks["portal_bootstrap"] {
 			return errors.New("initial release preflight contains an unexpected maintenance notice")
 		}
 	} else {
-		if r.MaintenanceNotice == nil || !checks["maintenance_notice"] {
+		if r.MaintenanceNotice == nil || !checks["maintenance_notice"] || !checks["portal_readiness"] || checks["portal_bootstrap"] {
 			return errors.New("release preflight omits authenticated maintenance-notice evidence")
 		}
 		if err := r.MaintenanceNotice.Validate(r.TargetReleaseID, r.CreatedAt); err != nil {
@@ -165,7 +317,7 @@ func WritePreflight(path string, report PreflightReport) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(path, append(payload, '\n'), 0o400)
+	return atomicWriteExclusive(path, append(payload, '\n'), 0o400)
 }
 
 func LoadPreflight(path string, requireRootOwner bool) (PreflightReport, error) {
@@ -183,34 +335,24 @@ func LoadPreflight(path string, requireRootOwner bool) (PreflightReport, error) 
 	return report, nil
 }
 
-func VerifyPreflight(path, targetReleaseID, currentReleaseID, scope, pointerFile, targetManifestPath, portalConfigPath string, tenantConfigs map[string]string, now time.Time, requireRootOwner bool) error {
+func VerifyPreflight(path, targetReleaseID, currentReleaseID, scope, pointerFile string, inputs PreflightInputs, contract ConsumerContract, now time.Time, requireRootOwner bool) error {
+	if err := contract.Validate(); err != nil {
+		return err
+	}
+	currentEvidence, err := capturePreflightEvidence(inputs, requireRootOwner)
+	if err != nil {
+		return err
+	}
 	report, err := LoadPreflight(path, requireRootOwner)
 	if err != nil {
 		return err
 	}
-	if report.TargetReleaseID != targetReleaseID || report.CurrentReleaseID != currentReleaseID || report.Scope != scope || report.PointerFile != pointerFile || now.UTC().Before(report.CreatedAt.Add(-5*time.Minute)) || !now.UTC().Before(report.ExpiresAt) {
+	if report.TargetReleaseID != targetReleaseID || report.CurrentReleaseID != currentReleaseID || report.Scope != scope || report.PointerFile != pointerFile || !report.ConsumerContract.Equal(contract) || !reflect.DeepEqual(report.Evidence, currentEvidence) || now.UTC().Before(report.CreatedAt.Add(-5*time.Minute)) || !now.UTC().Before(report.ExpiresAt) {
 		return errors.New("release preflight does not match this activation or has expired")
 	}
 	if report.MaintenanceNotice != nil {
 		if err := report.MaintenanceNotice.Validate(targetReleaseID, now); err != nil {
 			return err
-		}
-	}
-	manifestHash, err := ProtectedFileSHA256(targetManifestPath, requireRootOwner)
-	if err != nil || manifestHash != report.TargetManifestSHA256 {
-		return errors.New("target manifest changed after release preflight")
-	}
-	portalHash, err := ProtectedFileSHA256(portalConfigPath, requireRootOwner)
-	if err != nil || portalHash != report.PortalConfigSHA256 {
-		return errors.New("Portal configuration changed after release preflight")
-	}
-	if len(tenantConfigs) != len(report.TenantConfigSHA256) {
-		return errors.New("tenant configuration set changed after release preflight")
-	}
-	for tenantID, configPath := range tenantConfigs {
-		hash, err := ProtectedFileSHA256(configPath, requireRootOwner)
-		if err != nil || report.TenantConfigSHA256[tenantID] != hash {
-			return fmt.Errorf("tenant %s configuration changed after release preflight", tenantID)
 		}
 	}
 	return nil

@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -40,27 +41,48 @@ const (
 	ScopeCombined = "combined"
 )
 
+const (
+	TreeModeProfilePublic   = "public"
+	TreeModeProfileRootOnly = "root-only"
+)
+
 func ProductionRuntimeComponents() map[string]string {
-	return map[string]string{
-		"aionui":       "2.1.0-beta.editfork.21",
-		"aioncore":     "v0.1.42-editfork.10",
-		"noble-hashes": "2.2.0",
-		"codex":        "0.144.4",
-		"kimi-code":    "0.29.1-fork-steer.1",
-		"python":       "3.13.13",
-	}
+	return componentVersions(ProductionRuntimeComponentEvidence())
 }
 
 func ProductionSharedComponents() map[string]string {
-	return map[string]string{
-		"cliproxyapi":           "7.2.81",
-		"cliproxyapi-patch":     "per-key-models.4",
-		"cpa-key-policy":        "0.4.5",
-		"chatforward":           "zombie-reap-20260725-2329",
-		"chatforward-extension": "0.16.0",
-		"node":                  "24.15.0",
-		"ws":                    "8.21.1",
+	return componentVersions(ProductionSharedComponentEvidence())
+}
+
+func ProductionRuntimeComponentEvidence() map[string]Component {
+	return map[string]Component{
+		"aioncore":     {Name: "aioncore", Version: "v0.1.42-editfork.10", SourceRevision: "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"},
+		"aionui":       {Name: "aionui", Version: "2.1.0-beta.editfork.21", SourceRevision: "ec97e4aea496fdd7721e64e6c43e3d3ce97e181553961d8c2c63092d2b395f90"},
+		"codex":        {Name: "codex", Version: "0.144.4", SourceRevision: "9a4a45314e80b53c4761b80067e3a68c2302f9a9026059b5f54f22dec8f34323"},
+		"kimi-code":    {Name: "kimi-code", Version: "0.29.1-fork-steer.1", SourceRevision: "d00c6a1eff46bfe4213fe9f0547b51d7d812f2e9acd2e335ef282bb8d78a97af"},
+		"noble-hashes": {Name: "noble-hashes", Version: "2.2.0", SourceRevision: "b74fceb0006b617ed388254677b3d3847aeceb7e3f57db0cc9acc54644dabba6"},
+		"python":       {Name: "python", Version: "3.13.13", SourceRevision: "2ab91ff401783ccca64f75d10c882e957bdfd60e2bf5a72f8421793729b78a71"},
 	}
+}
+
+func ProductionSharedComponentEvidence() map[string]Component {
+	return map[string]Component{
+		"chatforward":           {Name: "chatforward", Version: "zombie-reap-20260725-2329", SourceRevision: "a1b4d643c0cccde0f7d99483963974f0edb2c8107099627273534da7c0c054fe"},
+		"chatforward-extension": {Name: "chatforward-extension", Version: "0.16.0", SourceRevision: "a1b4d643c0cccde0f7d99483963974f0edb2c8107099627273534da7c0c054fe"},
+		"cliproxyapi":           {Name: "cliproxyapi", Version: "7.2.81", SourceRevision: "ca52365d3d123a1cff34a5020ce16507e3c2ef1032d57f171b9c26d2cd97eb16"},
+		"cliproxyapi-patch":     {Name: "cliproxyapi-patch", Version: "per-key-models.4", SourceRevision: "cd8bcc9c683ed394ef4f58c90b3c61e9a5fea0265b9ae91a68259a16e7b43da8"},
+		"cpa-key-policy":        {Name: "cpa-key-policy", Version: "0.4.5", SourceRevision: "bc0081c77764312a604add1013d9cb642f628978d967a46ca3f8159c63fa1a8f"},
+		"node":                  {Name: "node", Version: "24.15.0", SourceRevision: "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6"},
+		"ws":                    {Name: "ws", Version: "8.21.1", SourceRevision: "bb0f7e58ba1f64746672734d36175fe185f226491e336abc0743e2a8f4472ec1"},
+	}
+}
+
+func componentVersions(evidence map[string]Component) map[string]string {
+	versions := make(map[string]string, len(evidence))
+	for name, component := range evidence {
+		versions[name] = component.Version
+	}
+	return versions
 }
 
 func RequiredComponentsForScope(scope string) map[string]string {
@@ -78,6 +100,75 @@ func RequiredComponentsForScope(scope string) map[string]string {
 	default:
 		return nil
 	}
+}
+
+func RequiredComponentEvidenceForScope(scope, sourceRevision string) map[string]Component {
+	switch scope {
+	case ScopePortal:
+		if !validRevision(sourceRevision) || len(sourceRevision) < 12 {
+			return nil
+		}
+		return map[string]Component{
+			"workagent-control": {Name: "workagent-control", Version: "git-" + sourceRevision[:12], SourceRevision: sourceRevision},
+		}
+	case ScopeRuntime:
+		return ProductionRuntimeComponentEvidence()
+	case ScopeShared:
+		return ProductionSharedComponentEvidence()
+	case ScopeCombined:
+		components := ProductionRuntimeComponentEvidence()
+		for name, component := range ProductionSharedComponentEvidence() {
+			components[name] = component
+		}
+		return components
+	default:
+		return nil
+	}
+}
+
+func ValidateAdmissionComponentBaseline(scope, sourceRevision string, components []Component) error {
+	required := RequiredComponentEvidenceForScope(scope, sourceRevision)
+	if required == nil {
+		return errors.New("release admission component scope or source revision is invalid")
+	}
+	actual := make(map[string]Component, len(components))
+	for _, component := range components {
+		if _, exists := actual[component.Name]; exists {
+			return fmt.Errorf("release component %s is duplicated", component.Name)
+		}
+		actual[component.Name] = component
+	}
+	if len(actual) != len(required) {
+		return errors.New("release component evidence does not exactly match the admission baseline")
+	}
+	for name, expected := range required {
+		if component, ok := actual[name]; !ok || component != expected {
+			return fmt.Errorf("release component %s version or source revision does not match the admission baseline", name)
+		}
+	}
+	return nil
+}
+
+func ValidateComponentBaseline(components []Component, required map[string]string) error {
+	if required == nil {
+		return nil
+	}
+	actual := make(map[string]string, len(components))
+	for _, component := range components {
+		if _, exists := actual[component.Name]; exists {
+			return fmt.Errorf("release component %s is duplicated", component.Name)
+		}
+		actual[component.Name] = component.Version
+	}
+	if len(actual) != len(required) {
+		return errors.New("release component set does not exactly match the required baseline")
+	}
+	for name, version := range required {
+		if actual[name] != version {
+			return fmt.Errorf("release component %s version does not match the required baseline", name)
+		}
+	}
+	return nil
 }
 
 type Manifest struct {
@@ -236,14 +327,17 @@ type File struct {
 }
 
 type VerifyOptions struct {
-	ExpectedReleaseID  string
-	RequiredPaths      []string
-	RequireRootOwner   bool
-	RequireSignature   bool
-	SignaturePath      string
-	PublicKeyPath      string
-	AllowedScopes      []string
-	RequiredComponents map[string]string
+	ExpectedReleaseID        string
+	ExpectedSourceRevision   string
+	RequiredPaths            []string
+	RequiredExecutablePaths  []string
+	RequireRootOwner         bool
+	RequireSignature         bool
+	SignaturePath            string
+	PublicKeyPath            string
+	AllowedScopes            []string
+	RequiredComponents       map[string]string
+	RequireAdmissionBaseline bool
 }
 
 type Verified struct {
@@ -252,12 +346,15 @@ type Verified struct {
 }
 
 type ResolveOptions struct {
-	Scope                  string
-	RequiredPaths          []string
-	RequireRootOwner       bool
-	RequiredComponents     map[string]string
-	RequireCurrentMatch    bool
-	ExpectedCurrentRelease string
+	Scope                    string
+	ExpectedSourceRevision   string
+	RequiredPaths            []string
+	RequiredExecutablePaths  []string
+	RequireRootOwner         bool
+	RequiredComponents       map[string]string
+	RequireAdmissionBaseline bool
+	RequireCurrentMatch      bool
+	ExpectedCurrentRelease   string
 }
 
 type Pointer struct {
@@ -380,8 +477,8 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("invalid SHA-256 for %q", file.Path)
 		}
 		mode, err := parseMode(file.Mode)
-		if err != nil || mode&0o022 != 0 {
-			return fmt.Errorf("unsafe mode for %q", file.Path)
+		if err != nil || (mode != 0o444 && mode != 0o555) {
+			return fmt.Errorf("non-canonical release mode for %q", file.Path)
 		}
 		if file.Size < 0 || file.UID != 0 || file.GID != 0 {
 			return fmt.Errorf("invalid size or ownership for %q", file.Path)
@@ -395,22 +492,129 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
+// ValidateFrozenTree enforces one of the canonical immutable artifact layouts.
+// Directory traversal and executable/read access must not depend on the
+// builder's umask or on privileged execution.
+func ValidateFrozenTree(root, profile string, requireRootOwner bool) error {
+	if !cleanAbsolute(root) {
+		return errors.New("release root must be a clean absolute path")
+	}
+	directoryMode, regularMode, executableMode := os.FileMode(0o555), os.FileMode(0o444), os.FileMode(0o555)
+	switch profile {
+	case TreeModeProfilePublic:
+	case TreeModeProfileRootOnly:
+		directoryMode, regularMode, executableMode = 0o500, 0o400, 0o500
+	default:
+		return errors.New("release tree mode profile is invalid")
+	}
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return fmt.Errorf("release path has a prohibited special mode: %s", relative)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("release contains an unsupported entry: %s", relative)
+		}
+		if err := validateReleaseXattrs(path); err != nil {
+			return fmt.Errorf("release path has prohibited extended metadata: %s: %w", relative, err)
+		}
+		if requireRootOwner {
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || stat.Uid != 0 || stat.Gid != 0 {
+				return fmt.Errorf("release path is not owned by root: %s", relative)
+			}
+		}
+		mode := info.Mode().Perm()
+		if info.IsDir() {
+			if mode != directoryMode {
+				return fmt.Errorf("release directory has non-canonical mode: %s", relative)
+			}
+			return nil
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Nlink != 1 {
+			return fmt.Errorf("release file is multiply linked: %s", relative)
+		}
+		if mode != regularMode && mode != executableMode {
+			return fmt.Errorf("release file has non-canonical mode: %s", relative)
+		}
+		return nil
+	})
+}
+
+// ValidateSignReadyTree is the public, non-secret payload profile accepted by
+// the production manifest and service verifier.
+func ValidateSignReadyTree(root string, requireRootOwner bool) error {
+	return ValidateFrozenTree(root, TreeModeProfilePublic, requireRootOwner)
+}
+
+func validateReleaseXattrs(path string) error {
+	size, err := unix.Llistxattr(path, nil)
+	if err != nil {
+		if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP) {
+			return nil
+		}
+		return err
+	}
+	if size == 0 {
+		return nil
+	}
+	if size < 0 || size > 64*1024 {
+		return errors.New("extended-attribute name list is too large")
+	}
+	names := make([]byte, size)
+	count, err := unix.Llistxattr(path, names)
+	if err != nil {
+		return err
+	}
+	if count <= 0 || count > len(names) {
+		return errors.New("extended-attribute name list changed during inspection")
+	}
+	return validateReleaseXattrNames(names[:count])
+}
+
+func validateReleaseXattrNames(names []byte) error {
+	if len(names) == 0 {
+		return nil
+	}
+	if names[len(names)-1] != 0 {
+		return errors.New("extended-attribute name list is malformed")
+	}
+	for _, name := range bytes.Split(names[:len(names)-1], []byte{0}) {
+		if len(name) == 0 {
+			return errors.New("extended-attribute name list is malformed")
+		}
+		if string(name) != "security.selinux" {
+			return errors.New("extended attribute is not permitted")
+		}
+	}
+	return nil
+}
+
 func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || filepath.Clean(manifestPath) != manifestPath || manifestPath != filepath.Join(root, "manifest.json") {
 		return Verified{}, errors.New("release and manifest paths are not canonical")
 	}
-	rootInfo, err := os.Lstat(root)
-	if err != nil {
-		return Verified{}, fmt.Errorf("inspect release root: %w", err)
-	}
-	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() || rootInfo.Mode().Perm()&0o022 != 0 {
-		return Verified{}, errors.New("release root is not a protected real directory")
-	}
-	if options.RequireRootOwner {
-		stat, ok := rootInfo.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != 0 {
-			return Verified{}, errors.New("release root is not owned by root")
+	if len(options.RequiredPaths)+len(options.RequiredExecutablePaths) != 0 {
+		contract, err := NewConsumerContract(options.RequiredPaths, options.RequiredExecutablePaths)
+		if err != nil {
+			return Verified{}, err
 		}
+		options.RequiredPaths = contract.RequiredPaths
+		options.RequiredExecutablePaths = contract.RequiredExecutablePaths
+	}
+	if err := ValidateSignReadyTree(root, options.RequireRootOwner); err != nil {
+		return Verified{}, err
 	}
 	if options.RequireSignature {
 		signaturePath := options.SignaturePath
@@ -443,13 +647,18 @@ func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) 
 			return Verified{}, errors.New("release component scope is not permitted for this consumer")
 		}
 	}
-	components := make(map[string]string, len(manifest.Components))
-	for _, component := range manifest.Components {
-		components[component.Name] = component.Version
+	if err := ValidateComponentBaseline(manifest.Components, options.RequiredComponents); err != nil {
+		return Verified{}, err
 	}
-	for name, version := range options.RequiredComponents {
-		if components[name] != version {
-			return Verified{}, fmt.Errorf("release component %s version does not match the required baseline", name)
+	if options.RequireAdmissionBaseline {
+		if len(options.ExpectedSourceRevision) != 40 || !validRevision(options.ExpectedSourceRevision) {
+			return Verified{}, errors.New("release admission requires the trusted executable's clean 40-hex source revision")
+		}
+		if manifest.SourceRevision != options.ExpectedSourceRevision {
+			return Verified{}, errors.New("release source revision does not match the trusted admission executable")
+		}
+		if err := ValidateAdmissionComponentBaseline(manifest.ComponentScope, options.ExpectedSourceRevision, manifest.Components); err != nil {
+			return Verified{}, err
 		}
 	}
 	secureRoot, err := projectfs.OpenRoot(root)
@@ -458,6 +667,7 @@ func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) 
 	}
 	defer secureRoot.Close()
 	listed := make(map[string]struct{}, len(manifest.Files))
+	listedModes := make(map[string]os.FileMode, len(manifest.Files))
 	for _, expected := range manifest.Files {
 		file, err := secureRoot.Open(filepath.FromSlash(expected.Path), unix.O_RDONLY|unix.O_NOFOLLOW, 0)
 		if err != nil {
@@ -493,11 +703,27 @@ func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) 
 		if hex.EncodeToString(hash.Sum(nil)) != expected.SHA256 {
 			return Verified{}, fmt.Errorf("release file hash mismatch for %q", expected.Path)
 		}
-		listed[filepath.FromSlash(expected.Path)] = struct{}{}
+		nativePath := filepath.FromSlash(expected.Path)
+		listed[nativePath] = struct{}{}
+		listedModes[nativePath] = mode
 	}
 	for _, required := range options.RequiredPaths {
-		if _, ok := listed[filepath.Clean(required)]; !ok {
+		if err := validRelativePath(required); err != nil {
+			return Verified{}, fmt.Errorf("required release file %q is invalid: %w", required, err)
+		}
+		if _, ok := listed[filepath.FromSlash(required)]; !ok {
 			return Verified{}, fmt.Errorf("required release file %q is not in the manifest", required)
+		}
+		if listedModes[filepath.FromSlash(required)] != 0o444 {
+			return Verified{}, fmt.Errorf("required release data file %q is not canonically non-executable", required)
+		}
+	}
+	for _, required := range options.RequiredExecutablePaths {
+		if _, ok := listed[filepath.FromSlash(required)]; !ok {
+			return Verified{}, fmt.Errorf("required release executable %q is not in the manifest", required)
+		}
+		if listedModes[filepath.FromSlash(required)] != 0o555 {
+			return Verified{}, fmt.Errorf("required release executable %q is not canonically executable", required)
 		}
 	}
 	if err := verifyReleaseMetadata(secureRoot, manifest); err != nil {
@@ -519,6 +745,12 @@ func ResolveActive(releasesRoot, pointerPath, publicKeyPath string, options Reso
 	if options.Scope != ScopePortal && options.Scope != ScopeRuntime && options.Scope != ScopeShared && options.Scope != ScopeCombined {
 		return Verified{}, errors.New("release channel scope is invalid")
 	}
+	contract, err := NewConsumerContract(options.RequiredPaths, options.RequiredExecutablePaths)
+	if err != nil {
+		return Verified{}, fmt.Errorf("release resolver consumer contract: %w", err)
+	}
+	options.RequiredPaths = contract.RequiredPaths
+	options.RequiredExecutablePaths = contract.RequiredExecutablePaths
 	pointer, err := LoadProtectedPointer(pointerPath, options.RequireRootOwner)
 	if err != nil {
 		return Verified{}, fmt.Errorf("load active release pointer: %w", err)
@@ -528,14 +760,17 @@ func ResolveActive(releasesRoot, pointerPath, publicKeyPath string, options Reso
 	}
 	releaseRoot := filepath.Join(releasesRoot, pointer.Current)
 	return Verify(releaseRoot, filepath.Join(releaseRoot, "manifest.json"), VerifyOptions{
-		ExpectedReleaseID:  pointer.Current,
-		RequiredPaths:      options.RequiredPaths,
-		RequireRootOwner:   options.RequireRootOwner,
-		RequireSignature:   true,
-		SignaturePath:      filepath.Join(releaseRoot, "manifest.sig"),
-		PublicKeyPath:      publicKeyPath,
-		AllowedScopes:      []string{options.Scope},
-		RequiredComponents: options.RequiredComponents,
+		ExpectedReleaseID:        pointer.Current,
+		ExpectedSourceRevision:   options.ExpectedSourceRevision,
+		RequiredPaths:            options.RequiredPaths,
+		RequiredExecutablePaths:  options.RequiredExecutablePaths,
+		RequireRootOwner:         options.RequireRootOwner,
+		RequireSignature:         true,
+		SignaturePath:            filepath.Join(releaseRoot, "manifest.sig"),
+		PublicKeyPath:            publicKeyPath,
+		AllowedScopes:            []string{options.Scope},
+		RequiredComponents:       options.RequiredComponents,
+		RequireAdmissionBaseline: options.RequireAdmissionBaseline,
 	})
 }
 
@@ -641,13 +876,13 @@ func rejectUnlisted(root string, listed map[string]struct{}, requireRootOwner bo
 		}
 		if requireRootOwner {
 			stat, ok := info.Sys().(*syscall.Stat_t)
-			if !ok || stat.Uid != 0 {
+			if !ok || stat.Uid != 0 || stat.Gid != 0 {
 				return fmt.Errorf("release path is not owned by root: %s", relative)
 			}
 		}
 		if entry.IsDir() {
-			if info.Mode().Perm()&0o022 != 0 {
-				return fmt.Errorf("release directory is writable outside its owner: %s", relative)
+			if info.Mode().Perm() != 0o555 {
+				return fmt.Errorf("release directory has non-canonical mode: %s", relative)
 			}
 			return nil
 		}
@@ -841,7 +1076,7 @@ func Activate(pointerPath, nextRelease string, now time.Time) error {
 }
 
 func ActivateScoped(pointerPath, nextRelease, scope string, now time.Time) error {
-	return withPointerLock(pointerPath, func() error {
+	return withPointerLock(pointerPath, false, func() error {
 		return activateScopedUnlocked(pointerPath, nextRelease, scope, now)
 	})
 }
@@ -875,7 +1110,7 @@ func activateScopedUnlocked(pointerPath, nextRelease, scope string, now time.Tim
 
 func Rollback(pointerPath string, now time.Time) (Pointer, error) {
 	var result Pointer
-	err := withPointerLock(pointerPath, func() error {
+	err := withPointerLock(pointerPath, false, func() error {
 		var err error
 		result, err = rollbackUnlocked(pointerPath, now)
 		return err
@@ -903,8 +1138,14 @@ func rollbackUnlocked(pointerPath string, now time.Time) (Pointer, error) {
 }
 
 func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath string, options ResolveOptions, now time.Time) (Verified, error) {
+	contract, err := NewConsumerContract(options.RequiredPaths, options.RequiredExecutablePaths)
+	if err != nil {
+		return Verified{}, fmt.Errorf("activation consumer contract: %w", err)
+	}
+	options.RequiredPaths = contract.RequiredPaths
+	options.RequiredExecutablePaths = contract.RequiredExecutablePaths
 	var verified Verified
-	err := withPointerLock(pointerPath, func() error {
+	err = withPointerLock(pointerPath, options.RequireRootOwner, func() error {
 		if !cleanAbsolute(releasesRoot) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") || !validIdentifier(nextRelease) {
 			return errors.New("release channel paths are not canonical")
 		}
@@ -921,8 +1162,8 @@ func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath stri
 		releaseRoot := filepath.Join(releasesRoot, nextRelease)
 		var err error
 		verified, err = Verify(releaseRoot, filepath.Join(releaseRoot, "manifest.json"), VerifyOptions{
-			ExpectedReleaseID: nextRelease, RequiredPaths: options.RequiredPaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-			SignaturePath: filepath.Join(releaseRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+			ExpectedReleaseID: nextRelease, ExpectedSourceRevision: options.ExpectedSourceRevision, RequiredPaths: options.RequiredPaths, RequiredExecutablePaths: options.RequiredExecutablePaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
+			SignaturePath: filepath.Join(releaseRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents, RequireAdmissionBaseline: options.RequireAdmissionBaseline,
 		})
 		if err != nil {
 			return err
@@ -931,7 +1172,7 @@ func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath stri
 			currentRoot := filepath.Join(releasesRoot, options.ExpectedCurrentRelease)
 			current, currentErr := Verify(currentRoot, filepath.Join(currentRoot, "manifest.json"), VerifyOptions{
 				ExpectedReleaseID: options.ExpectedCurrentRelease, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-				SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+				SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope},
 			})
 			if currentErr != nil {
 				return fmt.Errorf("verify active release before activation: %w", currentErr)
@@ -946,9 +1187,15 @@ func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath stri
 }
 
 func RollbackVerified(releasesRoot, pointerPath, publicKeyPath string, options ResolveOptions, now time.Time) (Pointer, Verified, error) {
+	contract, err := NewConsumerContract(options.RequiredPaths, options.RequiredExecutablePaths)
+	if err != nil {
+		return Pointer{}, Verified{}, fmt.Errorf("rollback consumer contract: %w", err)
+	}
+	options.RequiredPaths = contract.RequiredPaths
+	options.RequiredExecutablePaths = contract.RequiredExecutablePaths
 	var next Pointer
 	var verified Verified
-	err := withPointerLock(pointerPath, func() error {
+	err = withPointerLock(pointerPath, options.RequireRootOwner, func() error {
 		if !cleanAbsolute(releasesRoot) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") {
 			return errors.New("release channel paths are not canonical")
 		}
@@ -961,8 +1208,8 @@ func RollbackVerified(releasesRoot, pointerPath, publicKeyPath string, options R
 		}
 		root := filepath.Join(releasesRoot, current.Previous)
 		verified, err = Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
-			ExpectedReleaseID: current.Previous, RequiredPaths: options.RequiredPaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-			SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+			ExpectedReleaseID: current.Previous, RequiredPaths: options.RequiredPaths, RequiredExecutablePaths: options.RequiredExecutablePaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
+			SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope},
 		})
 		if err != nil {
 			return err
@@ -970,7 +1217,7 @@ func RollbackVerified(releasesRoot, pointerPath, publicKeyPath string, options R
 		currentRoot := filepath.Join(releasesRoot, current.Current)
 		active, activeErr := Verify(currentRoot, filepath.Join(currentRoot, "manifest.json"), VerifyOptions{
 			ExpectedReleaseID: current.Current, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-			SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents,
+			SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope},
 		})
 		if activeErr != nil {
 			return fmt.Errorf("verify active release before rollback: %w", activeErr)
@@ -991,7 +1238,7 @@ func requireReadableDataSchema(reader Manifest, storedVersion int) error {
 	return nil
 }
 
-func withPointerLock(pointerPath string, operation func() error) error {
+func withPointerLock(pointerPath string, requireRootOwner bool, operation func() error) error {
 	if !cleanAbsolute(pointerPath) || operation == nil {
 		return errors.New("invalid release pointer lock request")
 	}
@@ -1000,18 +1247,40 @@ func withPointerLock(pointerPath string, operation func() error) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
 		return errors.New("release pointer parent is missing or unsafe")
 	}
+	if requireRootOwner {
+		parentStat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || parentStat.Uid != 0 || parentStat.Gid != 0 {
+			return errors.New("release pointer parent is not root-owned")
+		}
+	}
 	lockPath := pointerPath + ".lock"
-	fd, err := unix.Open(lockPath, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW
+	if !requireRootOwner {
+		flags |= unix.O_CREAT
+	}
+	fd, err := unix.Open(lockPath, flags, 0o600)
 	if err != nil {
 		return fmt.Errorf("open release pointer lock: %w", err)
 	}
 	lock := os.NewFile(uintptr(fd), lockPath)
 	defer lock.Close()
 	lockInfo, err := lock.Stat()
-	if err != nil || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0o600 {
+	lockPathInfo, pathErr := os.Lstat(lockPath)
+	if err != nil || pathErr != nil || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0o600 || lockInfo.Size() != 0 || lockPathInfo.Mode()&os.ModeSymlink != 0 || !lockPathInfo.Mode().IsRegular() {
 		return errors.New("release pointer lock is unsafe")
 	}
-	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+	openedStat, openedOK := lockInfo.Sys().(*syscall.Stat_t)
+	pathStat, pathOK := lockPathInfo.Sys().(*syscall.Stat_t)
+	if !openedOK || !pathOK || openedStat.Nlink != 1 || pathStat.Nlink != 1 || openedStat.Dev != pathStat.Dev || openedStat.Ino != pathStat.Ino {
+		return errors.New("release pointer lock is unsafe")
+	}
+	if requireRootOwner && (openedStat.Uid != 0 || openedStat.Gid != 0) {
+		return errors.New("release pointer lock is not root-owned")
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return errors.New("release pointer is in use by a runtime consumer")
+		}
 		return fmt.Errorf("lock release pointer: %w", err)
 	}
 	defer unix.Flock(fd, unix.LOCK_UN)
@@ -1075,6 +1344,14 @@ func cleanAbsolute(path string) bool {
 }
 
 func atomicWrite(path string, payload []byte, mode os.FileMode) error {
+	return atomicWriteMode(path, payload, mode, false)
+}
+
+func atomicWriteExclusive(path string, payload []byte, mode os.FileMode) error {
+	return atomicWriteMode(path, payload, mode, true)
+}
+
+func atomicWriteMode(path string, payload []byte, mode os.FileMode, noReplace bool) error {
 	parent := filepath.Dir(path)
 	info, err := os.Lstat(parent)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -1105,8 +1382,16 @@ func atomicWrite(path string, payload []byte, mode os.FileMode) error {
 		_ = os.Remove(temporaryPath)
 		return err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if noReplace {
+		err = unix.Renameat2(unix.AT_FDCWD, temporaryPath, unix.AT_FDCWD, path, unix.RENAME_NOREPLACE)
+	} else {
+		err = os.Rename(temporaryPath, path)
+	}
+	if err != nil {
 		_ = os.Remove(temporaryPath)
+		if noReplace && errors.Is(err, unix.EEXIST) {
+			return errors.New("atomic write target already exists")
+		}
 		return err
 	}
 	directory, err := os.Open(parent)
@@ -1126,7 +1411,7 @@ func parseMode(value string) (os.FileMode, error) {
 }
 
 func validIdentifier(value string) bool {
-	if value == "" || len(value) > 128 {
+	if value == "" || value == "." || value == ".." || len(value) > 128 {
 		return false
 	}
 	for _, character := range value {
@@ -1136,6 +1421,13 @@ func validIdentifier(value string) bool {
 		return false
 	}
 	return true
+}
+
+func ValidateReleaseID(value string) error {
+	if !validIdentifier(value) {
+		return errors.New("release ID is invalid")
+	}
+	return nil
 }
 
 func validRevision(value string) bool {
@@ -1187,7 +1479,7 @@ func validApprovedLicenseText(value string) bool {
 }
 
 func validRelativePath(value string) error {
-	if value == "" || filepath.IsAbs(value) || filepath.Clean(filepath.FromSlash(value)) != filepath.FromSlash(value) || value == "." || strings.Contains(value, "\\") || strings.HasPrefix(value, "../") {
+	if value == "" || filepath.IsAbs(value) || filepath.Clean(filepath.FromSlash(value)) != filepath.FromSlash(value) || value == "." || value == ".." || strings.Contains(value, "\\") || strings.HasPrefix(value, "../") {
 		return errors.New("path must be clean and relative")
 	}
 	return nil

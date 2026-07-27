@@ -136,7 +136,7 @@ func New(cfg config.Portal, data *store.Store, brand productconfig.Brand, policy
 	if cfg.Renderer.Configured() {
 		requiredIndex := filepath.ToSlash(filepath.Join(cfg.Renderer.RelativeRoot, "index.html"))
 		verified, verifyErr := release.ResolveActive(cfg.Renderer.ReleasesRoot, cfg.Renderer.PointerFile, cfg.Renderer.PublicKeyFile, release.ResolveOptions{
-			Scope: cfg.Renderer.Scope, RequiredPaths: []string{requiredIndex}, RequireRootOwner: true, RequiredComponents: release.RequiredComponentsForScope(cfg.Renderer.Scope),
+			Scope: cfg.Renderer.Scope, RequiredPaths: []string{requiredIndex}, RequireRootOwner: true,
 		})
 		if verifyErr != nil {
 			return nil, fmt.Errorf("verify Renderer release: %w", verifyErr)

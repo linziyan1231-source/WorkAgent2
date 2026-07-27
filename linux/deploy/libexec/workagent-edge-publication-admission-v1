@@ -1,0 +1,424 @@
+#!/bin/bash
+set -u -o pipefail
+export LC_ALL=C
+export PATH=/usr/bin:/bin
+
+readonly activation_lock=/run/workagent/activation.lock
+readonly recovery_permit=/run/workagent-backup/recovery-activation.permit
+readonly recovery_journal=/var/lib/workagent-backup/recovery-activation.json
+readonly edge_permit=/run/workagent-edge/publication.permit
+readonly edge_journal=/var/lib/workagent-edge/publication.json
+readonly boot_id_path=/proc/sys/kernel/random/boot_id
+readonly caddy_executable=/usr/bin/caddy
+readonly caddy_account=caddy
+readonly caddy_process_name=caddy
+readonly caddy_cgroup='0::/system.slice/caddy.service'
+readonly activation_parent=${activation_lock%/*}
+readonly recovery_journal_parent=${recovery_journal%/*}
+readonly recovery_permit_parent=${recovery_permit%/*}
+readonly edge_journal_parent=${edge_journal%/*}
+readonly edge_permit_parent=${edge_permit%/*}
+readonly max_edge_artifact_size=1024
+
+fail() {
+  printf 'workagent-edge-publication-admission-v1: %s\n' "$*" >&2
+  exit 1
+}
+
+if (( EUID != 0 )); then
+  fail "edge admission requires root"
+fi
+
+mode=admit
+caddy_pid=
+if (( $# == 0 )); then
+  :
+elif (( $# == 2 )) && [[ $1 == --watch && $2 =~ ^[1-9][0-9]*$ ]]; then
+  mode=watch
+  caddy_pid=$2
+else
+  fail "edge admission accepts only no arguments or --watch EXACT_MAINPID"
+fi
+
+safe_exact_root_directory() {
+  local path=$1
+  [[ -d $path && ! -L $path ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a' -- "$path" 2>/dev/null || true) == directory:0:0:700 ]]
+}
+
+safe_activation_parent() {
+  [[ -d $activation_parent && ! -L $activation_parent ]] || return 1
+  local shape mode_value
+  shape=$(/usr/bin/stat -c '%F:%u:%g:%a' -- "$activation_parent" 2>/dev/null || true)
+  [[ $shape =~ ^directory:0:0:([0-7]{3,4})$ ]] || return 1
+  mode_value=${BASH_REMATCH[1]}
+  (( (8#$mode_value & 0022) == 0 ))
+}
+
+recovery_artifacts_absent() {
+  safe_exact_root_directory "$recovery_journal_parent" || return 1
+  safe_exact_root_directory "$recovery_permit_parent" || return 1
+  [[ ! -e $recovery_journal && ! -L $recovery_journal && ! -e $recovery_permit && ! -L $recovery_permit ]]
+}
+
+require_recovery_artifacts_absent() {
+  recovery_artifacts_absent || fail "blank-host recovery evidence conflicts with edge admission"
+  recovery_artifacts_absent || fail "blank-host recovery evidence appeared during edge admission"
+}
+
+descriptor_read_only() {
+  local fd=$1 flags
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "/proc/self/fdinfo/$fd" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || return 1
+  (( (8#$flags & 3) == 0 ))
+}
+
+validate_journal_path_descriptor() {
+  safe_exact_root_directory "$edge_journal_parent" || return 1
+  [[ -f $edge_journal && ! -L $edge_journal ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$edge_journal" 2>/dev/null || true) == "$journal_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%s' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$journal_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$edge_journal" 2>/dev/null || true) == "$journal_device:$journal_inode" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$journal_device:$journal_inode" ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$edge_journal" ]] || return 1
+  descriptor_read_only "$journal_fd"
+}
+
+validate_permit_path_descriptor() {
+  safe_exact_root_directory "$edge_permit_parent" || return 1
+  [[ -f $edge_permit && ! -L $edge_permit ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$edge_permit" 2>/dev/null || true) == "$permit_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%s' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$permit_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$edge_permit" 2>/dev/null || true) == "$permit_device:$permit_inode" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$permit_device:$permit_inode" ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$edge_permit" ]] || return 1
+  descriptor_read_only "$permit_fd"
+}
+
+validate_open_artifact_descriptor() {
+  local fd=$1 device=$2 inode=$3 size=$4 allowed_links=$5 shape
+  shape=$(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%d:%i:%s' -- "/proc/self/fd/$fd" 2>/dev/null || true)
+  [[ $shape == "regular file:0:0:600:$allowed_links:$device:$inode:$size" ]] || return 1
+  descriptor_read_only "$fd"
+}
+
+descriptor_payload_matches() {
+  local source_fd=$1 expected=$2 expected_size=$3 check_fd payload trailing read_status trailing_status
+  if ! exec {check_fd}<"/proc/self/fd/$source_fd"; then
+    return 1
+  fi
+  IFS= read -r payload <&"$check_fd"
+  read_status=$?
+  trailing=
+  IFS= read -r trailing <&"$check_fd"
+  trailing_status=$?
+  exec {check_fd}<&-
+  (( read_status == 0 )) || return 1
+  if (( trailing_status == 0 )) || [[ -n $trailing ]]; then
+    return 1
+  fi
+  [[ $payload == "$expected" ]] || return 1
+  (( ${#payload} + 1 == expected_size ))
+}
+
+validate_boot_descriptor() {
+  [[ -f $boot_id_path && ! -L $boot_id_path ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$boot_id_path" 2>/dev/null || true) == "$boot_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) == "$boot_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$boot_id_path" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) == "$boot_id_path" ]] || return 1
+  descriptor_read_only "$boot_fd"
+}
+
+validate_activation_descriptor() {
+  safe_activation_parent || return 1
+  [[ -f $activation_lock && ! -L $activation_lock ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$activation_lock" 2>/dev/null || true) == "$activation_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$activation_lock" 2>/dev/null || true) == "$activation_device:$activation_inode" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_device:$activation_inode" ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_lock" ]] || return 1
+  descriptor_read_only "$activation_fd"
+}
+
+other_exclusive_owner() {
+  local fd=$1 status
+  /usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$fd"
+  status=$?
+  if (( status == 0 )); then
+    /usr/bin/flock --unlock "$fd" 2>/dev/null || true
+    return 1
+  fi
+  (( status == 75 )) || return 1
+
+  # EX and SH owners both conflict with an EX probe. Only an EX owner also
+  # conflicts with this SH probe, so both conflicts are required.
+  /usr/bin/flock --shared --nonblock --conflict-exit-code 75 "$fd"
+  status=$?
+  if (( status == 0 )); then
+    /usr/bin/flock --unlock "$fd" 2>/dev/null || true
+    return 1
+  fi
+  (( status == 75 ))
+}
+
+prove_other_exclusive_owner() {
+  local fd=$1 description=$2
+  other_exclusive_owner "$fd" || fail "$description is not held exclusively by the publisher"
+}
+
+admit_edge_publication() {
+  edge_pending=false
+  safe_exact_root_directory "$edge_journal_parent" || fail "edge publication journal parent is unsafe"
+  safe_exact_root_directory "$edge_permit_parent" || fail "edge publication permit parent is unsafe"
+  if [[ ! -e $edge_journal && ! -L $edge_journal ]]; then
+    if [[ -e $edge_permit || -L $edge_permit ]]; then
+      fail "orphan edge publication permit exists without its durable journal"
+    fi
+    safe_exact_root_directory "$edge_journal_parent" || fail "edge publication journal parent changed during ordinary admission"
+    safe_exact_root_directory "$edge_permit_parent" || fail "edge publication permit parent changed during ordinary admission"
+    if [[ -e $edge_journal || -L $edge_journal || -e $edge_permit || -L $edge_permit ]]; then
+      fail "edge publication evidence appeared during ordinary admission"
+    fi
+    return 0
+  fi
+
+  journal_shape=$(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$edge_journal" 2>/dev/null || true)
+  if [[ ! $journal_shape =~ ^regular\ file:0:0:600:1:([1-9][0-9]*)$ ]]; then
+    fail "edge publication journal is unsafe"
+  fi
+  journal_size=${BASH_REMATCH[1]}
+  (( journal_size <= max_edge_artifact_size )) || fail "edge publication journal is unsafe"
+  if ! exec {journal_fd}<"$edge_journal"; then
+    fail "open edge publication journal"
+  fi
+  journal_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true)
+  if [[ ! $journal_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]]; then
+    fail "edge publication journal identity is invalid"
+  fi
+  journal_device=${BASH_REMATCH[1]}
+  journal_inode=${BASH_REMATCH[2]}
+  validate_journal_path_descriptor || fail "edge publication journal changed while opening"
+  IFS= read -r journal_payload <&"$journal_fd"
+  read_status=$?
+  trailing_payload=
+  IFS= read -r trailing_payload <&"$journal_fd"
+  trailing_status=$?
+  (( read_status == 0 )) || fail "edge publication journal is not newline terminated"
+  if (( trailing_status == 0 )) || [[ -n $trailing_payload ]] || (( ${#journal_payload} + 1 != journal_size )); then
+    fail "edge publication journal contains trailing or changing data"
+  fi
+  validate_journal_path_descriptor || fail "edge publication journal changed while reading"
+
+  readonly journal_pattern='^\{"schema_version":1,"boot_id":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})","permit_device":([1-9][0-9]*),"permit_inode":([1-9][0-9]*)\}$'
+  [[ $journal_payload =~ $journal_pattern ]] || fail "edge publication journal content is invalid"
+  journal_boot_id=${BASH_REMATCH[1]}
+  journal_permit_device=${BASH_REMATCH[2]}
+  journal_permit_inode=${BASH_REMATCH[3]}
+
+  permit_shape=$(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$edge_permit" 2>/dev/null || true)
+  if [[ ! $permit_shape =~ ^regular\ file:0:0:600:1:([1-9][0-9]*)$ ]]; then
+    fail "edge publication permit is absent or unsafe"
+  fi
+  permit_size=${BASH_REMATCH[1]}
+  (( permit_size <= max_edge_artifact_size )) || fail "edge publication permit is unsafe"
+  if ! exec {permit_fd}<"$edge_permit"; then
+    fail "open edge publication permit"
+  fi
+  permit_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true)
+  if [[ ! $permit_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]]; then
+    fail "edge publication permit identity is invalid"
+  fi
+  permit_device=${BASH_REMATCH[1]}
+  permit_inode=${BASH_REMATCH[2]}
+  validate_permit_path_descriptor || fail "edge publication permit changed while opening"
+  IFS= read -r permit_payload <&"$permit_fd"
+  read_status=$?
+  trailing_payload=
+  IFS= read -r trailing_payload <&"$permit_fd"
+  trailing_status=$?
+  (( read_status == 0 )) || fail "edge publication permit is not newline terminated"
+  if (( trailing_status == 0 )) || [[ -n $trailing_payload ]] || (( ${#permit_payload} + 1 != permit_size )); then
+    fail "edge publication permit contains trailing or changing data"
+  fi
+  validate_permit_path_descriptor || fail "edge publication permit changed while reading"
+
+  readonly permit_pattern='^\{"schema_version":1,"boot_id":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})","journal_device":([1-9][0-9]*),"journal_inode":([1-9][0-9]*)\}$'
+  [[ $permit_payload =~ $permit_pattern ]] || fail "edge publication permit content is invalid"
+  permit_boot_id=${BASH_REMATCH[1]}
+  permit_journal_device=${BASH_REMATCH[2]}
+  permit_journal_inode=${BASH_REMATCH[3]}
+  if [[ $journal_permit_device != "$permit_device" || $journal_permit_inode != "$permit_inode" ||
+        $permit_journal_device != "$journal_device" || $permit_journal_inode != "$journal_inode" ]]; then
+    fail "edge publication journal and permit do not cross-authorize their exact inodes"
+  fi
+
+  boot_shape='0:0:444:1:0'
+  [[ -f $boot_id_path && ! -L $boot_id_path ]] || fail "current boot identity is unsafe"
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$boot_id_path" 2>/dev/null || true) == "$boot_shape" ]] || fail "current boot identity is unsafe"
+  if ! exec {boot_fd}<"$boot_id_path"; then
+    fail "open current boot identity"
+  fi
+  validate_boot_descriptor || fail "current boot identity changed while opening"
+  boot_payload=
+  IFS= read -r -N 38 boot_payload <&"$boot_fd"
+  boot_read_status=$?
+  if (( boot_read_status == 0 )) || (( ${#boot_payload} != 37 )) || [[ ${boot_payload:36:1} != $'\n' ]]; then
+    fail "current boot identity is not one canonical newline-terminated UUID"
+  fi
+  current_boot_id=${boot_payload:0:36}
+  readonly canonical_uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  [[ $current_boot_id =~ $canonical_uuid_pattern ]] || fail "current boot identity is invalid"
+  trailing_payload=
+  IFS= read -r -N 1 trailing_payload <&"$boot_fd"
+  trailing_status=$?
+  if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+    fail "current boot identity contains trailing data"
+  fi
+  validate_boot_descriptor || fail "current boot identity changed while reading"
+  if [[ $journal_boot_id != "$current_boot_id" || $permit_boot_id != "$current_boot_id" ]]; then
+    fail "edge publication evidence belongs to another boot"
+  fi
+
+  activation_shape='0:0:600:1:0'
+  safe_activation_parent || fail "tenant activation lock parent is unsafe"
+  [[ -f $activation_lock && ! -L $activation_lock ]] || fail "tenant activation lock is unsafe"
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$activation_lock" 2>/dev/null || true) == "$activation_shape" ]] || fail "tenant activation lock is unsafe"
+  if ! exec {activation_fd}<"$activation_lock"; then
+    fail "open tenant activation lock"
+  fi
+  activation_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true)
+  if [[ ! $activation_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]]; then
+    fail "tenant activation lock identity is invalid"
+  fi
+  activation_device=${BASH_REMATCH[1]}
+  activation_inode=${BASH_REMATCH[2]}
+  validate_activation_descriptor || fail "tenant activation lock changed while opening"
+
+  require_recovery_artifacts_absent
+  validate_journal_path_descriptor || fail "edge publication journal changed before ownership proof"
+  validate_permit_path_descriptor || fail "edge publication permit changed before ownership proof"
+  validate_boot_descriptor || fail "current boot identity changed before ownership proof"
+  validate_activation_descriptor || fail "tenant activation lock changed before ownership proof"
+  prove_other_exclusive_owner "$permit_fd" "edge publication permit"
+  prove_other_exclusive_owner "$activation_fd" "tenant activation lock"
+
+  require_recovery_artifacts_absent
+  validate_journal_path_descriptor || fail "edge publication journal changed during admission"
+  validate_permit_path_descriptor || fail "edge publication permit changed during admission"
+  validate_boot_descriptor || fail "current boot identity changed during admission"
+  validate_activation_descriptor || fail "tenant activation lock changed during admission"
+  prove_other_exclusive_owner "$permit_fd" "edge publication permit"
+  prove_other_exclusive_owner "$activation_fd" "tenant activation lock"
+  descriptor_payload_matches "$journal_fd" "$journal_payload" "$journal_size" || fail "edge publication journal content changed during admission"
+  descriptor_payload_matches "$permit_fd" "$permit_payload" "$permit_size" || fail "edge publication permit content changed during admission"
+  edge_pending=true
+}
+
+read_process_start_time() {
+  local pid=$1 stat_payload tail
+  local -a fields
+  [[ -r /proc/$pid/stat ]] || return 1
+  IFS= read -r stat_payload <"/proc/$pid/stat" || return 1
+  [[ $stat_payload == "$pid ("*') '* ]] || return 1
+  tail=${stat_payload##*) }
+  read -r -a fields <<< "$tail"
+  (( ${#fields[@]} >= 20 )) || return 1
+  [[ ${fields[19]} =~ ^[1-9][0-9]*$ ]] || return 1
+  process_start_time=${fields[19]}
+}
+
+read_exact_proc_line() {
+  local path=$1 expected=$2 line trailing line_fd trailing_status
+  if ! exec {line_fd}<"$path"; then
+    return 1
+  fi
+  if ! IFS= read -r line <&"$line_fd"; then
+    exec {line_fd}<&-
+    return 1
+  fi
+  trailing=
+  IFS= read -r trailing <&"$line_fd"
+  trailing_status=$?
+  exec {line_fd}<&-
+  if (( trailing_status == 0 )) || [[ -n $trailing ]]; then
+    return 1
+  fi
+  [[ $line == "$expected" ]]
+}
+
+capture_caddy_process() {
+  local account uid gid executable_shape executable_identity process_identity
+  account=$(/usr/bin/getent passwd "$caddy_account" 2>/dev/null || true)
+  IFS=: read -r _ _ uid gid _ _ _ <<< "$account"
+  [[ $uid =~ ^[1-9][0-9]*$ && $gid =~ ^[1-9][0-9]*$ ]] || fail "Caddy account identity is unavailable"
+  [[ $(/usr/bin/stat -c '%u:%g' -- "/proc/$caddy_pid" 2>/dev/null || true) == "$uid:$gid" ]] || fail "Caddy MainPID does not run as the Caddy account"
+  read_exact_proc_line "/proc/$caddy_pid/comm" "$caddy_process_name" || fail "Caddy MainPID process name is invalid"
+  read_exact_proc_line "/proc/$caddy_pid/cgroup" "$caddy_cgroup" || fail "Caddy MainPID is outside the exact service cgroup"
+  read_process_start_time "$caddy_pid" || fail "Caddy MainPID start identity is unavailable"
+  caddy_start_time=$process_start_time
+  [[ $(/usr/bin/readlink -- "/proc/$caddy_pid/exe" 2>/dev/null || true) == "$caddy_executable" ]] || fail "Caddy MainPID executable path is invalid"
+  executable_shape=$(/usr/bin/stat -Lc '%F:%u:%g:%a:%h' -- "$caddy_executable" 2>/dev/null || true)
+  [[ $executable_shape == 'regular file:0:0:755:1' ]] || fail "Caddy executable metadata is unsafe"
+  executable_identity=$(/usr/bin/stat -Lc '%d:%i' -- "$caddy_executable" 2>/dev/null || true)
+  process_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/$caddy_pid/exe" 2>/dev/null || true)
+  [[ $executable_identity =~ ^[1-9][0-9]*:[1-9][0-9]*$ && $process_identity == "$executable_identity" ]] || fail "Caddy MainPID executable inode is invalid"
+  caddy_executable_identity=$executable_identity
+  caddy_uid=$uid
+  caddy_gid=$gid
+}
+
+same_caddy_pid_generation() {
+  local current_start
+  read_process_start_time "$caddy_pid" || return 1
+  current_start=$process_start_time
+  [[ $current_start == "$caddy_start_time" ]]
+}
+
+validate_caddy_process() {
+  same_caddy_pid_generation || return 1
+  [[ $(/usr/bin/stat -c '%u:%g' -- "/proc/$caddy_pid" 2>/dev/null || true) == "$caddy_uid:$caddy_gid" ]] || return 1
+  read_exact_proc_line "/proc/$caddy_pid/comm" "$caddy_process_name" || return 1
+  read_exact_proc_line "/proc/$caddy_pid/cgroup" "$caddy_cgroup" || return 1
+  [[ $(/usr/bin/readlink -- "/proc/$caddy_pid/exe" 2>/dev/null || true) == "$caddy_executable" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%d:%i' -- "/proc/$caddy_pid/exe" 2>/dev/null || true) == "$caddy_executable_identity" ]]
+}
+
+wait_for_released_permit() {
+  local fd=$1
+  # flock(2) locks belong to the shared open file description. The blocking
+  # child therefore transfers the acquired lock to this shell's pinned FD
+  # until the shell explicitly unlocks it after final revalidation.
+  /usr/bin/flock --exclusive "$fd"
+}
+
+watch_edge_publication() {
+  trap 'fail "edge publication watcher was interrupted before commit"' HUP INT TERM
+  capture_caddy_process
+  wait_for_released_permit "$permit_fd" || fail "edge publication permit release wait failed"
+  validate_caddy_process || fail "Caddy MainPID generation changed before edge publication commit"
+  safe_exact_root_directory "$edge_journal_parent" || fail "edge publication journal parent changed after permit release"
+  safe_exact_root_directory "$edge_permit_parent" || fail "edge publication permit parent changed after permit release"
+  if [[ -e $edge_journal || -L $edge_journal || -e $edge_permit || -L $edge_permit ]]; then
+    fail "edge publication evidence remained or reappeared after permit release"
+  fi
+  validate_open_artifact_descriptor "$journal_fd" "$journal_device" "$journal_inode" "$journal_size" 0 || fail "committed edge journal inode changed after permit release"
+  validate_open_artifact_descriptor "$permit_fd" "$permit_device" "$permit_inode" "$permit_size" 0 || fail "committed edge permit inode changed after permit release"
+  descriptor_payload_matches "$journal_fd" "$journal_payload" "$journal_size" || fail "committed edge journal content changed after permit release"
+  descriptor_payload_matches "$permit_fd" "$permit_payload" "$permit_size" || fail "committed edge permit content changed after permit release"
+  recovery_artifacts_absent || fail "recovery evidence appeared after edge commit"
+  validate_boot_descriptor || fail "current boot identity changed after edge commit"
+  validate_activation_descriptor || fail "tenant activation lock changed after edge commit"
+  other_exclusive_owner "$activation_fd" || fail "tenant activation authority disappeared after edge commit"
+  validate_caddy_process || fail "Caddy MainPID generation changed during final edge publication admission"
+  /usr/bin/flock --unlock "$permit_fd" || fail "release admitted edge publication permit lock"
+}
+
+require_recovery_artifacts_absent
+admit_edge_publication
+
+if [[ $mode == watch && $edge_pending == true ]]; then
+  watch_edge_publication
+fi
+
+exit 0

@@ -81,7 +81,8 @@ type environment interface {
 	InspectTenantAccount(config.Tenant) (accountIdentity, bool, error)
 	EnsureTenantAccount(context.Context, config.Tenant) (accountIdentity, error)
 	EnsureCapacity(context.Context, string, int) error
-	EnsureTenantConfig(context.Context, config.Portal, config.Tenant) error
+	PrepareTenantCatalog(context.Context, config.Portal) error
+	UpdateTenantConfigs(context.Context, config.Portal, []config.Tenant) error
 	VerifyTenantConfig(context.Context, config.Portal, config.Tenant) error
 	AssignQuota(string, uint32, uint64) (hostcheck.ProjectQuotaStatus, error)
 	VerifyQuota(string, uint32, uint64) (hostcheck.ProjectQuotaStatus, error)

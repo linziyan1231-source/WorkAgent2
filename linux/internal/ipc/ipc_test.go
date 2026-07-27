@@ -2,12 +2,40 @@ package ipc
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestNamedSystemdFDSelectsSocketAlongsideLifecycleLocks(t *testing.T) {
+	t.Setenv("LISTEN_PID", fmt.Sprint(os.Getpid()))
+	t.Setenv("LISTEN_FDS", "3")
+	t.Setenv("LISTEN_FDNAMES", "workagent-config-lock:workagent-runtime-release-lock:workagent-userhost-socket")
+	fd, err := namedSystemdFD("workagent-userhost-socket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fd != 5 {
+		t.Fatalf("selected descriptor %d, want 5", fd)
+	}
+}
+
+func TestNamedSystemdFDRejectsMissingOrDuplicateSocketName(t *testing.T) {
+	t.Setenv("LISTEN_PID", fmt.Sprint(os.Getpid()))
+	t.Setenv("LISTEN_FDS", "3")
+	for _, names := range []string{
+		"workagent-config-lock:workagent-runtime-release-lock:other",
+		"workagent-userhost-socket:workagent-runtime-release-lock:workagent-userhost-socket",
+	} {
+		t.Setenv("LISTEN_FDNAMES", names)
+		if _, err := namedSystemdFD("workagent-userhost-socket"); err == nil {
+			t.Fatalf("unsafe descriptor names %q were accepted", names)
+		}
+	}
+}
 
 func TestPeerCredentialsAndAuthenticatedDial(t *testing.T) {
 	if os.Getuid() == 0 {

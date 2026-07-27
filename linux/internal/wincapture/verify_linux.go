@@ -93,36 +93,42 @@ func equalSourceEvidence(first, second []sourceEvidence) bool {
 }
 
 func readStoredStrictJSONAt(rootFD int, relative string, maximum int64, expectedUID uint32, destination any) error {
+	_, err := readStoredStrictJSONAtDigest(rootFD, relative, maximum, expectedUID, destination)
+	return err
+}
+
+func readStoredStrictJSONAtDigest(rootFD int, relative string, maximum int64, expectedUID uint32, destination any) (string, error) {
 	if !safeCapturedRelative(relative) || maximum < 1 {
-		return errors.New("stored capture metadata path or bound is invalid")
+		return "", errors.New("stored capture metadata path or bound is invalid")
 	}
 	fd, err := unix.Openat2(rootFD, relative, &unix.OpenHow{Flags: uint64(unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC), Resolve: localResolveFlags})
 	if err != nil {
-		return errors.New("open stored capture metadata")
+		return "", errors.New("open stored capture metadata")
 	}
 	file := os.NewFile(uintptr(fd), "stored-capture-metadata")
 	defer file.Close()
 	var before unix.Stat_t
 	if err := unix.Fstat(fd, &before); err != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || os.FileMode(before.Mode).Perm() != 0o600 ||
 		before.Uid != expectedUID || before.Gid != expectedUID || before.Nlink != 1 || before.Size < 1 || before.Size > maximum {
-		return errors.New("stored capture metadata is unsafe")
+		return "", errors.New("stored capture metadata is unsafe")
 	}
 	payload, err := io.ReadAll(io.LimitReader(file, maximum+1))
 	if err != nil || len(payload) == 0 || int64(len(payload)) != before.Size {
 		clear(payload)
-		return errors.New("stored capture metadata is unreadable")
+		return "", errors.New("stored capture metadata is unreadable")
 	}
 	defer clear(payload)
 	var after unix.Stat_t
 	if err := unix.Fstat(fd, &after); err != nil || !stableFileStat(before, after) {
-		return errors.New("stored capture metadata changed while it was read")
+		return "", errors.New("stored capture metadata changed while it was read")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("stored capture metadata is not strict JSON")
+		return "", errors.New("stored capture metadata is not strict JSON")
 	}
-	return nil
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func inventoryStoredSource(rootFD int, source Source, expectedUID uint32) (inventory, error) {

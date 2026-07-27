@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,13 +19,27 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/admin"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/backup"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/backupquiescence"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/coreactivation"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/edgepublication"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
 )
 
 const (
-	quiesceJournalPath     = "/run/workagent-backup/quiesce.json"
+	quiesceJournalPath     = backupquiescence.JournalPath
 	maxQuiesceJournalBytes = 256 * 1024
+	backupControlRoot      = "/opt/workagent/control"
+	backupReleasePublicKey = "/etc/workagent/trust/release-signing.pub"
+)
+
+var (
+	backupActivationLockPath   = lifecyclelock.ActivationPath
+	assertCoreActivationClean  = coreactivation.AssertClean
+	assertEdgePublicationClean = edgepublication.AssertClean
 )
 
 type quiesceJournal struct {
@@ -82,6 +97,23 @@ func create(arguments []string) (returnErr error) {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
+	if *quiesceSystemd {
+		if err := requireExternallyHeldActivationLock(); err != nil {
+			return err
+		}
+		if err := assertCoreActivationClean(); err != nil {
+			return fmt.Errorf("refuse backup quiescence with a pending core activation: %w", err)
+		}
+		if err := assertEdgePublicationClean(); err != nil {
+			return fmt.Errorf("refuse backup quiescence with a pending edge publication: %w", err)
+		}
+		if err := backup.AssertNoPendingRecoveryActivation(); err != nil {
+			return err
+		}
+		if err := admin.AssertTenantActivationClean(); err != nil {
+			return fmt.Errorf("refuse backup quiescence with a pending tenant activation transaction: %w", err)
+		}
+	}
 	configuration, key, err := load(*backupPath)
 	if err != nil {
 		return err
@@ -136,7 +168,32 @@ func create(arguments []string) (returnErr error) {
 	return output(map[string]any{"created": true, "backup_id": created.Manifest.BackupID, "local_archive": created.LocalArchive, "off_host_archive": created.OffHostArchive, "receipt": created.LocalReceipt})
 }
 
+type backupResumeAcquire func(context.Context) (io.Closer, error)
+
 func resume(arguments []string) error {
+	return resumeWithDependencies(
+		arguments,
+		requireExternallyHeldActivationLock,
+		func(ctx context.Context) (io.Closer, error) {
+			return lifecyclelock.AcquireFixedConsumer(ctx, backupControlRoot)
+		},
+		verifyRunningBackupExecutable,
+		assertCleanBackupResumeBoundary,
+		resumeQuiescedServices,
+	)
+}
+
+func resumeWithDependencies(
+	arguments []string,
+	requireActivation func() error,
+	acquire backupResumeAcquire,
+	authenticate func() error,
+	assertClean func() error,
+	loadAndResume func() error,
+) (resultErr error) {
+	if requireActivation == nil || acquire == nil || authenticate == nil || assertClean == nil || loadAndResume == nil {
+		return errors.New("authenticated backup resume boundary is unavailable")
+	}
 	flags := flagsFor("resume")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -144,7 +201,112 @@ func resume(arguments []string) error {
 	if flags.NArg() != 0 {
 		return errors.New("resume does not accept arguments")
 	}
-	return resumeQuiescedServices()
+	if err := requireActivation(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	fixed, err := acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire backup resume catalog/control snapshot: %w", err)
+	}
+	if fixed == nil || (reflect.ValueOf(fixed).Kind() == reflect.Pointer && reflect.ValueOf(fixed).IsNil()) {
+		return errors.New("backup resume catalog/control snapshot is unavailable")
+	}
+	defer func() { resultErr = errors.Join(resultErr, fixed.Close()) }()
+	if err := authenticate(); err != nil {
+		return fmt.Errorf("authenticate running backup resume executable: %w", err)
+	}
+	if err := assertClean(); err != nil {
+		return err
+	}
+	return loadAndResume()
+}
+
+func assertCleanBackupResumeBoundary() error {
+	if err := assertCoreActivationClean(); err != nil {
+		return fmt.Errorf("refuse service resume with a pending core activation: %w", err)
+	}
+	if err := assertEdgePublicationClean(); err != nil {
+		return fmt.Errorf("refuse service resume with a pending edge publication: %w", err)
+	}
+	if err := backup.AssertNoPendingRecoveryActivation(); err != nil {
+		return err
+	}
+	if err := admin.AssertTenantActivationClean(); err != nil {
+		return fmt.Errorf("refuse service resume with a pending tenant activation transaction: %w", err)
+	}
+	return nil
+}
+
+func verifyRunningBackupExecutable() error {
+	_, err := release.Verify(backupControlRoot, filepath.Join(backupControlRoot, "manifest.json"), release.VerifyOptions{
+		RequiredExecutablePaths: []string{"bin/workagent-backup", "bin/workagent-release"},
+		RequireRootOwner:        true,
+		RequireSignature:        true,
+		SignaturePath:           filepath.Join(backupControlRoot, "manifest.sig"),
+		PublicKeyPath:           backupReleasePublicKey,
+		AllowedScopes:           []string{release.ScopePortal},
+	})
+	if err != nil {
+		return fmt.Errorf("authenticate current control release: %w", err)
+	}
+	running, err := unix.Open("/proc/self/exe", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open running workagent-backup executable: %w", err)
+	}
+	defer unix.Close(running)
+	currentPath := filepath.Join(backupControlRoot, "bin/workagent-backup")
+	current, err := unix.Open(currentPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open current signed workagent-backup executable: %w", err)
+	}
+	defer unix.Close(current)
+	var runningStat unix.Stat_t
+	var currentStat unix.Stat_t
+	if err := unix.Fstat(running, &runningStat); err != nil {
+		return errors.New("inspect running workagent-backup executable")
+	}
+	if err := unix.Fstat(current, &currentStat); err != nil {
+		return errors.New("inspect current signed workagent-backup executable")
+	}
+	if runningStat.Dev != currentStat.Dev || runningStat.Ino != currentStat.Ino || currentStat.Mode&unix.S_IFMT != unix.S_IFREG ||
+		currentStat.Mode&0o7777 != 0o555 || currentStat.Uid != 0 || currentStat.Gid != 0 || currentStat.Nlink != 1 {
+		return errors.New("running workagent-backup is not the current signed control executable")
+	}
+	return nil
+}
+
+func requireExternallyHeldActivationLock() error {
+	if os.Geteuid() != 0 || os.Getenv("WORKAGENT_EXTERNAL_ACTIVATION_LOCK") != "1" {
+		return errors.New("systemd quiescence must run through the activation-locked backup service")
+	}
+	path := backupActivationLockPath
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return errors.New("open externally held tenant activation lock")
+	}
+	defer unix.Close(fd)
+	var opened unix.Stat_t
+	if err := unix.Fstat(fd, &opened); err != nil || opened.Mode&unix.S_IFMT != unix.S_IFREG || opened.Mode&0o7777 != 0o600 || opened.Uid != 0 || opened.Gid != 0 || opened.Nlink != 1 || opened.Size != 0 {
+		return errors.New("tenant activation lock descriptor is unsafe")
+	}
+	info, err := os.Lstat(path)
+	var stat *syscall.Stat_t
+	ok := false
+	if info != nil {
+		stat, ok = info.Sys().(*syscall.Stat_t)
+	}
+	if err != nil || !ok || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || uint64(stat.Dev) != opened.Dev || stat.Ino != opened.Ino || uint32(stat.Mode) != opened.Mode || stat.Uid != opened.Uid || stat.Gid != opened.Gid || stat.Nlink != opened.Nlink || stat.Size != opened.Size {
+		return errors.New("tenant activation lock pathname is unsafe or changed")
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err == nil {
+		_ = unix.Flock(fd, unix.LOCK_UN)
+		return errors.New("backup service did not hold the tenant activation lock")
+	} else if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+		return errors.New("inspect externally held tenant activation lock")
+	}
+	return nil
 }
 
 func verify(arguments []string) error {
@@ -206,6 +368,9 @@ func restore(arguments []string) error {
 	}
 	var installed any
 	if *install {
+		if err := admin.AssertTenantActivationClean(); err != nil {
+			return fmt.Errorf("refuse blank-host installation with a pending tenant activation transaction: %w", err)
+		}
 		result, err := backup.InstallRestoredTree(context.Background(), *target, manifest, backup.InstallOptions{Confirmation: *confirmation})
 		if err != nil {
 			return fmt.Errorf("blank-host installation failed: %w", err)

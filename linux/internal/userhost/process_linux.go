@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+var supervisorNetworkTables = [...]string{"/proc/self/net/tcp", "/proc/self/net/tcp6"}
+
 func checkAionCoreHealth(ctx context.Context, port uint16, expectedVersions []string, runtimeToken []byte) error {
 	if port == 0 || len(expectedVersions) == 0 {
 		return errors.New("AionCore health contract is incomplete")
@@ -93,7 +95,10 @@ func verifyAionCoreProcess(rootPID int, expectedExecutable string) (int, uint16,
 	}
 	port := uint16(0)
 	listeners := 0
-	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+	// Production UserHost runs with ProcSubset=pid. That mount deliberately
+	// hides the legacy /proc/net alias, while /proc/self/net remains the exact
+	// network namespace of this supervisor and its backend process tree.
+	for _, table := range supervisorNetworkTables {
 		file, err := os.Open(table)
 		if err != nil {
 			return 0, 0, err
@@ -211,7 +216,7 @@ func verifyBackendExecutable(pid int, expectedExecutable string) error {
 
 func listeningSocketInodes(port uint16) (map[string]bool, error) {
 	result := make(map[string]bool)
-	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+	for _, table := range supervisorNetworkTables {
 		file, err := os.Open(table)
 		if err != nil {
 			return nil, err

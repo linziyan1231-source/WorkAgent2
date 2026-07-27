@@ -47,10 +47,42 @@ func ValidateTenantBinding(portal config.Portal, tenant config.Tenant) error {
 	if !pathWithin(portal.Paths.ReleaseRoot, tenant.Release.ReleasesRoot) {
 		return errors.New("tenant release channel is outside the Portal release root")
 	}
+	if portal.Renderer.Configured() && (tenant.Release.ReleasesRoot != portal.Renderer.ReleasesRoot ||
+		tenant.Release.PointerFile != portal.Renderer.PointerFile ||
+		tenant.Release.PublicKeyFile != portal.Renderer.PublicKeyFile ||
+		tenant.Release.Scope != portal.Renderer.Scope) {
+		return errors.New("tenant release channel does not match the Portal Renderer channel")
+	}
 	return nil
 }
 
 func VerifyTenantHost(portal config.Portal, tenant config.Tenant) (TenantVerification, error) {
+	verification, err := VerifyTenantInfrastructure(portal, tenant)
+	if err != nil {
+		return TenantVerification{}, err
+	}
+	required := append([]string(nil), tenant.Backend.RequiredReleaseFiles...)
+	requiredExecutables := []string{tenant.Backend.Executable}
+	if tenant.Backend.Migration.Enabled {
+		requiredExecutables = append(requiredExecutables, tenant.Backend.Migration.Executable)
+	}
+	if tenant.Backend.AgentCLI.BinDirectory != "" {
+		requiredExecutables = append(requiredExecutables, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
+	}
+	verified, err := release.ResolveActive(tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.PublicKeyFile, release.ResolveOptions{
+		Scope: tenant.Release.Scope, RequiredPaths: required, RequiredExecutablePaths: requiredExecutables, RequireRootOwner: true,
+	})
+	if err != nil {
+		return TenantVerification{}, err
+	}
+	verification.Release = verified
+	return verification, nil
+}
+
+// VerifyTenantInfrastructure validates the durable host identity, storage and
+// quota contract without resolving an active release. It is the bootstrap-safe
+// portion of VerifyTenantHost used before the first signed pointer exists.
+func VerifyTenantInfrastructure(portal config.Portal, tenant config.Tenant) (TenantVerification, error) {
 	if err := ValidateTenantBinding(portal, tenant); err != nil {
 		return TenantVerification{}, err
 	}
@@ -86,21 +118,7 @@ func VerifyTenantHost(portal config.Portal, tenant config.Tenant) (TenantVerific
 			return TenantVerification{}, fmt.Errorf("verify tenant project quota: %w", err)
 		}
 	}
-	required := []string{tenant.Backend.Executable}
-	required = append(required, tenant.Backend.RequiredReleaseFiles...)
-	if tenant.Backend.Migration.Enabled {
-		required = append(required, tenant.Backend.Migration.Executable)
-	}
-	if tenant.Backend.AgentCLI.BinDirectory != "" {
-		required = append(required, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
-	}
-	verified, err := release.ResolveActive(tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.PublicKeyFile, release.ResolveOptions{
-		Scope: tenant.Release.Scope, RequiredPaths: required, RequireRootOwner: true, RequiredComponents: release.RequiredComponentsForScope(tenant.Release.Scope),
-	})
-	if err != nil {
-		return TenantVerification{}, err
-	}
-	return TenantVerification{RuntimeUID: runtimeUID, PortalUID: portalUID, Release: verified}, nil
+	return TenantVerification{RuntimeUID: runtimeUID, PortalUID: portalUID}, nil
 }
 
 func VerifyTenantConfigPath(portal config.Portal, tenant config.Tenant, path string) error {

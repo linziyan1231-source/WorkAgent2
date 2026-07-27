@@ -1,21 +1,40 @@
 package release
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const testRevision = "1111111111111111111111111111111111111111"
 
+func thawReleaseFixture(root string) {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		} else if entry.Type().IsRegular() {
+			_ = os.Chmod(path, 0o600)
+		}
+		return nil
+	})
+}
+
 func makeRelease(t *testing.T) (string, Manifest) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "release-one")
+	t.Cleanup(func() { thawReleaseFixture(root) })
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +51,14 @@ func makeRelease(t *testing.T) (string, Manifest) {
 	if err := os.WriteFile(filepath.Join(root, "licenses.json"), []byte(`{"schema_version":1,"approved":true,"reviewed_at":"`+builtAt.Format(time.RFC3339)+`","entries":[{"component":"workagent-runtime","spdx_expression":"LicenseRef-WorkAgent-Approved","copyright":"WorkAgent authorized test fixture"}]}`), 0o444); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(filepath.Join(root, "bin", "runtime"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sbom.spdx.json", "provenance.json", "licenses.json"} {
+		if err := os.Chmod(filepath.Join(root, name), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
 	metadata := Manifest{ReleaseID: "release-one", SourceRevision: testRevision, BuiltAt: builtAt, BrandingVersion: "workagent-v1", PolicyVersion: "deny-all-v1", ComponentScope: ScopeRuntime,
 		DataSchemaVersion: 1, MinimumReadableDataSchema: 1, MaximumReadableDataSchema: 1,
 		Components: []Component{{Name: "workagent-runtime", Version: "1.0.0", SourceRevision: testRevision}}, SBOMPath: "sbom.spdx.json", ProvenancePath: "provenance.json", LicenseReportPath: "licenses.json"}
@@ -42,7 +69,118 @@ func makeRelease(t *testing.T) (string, Manifest) {
 	if err := WriteManifest(filepath.Join(root, "manifest.json"), manifest); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(filepath.Join(root, "bin"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
 	return root, manifest
+}
+
+func signTestRelease(t *testing.T, root, signaturePath, privateKeyPath string) {
+	t.Helper()
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := SignManifest(filepath.Join(root, "manifest.json"), signaturePath, privateKeyPath, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func makeNamedTestRelease(t *testing.T, releasesRoot, releaseID, componentVersion string, dataSchema, minimumReadable, maximumReadable int, extraDataPath string) string {
+	t.Helper()
+	root, metadata := makeRelease(t)
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	provenancePath := filepath.Join(root, "provenance.json")
+	if err := os.Chmod(provenancePath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provenance := fmt.Sprintf(`{"schema_version":1,"release_id":%q,"source_revision":%q,"builder_id":"workagent-builder-v1","build_type":"release","invocation_id":"fixture-1","reproducible":true,"materials":[{"uri":"git+https://example.test/workagent","revision":%q}]}`, releaseID, testRevision, testRevision)
+	if err := os.WriteFile(provenancePath, []byte(provenance), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(provenancePath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if extraDataPath != "" {
+		if err := os.WriteFile(filepath.Join(root, extraDataPath), []byte("new consumer data\n"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(root, extraDataPath), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadata.ReleaseID = releaseID
+	metadata.DataSchemaVersion = dataSchema
+	metadata.MinimumReadableDataSchema = minimumReadable
+	metadata.MaximumReadableDataSchema = maximumReadable
+	metadata.Components[0].Version = componentVersion
+	manifest, err := BuildManifest(root, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifest(filepath.Join(root, "manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(releasesRoot, releaseID)
+	if err := os.Rename(root, target); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { thawReleaseFixture(target) })
+	return target
+}
+
+func makePreflightInputsFixture(t *testing.T, releaseRoot, evidenceRoot, portalConfig, tenantConfig string) PreflightInputs {
+	t.Helper()
+	if err := os.Chmod(releaseRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	signature := filepath.Join(releaseRoot, "manifest.sig")
+	if err := os.WriteFile(signature, []byte("fixture signature\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(signature, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(releaseRoot, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"public": filepath.Join(evidenceRoot, "release.pub"),
+		"backup": filepath.Join(evidenceRoot, "backup.json"),
+		"key":    filepath.Join(evidenceRoot, "backup.key"),
+		"brand":  filepath.Join(evidenceRoot, "brand.json"),
+		"policy": filepath.Join(evidenceRoot, "policy.json"),
+	}
+	for _, name := range requiredBrandAssetNames {
+		paths["asset-"+name] = filepath.Join(evidenceRoot, name+".svg")
+	}
+	for name, path := range paths {
+		if err := os.WriteFile(path, []byte(name+"\n"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assets := make(map[string]string, len(requiredBrandAssetNames))
+	for _, name := range requiredBrandAssetNames {
+		assets[name] = paths["asset-"+name]
+	}
+	return PreflightInputs{
+		TargetManifestPath: filepath.Join(releaseRoot, "manifest.json"), TargetSignaturePath: signature,
+		PublicKeyPath: paths["public"], PortalConfigPath: portalConfig,
+		TenantConfigPaths: map[string]string{"tenant-one": tenantConfig},
+		BackupConfigPath:  paths["backup"], BackupKeyPath: paths["key"],
+		BrandID: "workagent", BrandConfigPath: paths["brand"], BrandAssetPaths: assets,
+		PolicyID: "workagent-models-v1", PolicyConfigPath: paths["policy"],
+	}
 }
 
 func TestReleaseEvidenceGenerationIsDeterministicAndFailClosed(t *testing.T) {
@@ -77,6 +215,97 @@ func TestReleaseEvidenceGenerationIsDeterministicAndFailClosed(t *testing.T) {
 	}
 }
 
+func TestConsumerContractIsCanonicalAndBindsFileRoles(t *testing.T) {
+	contract, err := NewConsumerContract(
+		[]string{"sbom.spdx.json", "provenance.json"},
+		[]string{"bin/runtime"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(contract.RequiredPaths, ","); got != "provenance.json,sbom.spdx.json" {
+		t.Fatalf("consumer data paths were not sorted canonically: %q", got)
+	}
+	for name, paths := range map[string]struct {
+		data        []string
+		executables []string
+	}{
+		"empty":        {},
+		"dot dot":      {data: []string{".."}},
+		"duplicate":    {data: []string{"sbom.spdx.json", "sbom.spdx.json"}},
+		"role overlap": {data: []string{"bin/runtime"}, executables: []string{"bin/runtime"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewConsumerContract(paths.data, paths.executables); err == nil {
+				t.Fatal("invalid consumer contract was accepted")
+			}
+		})
+	}
+
+	_, manifest := makeRelease(t)
+	if err := ValidateManifestConsumerContract(manifest, contract); err != nil {
+		t.Fatalf("valid manifest consumer contract rejected: %v", err)
+	}
+	wrongDataRole, err := NewConsumerContract([]string{"bin/runtime"}, []string{"provenance.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateManifestConsumerContract(manifest, wrongDataRole); err == nil {
+		t.Fatal("manifest consumer roles were not enforced")
+	}
+}
+
+func TestVerifiedPointerMutationRequiresConsumerContract(t *testing.T) {
+	root := t.TempDir()
+	releasesRoot := filepath.Join(root, "releases")
+	pointer := filepath.Join(root, "current.json")
+	publicKey := filepath.Join(root, "release.pub")
+	if _, err := ActivateVerified(releasesRoot, pointer, "release-one", publicKey, ResolveOptions{Scope: ScopeRuntime}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "consumer contract") {
+		t.Fatalf("activation without a consumer contract was not rejected first: %v", err)
+	}
+	if _, _, err := RollbackVerified(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "consumer contract") {
+		t.Fatalf("rollback without a consumer contract was not rejected first: %v", err)
+	}
+}
+
+func TestRuntimeConsumerSharedLockBlocksPointerSwitch(t *testing.T) {
+	root := t.TempDir()
+	pointer := filepath.Join(root, "current.json")
+	lockPath := pointer + ".lock"
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := unix.Open(lockPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	if err := unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if err := ActivateScoped(pointer, "release-one", ScopeRuntime, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "runtime consumer") {
+		t.Fatalf("pointer moved while a runtime consumer held the channel: %v", err)
+	}
+	if _, err := os.Stat(pointer); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocked activation created a pointer: %v", err)
+	}
+}
+
+func TestPointerLockRejectsHardLinkedInode(t *testing.T) {
+	root := t.TempDir()
+	pointer := filepath.Join(root, "current.json")
+	lockPath := pointer + ".lock"
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(lockPath, lockPath+".alias"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ActivateScoped(pointer, "release-one", ScopeRuntime, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "unsafe") {
+		t.Fatalf("hard-linked lifecycle lock was accepted: %v", err)
+	}
+}
+
 func TestVerifyRequiresValidEd25519Signature(t *testing.T) {
 	root, _ := makeRelease(t)
 	keyRoot := t.TempDir()
@@ -85,14 +314,18 @@ func TestVerifyRequiresValidEd25519Signature(t *testing.T) {
 		t.Fatal(err)
 	}
 	signaturePath := filepath.Join(root, "manifest.sig")
-	if err := SignManifest(filepath.Join(root, "manifest.json"), signaturePath, privatePath, false); err != nil {
-		t.Fatal(err)
-	}
+	signTestRelease(t, root, signaturePath, privatePath)
 	options := VerifyOptions{ExpectedReleaseID: "release-one", RequireSignature: true, PublicKeyPath: publicPath, AllowedScopes: []string{ScopeRuntime}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"}}
 	if _, err := Verify(root, filepath.Join(root, "manifest.json"), options); err != nil {
 		t.Fatalf("signed release was rejected: %v", err)
 	}
-	if err := os.WriteFile(signaturePath, []byte("invalid\n"), 0o444); err != nil {
+	if err := os.Chmod(signaturePath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(signaturePath, []byte("invalid\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(signaturePath, 0o444); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Verify(root, filepath.Join(root, "manifest.json"), options); err == nil {
@@ -100,9 +333,35 @@ func TestVerifyRequiresValidEd25519Signature(t *testing.T) {
 	}
 }
 
+func TestRequiredComponentBaselineRejectsExtraManifestComponents(t *testing.T) {
+	root, manifest := makeRelease(t)
+	manifest.Components = append(manifest.Components, Component{Name: "unexpected", Version: "1.0.0", SourceRevision: testRevision})
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifest(filepath.Join(root, "manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	keyRoot := t.TempDir()
+	publicPath, privatePath := filepath.Join(keyRoot, "release.pub"), filepath.Join(keyRoot, "release.key")
+	if err := GenerateSigningKey(publicPath, privatePath); err != nil {
+		t.Fatal(err)
+	}
+	signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privatePath)
+	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
+		ExpectedReleaseID: "release-one", RequireSignature: true, PublicKeyPath: publicPath,
+		AllowedScopes: []string{ScopeRuntime}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"},
+	}); err == nil || !strings.Contains(err.Error(), "component set") {
+		t.Fatalf("extra signed component was not rejected by the exact baseline: %v", err)
+	}
+}
+
 func TestVerifyReleaseAndDetectTampering(t *testing.T) {
 	root, _ := makeRelease(t)
-	options := VerifyOptions{ExpectedReleaseID: "release-one", RequiredPaths: []string{"bin/runtime"}}
+	options := VerifyOptions{ExpectedReleaseID: "release-one", RequiredExecutablePaths: []string{"bin/runtime"}}
 	if _, err := Verify(root, filepath.Join(root, "manifest.json"), options); err != nil {
 		t.Fatalf("valid release rejected: %v", err)
 	}
@@ -114,22 +373,174 @@ func TestVerifyReleaseAndDetectTampering(t *testing.T) {
 	}
 }
 
+func TestSignReadyTreeRejectsUmaskDependentModes(t *testing.T) {
+	for name, mutate := range map[string]func(string) error{
+		"private root":             func(root string) error { return os.Chmod(root, 0o700) },
+		"owner writable directory": func(root string) error { return os.Chmod(filepath.Join(root, "bin"), 0o755) },
+		"private metadata":         func(root string) error { return os.Chmod(filepath.Join(root, "sbom.spdx.json"), 0o600) },
+		"setuid executable":        func(root string) error { return os.Chmod(filepath.Join(root, "bin", "runtime"), 0o555|os.ModeSetuid) },
+		"sticky directory":         func(root string) error { return os.Chmod(filepath.Join(root, "bin"), 0o555|os.ModeSticky) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, _ := makeRelease(t)
+			if err := mutate(root); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateSignReadyTree(root, false); err == nil {
+				t.Fatal("non-canonical release layout was accepted")
+			}
+		})
+	}
+}
+
+func TestReleaseTreeExtendedMetadataPolicy(t *testing.T) {
+	if err := validateReleaseXattrNames([]byte("security.selinux\x00")); err != nil {
+		t.Fatalf("host-managed SELinux label was rejected: %v", err)
+	}
+	for _, names := range [][]byte{
+		[]byte("security.capability\x00"),
+		[]byte("security.ima\x00"),
+		[]byte("system.posix_acl_access\x00"),
+		[]byte("system.posix_acl_default\x00"),
+		[]byte("trusted.fixture\x00"),
+		[]byte("user.fixture\x00"),
+		[]byte("security.selinux\x00user.fixture\x00"),
+		[]byte("missing-terminator"),
+		[]byte("security.selinux\x00\x00"),
+	} {
+		if err := validateReleaseXattrNames(names); err == nil {
+			t.Fatalf("prohibited or malformed extended metadata was accepted: %q", names)
+		}
+	}
+
+	root, _ := makeRelease(t)
+	path := filepath.Join(root, "sbom.spdx.json")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := unix.Lsetxattr(path, "user.workagent-fixture", []byte("fixture"), 0)
+	if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EPERM) {
+		t.Skipf("test filesystem cannot create a user xattr: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSignReadyTree(root, false); err == nil {
+		t.Fatal("release tree with an unbound user xattr was accepted")
+	}
+}
+
+func TestSignReadyTreeRejectsExternalHardlink(t *testing.T) {
+	root, _ := makeRelease(t)
+	target := filepath.Join(root, "sbom.spdx.json")
+	outside := filepath.Join(filepath.Dir(root), "outside-hardlink")
+	if err := os.Link(target, outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSignReadyTree(root, false); err == nil {
+		t.Fatal("release tree with an externally mutable hardlink was accepted")
+	}
+}
+
+func TestRootOnlyFrozenTreeProfile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration-tools")
+	t.Cleanup(func() { thawReleaseFixture(root) })
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "bin", "capture")
+	metadata := filepath.Join(root, "SHA256SUMS")
+	if err := os.WriteFile(executable, []byte("capture"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadata, []byte("hash"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	for path, mode := range map[string]os.FileMode{root: 0o500, filepath.Join(root, "bin"): 0o500, executable: 0o500, metadata: 0o400} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateFrozenTree(root, TreeModeProfileRootOnly, false); err != nil {
+		t.Fatalf("canonical root-only artifact was rejected: %v", err)
+	}
+	if err := ValidateFrozenTree(root, TreeModeProfilePublic, false); err == nil {
+		t.Fatal("root-only artifact was accepted as a public release")
+	}
+	if err := ValidateFrozenTree(root, "unknown", false); err == nil {
+		t.Fatal("unknown tree mode profile was accepted")
+	}
+}
+
+func TestManifestAndRequiredExecutableRejectPrivateExecutableMode(t *testing.T) {
+	root, manifest := makeRelease(t)
+	for index := range manifest.Files {
+		if manifest.Files[index].Path == "bin/runtime" {
+			manifest.Files[index].Mode = "0444"
+		}
+	}
+	if err := os.Chmod(filepath.Join(root, "bin", "runtime"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifest(filepath.Join(root, "manifest.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{RequiredPaths: []string{"bin/runtime"}}); err != nil {
+		t.Fatalf("canonical non-executable required file was rejected: %v", err)
+	}
+	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{RequiredExecutablePaths: []string{"bin/runtime"}}); err == nil {
+		t.Fatal("required executable with mode 0444 was accepted")
+	}
+
+	manifest.Files[0].Mode = "0700"
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("manifest accepted an umask-dependent 0700 file")
+	}
+}
+
 func TestVerifyRejectsSymlinkAndUnlistedFile(t *testing.T) {
 	root, manifest := makeRelease(t)
 	extra := filepath.Join(root, "unlisted")
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(extra, []byte("extra"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{ExpectedReleaseID: manifest.ReleaseID}); err == nil {
 		t.Fatal("unlisted release file was accepted")
 	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(extra); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(root, "bin", "runtime")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("../sbom.spdx.json", filepath.Join(root, "bin", "runtime")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "bin"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{}); err == nil {
@@ -234,22 +645,122 @@ func TestResolveActiveVerifiesProtectedPointerAndSignature(t *testing.T) {
 	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
 		t.Fatal(err)
 	}
-	if err := SignManifest(filepath.Join(target, "manifest.json"), filepath.Join(target, "manifest.sig"), privateKey, false); err != nil {
-		t.Fatal(err)
-	}
+	signTestRelease(t, target, filepath.Join(target, "manifest.sig"), privateKey)
 	pointer := filepath.Join(channel, "current.json")
 	if err := ActivateScoped(pointer, "release-one", ScopeRuntime, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime, RequiredPaths: []string{"bin/runtime"}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"}})
+	verified, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"}})
 	if err != nil || verified.Manifest.ReleaseID != "release-one" {
 		t.Fatalf("active release did not resolve: %+v err=%v", verified, err)
 	}
 	if err := os.WriteFile(pointer, []byte(`{"schema_version":1,"scope":"runtime","current":"release-one","activated_at":"broken"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime}); err == nil {
+	if _, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"}}); err == nil {
 		t.Fatal("corrupt release pointer was accepted")
+	}
+}
+
+func TestVerifiedActivationAndRollbackSupportHistoricalComponentVersions(t *testing.T) {
+	channel := t.TempDir()
+	releasesRoot := filepath.Join(channel, "releases")
+	if err := os.Mkdir(releasesRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
+	newRoot := makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 1, 1, 1, "")
+	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
+	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{oldRoot, newRoot} {
+		signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privateKey)
+	}
+	pointer := filepath.Join(channel, "current.json")
+	if err := ActivateScoped(pointer, "release-old", ScopeRuntime, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := ActivateVerified(releasesRoot, pointer, "release-new", publicKey, ResolveOptions{
+		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
+		RequiredComponents:  map[string]string{"workagent-runtime": "2.0.0"},
+		RequireCurrentMatch: true, ExpectedCurrentRelease: "release-old",
+	}, time.Now().UTC())
+	if err != nil || verified.Manifest.ReleaseID != "release-new" {
+		t.Fatalf("cross-version activation failed: release=%q err=%v", verified.Manifest.ReleaseID, err)
+	}
+	next, rolledBack, err := RollbackVerified(releasesRoot, pointer, publicKey, ResolveOptions{
+		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
+	}, time.Now().UTC())
+	if err != nil || next.Current != "release-old" || rolledBack.Manifest.ReleaseID != "release-old" {
+		t.Fatalf("cross-version rollback failed: pointer=%+v release=%q err=%v", next, rolledBack.Manifest.ReleaseID, err)
+	}
+	active, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{
+		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
+	})
+	if err != nil || active.Manifest.Components[0].Version != "1.0.0" {
+		t.Fatalf("signed historical release did not remain resolvable: %+v err=%v", active.Manifest, err)
+	}
+}
+
+func TestActivationAppliesNewConsumerContractOnlyToTarget(t *testing.T) {
+	channel := t.TempDir()
+	releasesRoot := filepath.Join(channel, "releases")
+	if err := os.Mkdir(releasesRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
+	newRoot := makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 1, 1, 1, "new-required.txt")
+	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
+	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{oldRoot, newRoot} {
+		signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privateKey)
+	}
+	pointer := filepath.Join(channel, "current.json")
+	if err := ActivateScoped(pointer, "release-old", ScopeRuntime, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ActivateVerified(releasesRoot, pointer, "release-new", publicKey, ResolveOptions{
+		Scope: ScopeRuntime, RequiredPaths: []string{"new-required.txt"}, RequiredExecutablePaths: []string{"bin/runtime"},
+		RequiredComponents:  map[string]string{"workagent-runtime": "2.0.0"},
+		RequireCurrentMatch: true, ExpectedCurrentRelease: "release-old",
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("target-only consumer expansion blocked activation from a valid historical release: %v", err)
+	}
+}
+
+func TestRollbackRejectsHistoricalReleaseThatCannotReadActiveData(t *testing.T) {
+	channel := t.TempDir()
+	releasesRoot := filepath.Join(channel, "releases")
+	if err := os.Mkdir(releasesRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
+	newRoot := makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 2, 1, 2, "")
+	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
+	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{oldRoot, newRoot} {
+		signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privateKey)
+	}
+	pointer := filepath.Join(channel, "current.json")
+	if err := ActivateScoped(pointer, "release-old", ScopeRuntime, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ActivateVerified(releasesRoot, pointer, "release-new", publicKey, ResolveOptions{
+		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
+		RequiredComponents:  map[string]string{"workagent-runtime": "2.0.0"},
+		RequireCurrentMatch: true, ExpectedCurrentRelease: "release-old",
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("forward-compatible upgrade failed: %v", err)
+	}
+	if _, _, err := RollbackVerified(releasesRoot, pointer, publicKey, ResolveOptions{
+		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
+	}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "restore is required") {
+		t.Fatalf("schema-incompatible historical rollback was accepted: %v", err)
 	}
 }
 
@@ -265,6 +776,43 @@ func TestRequiredProductionComponentsAreScoped(t *testing.T) {
 	combined := RequiredComponentsForScope(ScopeCombined)
 	if combined["aionui"] == "" || combined["cliproxyapi"] == "" {
 		t.Fatalf("combined scope is incomplete: %#v", combined)
+	}
+}
+
+func TestAdmissionBaselineBindsComponentSourceRevisionsAndControlBuild(t *testing.T) {
+	var runtimeComponents []Component
+	for _, component := range ProductionRuntimeComponentEvidence() {
+		runtimeComponents = append(runtimeComponents, component)
+	}
+	if err := ValidateAdmissionComponentBaseline(ScopeRuntime, testRevision, runtimeComponents); err != nil {
+		t.Fatalf("exact runtime component evidence rejected: %v", err)
+	}
+	runtimeComponents[0].SourceRevision = strings.Repeat("f", 64)
+	if err := ValidateAdmissionComponentBaseline(ScopeRuntime, testRevision, runtimeComponents); err == nil || !strings.Contains(err.Error(), "source revision") {
+		t.Fatalf("runtime source-revision drift was accepted: %v", err)
+	}
+
+	control := []Component{{Name: "workagent-control", Version: "git-111111111111", SourceRevision: testRevision}}
+	if err := ValidateAdmissionComponentBaseline(ScopePortal, testRevision, control); err != nil {
+		t.Fatalf("exact control-plane build evidence rejected: %v", err)
+	}
+	control[0].Version = "git-222222222222"
+	if err := ValidateAdmissionComponentBaseline(ScopePortal, testRevision, control); err == nil {
+		t.Fatal("control component version did not bind the release source revision")
+	}
+}
+
+func TestStrictAdmissionRequiresExternallyBoundSourceRevision(t *testing.T) {
+	root, _ := makeRelease(t)
+	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
+		RequiredExecutablePaths: []string{"bin/runtime"}, RequireAdmissionBaseline: true,
+	}); err == nil || !strings.Contains(err.Error(), "trusted executable") {
+		t.Fatalf("strict admission without an external source revision was accepted: %v", err)
+	}
+	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
+		ExpectedSourceRevision: strings.Repeat("2", 40), RequiredExecutablePaths: []string{"bin/runtime"}, RequireAdmissionBaseline: true,
+	}); err == nil || !strings.Contains(err.Error(), "trusted admission executable") {
+		t.Fatalf("strict admission accepted a manifest from another source revision: %v", err)
 	}
 }
 
@@ -294,8 +842,13 @@ func TestPreflightBindsActivationInputsAndExpires(t *testing.T) {
 	}
 	now := time.Unix(1_800_000_000, 0).UTC()
 	pointer := filepath.Join(evidenceRoot, "current.json")
+	inputs := makePreflightInputsFixture(t, root, evidenceRoot, portalConfig, tenantConfig)
 	notice := &MaintenanceNotice{ID: ExpectedMaintenanceNoticeID("release-one"), Message: MaintenanceNoticeMessage, PublishedAt: now.Add(-2 * time.Minute), ObservedAt: now}
-	report, err := NewPreflightReport("release-one", "release-zero", ScopeRuntime, pointer, filepath.Join(root, "manifest.json"), portalConfig, map[string]string{"tenant-one": tenantConfig}, notice, now)
+	contract, err := NewConsumerContract([]string{"sbom.spdx.json"}, []string{"bin/runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := NewPreflightReport("release-one", "release-zero", ScopeRuntime, pointer, inputs, contract, notice, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,16 +856,75 @@ func TestPreflightBindsActivationInputsAndExpires(t *testing.T) {
 	if err := WritePreflight(reportPath, report); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, filepath.Join(root, "manifest.json"), portalConfig, map[string]string{"tenant-one": tenantConfig}, now.Add(time.Minute), false); err != nil {
+	before, err := os.ReadFile(reportPath)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := WritePreflight(reportPath, report); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("immutable preflight report was overwritten: %v", err)
+	}
+	after, err := os.ReadFile(reportPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("failed overwrite changed the preflight report: %v", err)
+	}
+	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, inputs, contract, now.Add(time.Minute), false); err != nil {
+		t.Fatal(err)
+	}
+	driftedContract, err := NewConsumerContract([]string{"provenance.json"}, []string{"bin/runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, inputs, driftedContract, now.Add(time.Minute), false); err == nil {
+		t.Fatal("activation consumer contract changed after preflight without detection")
+	}
+	for name, path := range map[string]string{
+		"target signature": inputs.TargetSignaturePath,
+		"trusted key":      inputs.PublicKeyPath,
+		"backup config":    inputs.BackupConfigPath,
+		"backup key":       inputs.BackupKeyPath,
+		"brand config":     inputs.BrandConfigPath,
+		"brand asset":      inputs.BrandAssetPaths["logo"],
+		"policy config":    inputs.PolicyConfigPath,
+	} {
+		t.Run(name+" drift", func(t *testing.T) {
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("changed\n"), 0o400); err != nil {
+				t.Fatal(err)
+			}
+			if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, inputs, contract, now.Add(time.Minute), false); err == nil {
+				t.Fatalf("%s changed after preflight without detection", name)
+			}
+			if err := os.WriteFile(path, original, 0o400); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	alternateBackup := filepath.Join(evidenceRoot, "alternate-backup.json")
+	backupPayload, err := os.ReadFile(inputs.BackupConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alternateBackup, backupPayload, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	driftedInputs := inputs
+	driftedInputs.BackupConfigPath = alternateBackup
+	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, driftedInputs, contract, now.Add(time.Minute), false); err == nil {
+		t.Fatal("backup configuration path changed after preflight without detection")
 	}
 	if err := os.WriteFile(tenantConfig, []byte("changed"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, filepath.Join(root, "manifest.json"), portalConfig, map[string]string{"tenant-one": tenantConfig}, now.Add(time.Minute), false); err == nil {
+	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, inputs, contract, now.Add(time.Minute), false); err == nil {
 		t.Fatal("tenant configuration changed after preflight without detection")
 	}
-	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, filepath.Join(root, "manifest.json"), portalConfig, map[string]string{"tenant-one": tenantConfig}, now.Add(2*time.Hour), false); err == nil {
+	if err := os.WriteFile(tenantConfig, []byte("tenant"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPreflight(reportPath, "release-one", "release-zero", ScopeRuntime, pointer, inputs, contract, now.Add(2*time.Hour), false); err == nil {
 		t.Fatal("expired preflight was accepted")
 	}
 }
@@ -330,6 +942,11 @@ func TestPreflightRejectsStaleEarlyOrWrongMaintenanceNotice(t *testing.T) {
 	}
 	now := time.Unix(1_800_000_000, 0).UTC()
 	pointer := filepath.Join(evidenceRoot, "current.json")
+	inputs := makePreflightInputsFixture(t, root, evidenceRoot, portalConfig, tenantConfig)
+	contract, err := NewConsumerContract([]string{"sbom.spdx.json"}, []string{"bin/runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := MaintenanceNotice{ID: ExpectedMaintenanceNoticeID("release-one"), Message: MaintenanceNoticeMessage, PublishedAt: now.Add(-time.Minute), ObservedAt: now}
 	for name, mutate := range map[string]func(*MaintenanceNotice){
 		"published too late": func(value *MaintenanceNotice) { value.PublishedAt = now.Add(-59 * time.Second) },
@@ -340,7 +957,7 @@ func TestPreflightRejectsStaleEarlyOrWrongMaintenanceNotice(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			notice := base
 			mutate(&notice)
-			if _, err := NewPreflightReport("release-one", "release-zero", ScopeRuntime, pointer, filepath.Join(root, "manifest.json"), portalConfig, map[string]string{"tenant-one": tenantConfig}, &notice, now); err == nil {
+			if _, err := NewPreflightReport("release-one", "release-zero", ScopeRuntime, pointer, inputs, contract, &notice, now); err == nil {
 				t.Fatal("invalid maintenance notice was accepted")
 			}
 		})

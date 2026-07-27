@@ -22,6 +22,10 @@ func TestValidateTenantBinding(t *testing.T) {
 		Observability: config.ObservabilityPolicy{AuditRetentionDays: 365, AuditMinimumEvents: 1000},
 	}
 	releasesRoot := filepath.Join(root, "releases", "runtime", "releases")
+	portal.Renderer = config.RendererRelease{
+		ReleasesRoot: releasesRoot, PointerFile: filepath.Join(filepath.Dir(releasesRoot), "current.json"),
+		PublicKeyFile: filepath.Join(root, "trust", "release.pub"), Scope: "runtime", RelativeRoot: "static",
+	}
 	tenant := config.Tenant{
 		SchemaVersion: config.TenantSchemaVersion, TenantID: bindingTenant, RuntimeUser: "workagent_test", DataRoot: filepath.Join(root, "users", bindingTenant), SocketPath: filepath.Join(root, "run", bindingTenant+".sock"), SocketActivation: true, PortalUID: 991, PortalOrigin: "https://portal.example.test", Capacity: config.TenantCapacity{SlotDirectory: filepath.Join(root, "capacity"), MaxInstances: 3},
 		IdleReapSeconds: 900,
@@ -37,5 +41,10 @@ func TestValidateTenantBinding(t *testing.T) {
 	tenant.DataRoot = filepath.Join(root, "other")
 	if err := ValidateTenantBinding(portal, tenant); err == nil {
 		t.Fatal("foreign tenant data root was accepted")
+	}
+	tenant.DataRoot = filepath.Join(root, "users", bindingTenant)
+	tenant.Release.PublicKeyFile = filepath.Join(root, "trust", "other.pub")
+	if err := ValidateTenantBinding(portal, tenant); err == nil {
+		t.Fatal("tenant channel with a foreign release trust root was accepted")
 	}
 }

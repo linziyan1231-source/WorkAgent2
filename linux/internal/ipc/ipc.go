@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -128,15 +129,11 @@ func ListenerFromSystemd(expectedPeerUID uint32, expectedPath string) (*Authoriz
 	if err := validateSocketPath(expectedPath); err != nil {
 		return nil, err
 	}
-	pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
-	if err != nil || pid != os.Getpid() {
-		return nil, errors.New("LISTEN_PID does not identify this process")
+	fd, err := namedSystemdFD("workagent-userhost-socket")
+	if err != nil {
+		return nil, err
 	}
-	fds, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
-	if err != nil || fds != 1 {
-		return nil, errors.New("exactly one systemd socket is required")
-	}
-	file := os.NewFile(uintptr(3), "systemd-userhost-socket")
+	file := os.NewFile(uintptr(fd), "systemd-userhost-socket")
 	if file == nil {
 		return nil, errors.New("systemd socket descriptor is unavailable")
 	}
@@ -156,6 +153,35 @@ func ListenerFromSystemd(expectedPeerUID uint32, expectedPath string) (*Authoriz
 		return nil, err
 	}
 	return authorized, nil
+}
+
+func namedSystemdFD(expectedName string) (int, error) {
+	pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
+	if err != nil || pid != os.Getpid() {
+		return 0, errors.New("LISTEN_PID does not identify this process")
+	}
+	count, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
+	if err != nil || count < 1 || count > 8 {
+		return 0, errors.New("systemd descriptor count is invalid")
+	}
+	names := strings.Split(os.Getenv("LISTEN_FDNAMES"), ":")
+	if len(names) != count {
+		return 0, errors.New("systemd descriptor names are incomplete")
+	}
+	found := 0
+	for index, name := range names {
+		if name != expectedName {
+			continue
+		}
+		if found != 0 {
+			return 0, errors.New("systemd socket descriptor name is duplicated")
+		}
+		found = 3 + index
+	}
+	if found == 0 {
+		return 0, errors.New("named systemd socket descriptor is unavailable")
+	}
+	return found, nil
 }
 
 func DialContext(ctx context.Context, path string, options DialOptions) (net.Conn, error) {

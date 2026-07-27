@@ -54,10 +54,22 @@ and cleans every transient process and path; it never opens or modifies the
 production ChatForward profile:
 
 ```bash
-sudo /opt/workagent/control/admin/smoke-chatforward-browser-sandbox \
+read -r workagent_chatforward_smoke_id < /proc/sys/kernel/random/uuid
+sudo /usr/bin/systemd-run --quiet --wait --pipe --collect --service-type=exec \
+  --unit="workagent-chatforward-smoke-${workagent_chatforward_smoke_id}.service" \
+  --property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only' \
+  --property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only' \
+  --property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only' \
+  /usr/libexec/workagent-fixed-root-exec-v1 chatforward-smoke \
+  /opt/workagent/control/admin/smoke-chatforward-browser-sandbox \
   /opt/workagent/shared/chatforward \
   /usr/bin/google-chrome-stable
 ```
+
+The immutable `chatforward-smoke` profile admits only that exact Chrome 150
+path and command vector. While holding the catalog, control, and shared locks,
+it verifies both signed roots and their complete smoke consumer contract; it
+then releases only the catalog lock and supervises the smoke through exit.
 
 ## 3. One-time interactive ChatGPT login
 
@@ -65,11 +77,34 @@ Enable the bridge and browser units as part of normal host activation. The brows
 
 ```bash
 ssh -Y WORKAGENT_HOST
-sudo --preserve-env=DISPLAY,XAUTHORITY \
+read -r workagent_chatforward_login_id < /proc/sys/kernel/random/uuid
+workagent_chatforward_xauthority=${XAUTHORITY:-$HOME/.Xauthority}
+sudo /usr/bin/systemd-run --quiet --wait --pipe --collect --service-type=exec \
+  --unit="workagent-chatforward-login-${workagent_chatforward_login_id}.service" \
+  --setenv="DISPLAY=${DISPLAY}" \
+  --setenv="XAUTHORITY=${workagent_chatforward_xauthority}" \
+  --property=UMask=0077 \
+  --property=KillMode=control-group \
+  --property='OpenFile=/run/workagent/activation.lock:workagent-activation-lock:read-only' \
+  --property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only' \
+  --property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only' \
+  --property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only' \
+  /usr/libexec/workagent-fixed-root-exec-v1 chatforward-login \
   /opt/workagent/shared/chatforward/integration/login.sh
 ```
 
-The helper stops only the managed browser unit, transfers only the current X11 authorization cookie to a short-lived mode-`0600` file, and opens Chromium as `workagent-chatforward` with the production profile and extension. In that window:
+The closed `chatforward-login` profile requires the activation descriptor
+first, acquires it exclusively, and only then acquires catalog, control and
+shared locks. It verifies the signed control verifier/admin command and the
+exact signed shared login/readiness/Node/extension contract while all four
+lifecycle locks are held. The root supervisor retains every lock through child
+exit while passing only its activation open-file description to the login
+child for possession and journal-cleanliness verification. A fixed-root install,
+recovery, tenant activation or second login therefore cannot overlap the
+interactive browser or its managed service actions. Never run `login.sh`
+directly or remove/reorder the four `OpenFile` properties.
+
+Before touching either managed unit, the helper requires the supervisor's exact already-locked activation capability on descriptor 3 and asks the signed control command to authenticate that descriptor while proving both durable activation journals absent. It then closes its copy; the root supervisor retains the same locked open-file description through the entire interactive browser session and both service starts. The helper stops only the managed browser unit, transfers only the current X11 authorization cookie to a short-lived mode-`0600` file, and opens Chromium as `workagent-chatforward` with the production profile and extension. In that window:
 
 1. Confirm `ChatForward Source Bridge` version `0.16.0` appears on `chrome://extensions/`.
 2. Sign in to the intended ChatGPT account.

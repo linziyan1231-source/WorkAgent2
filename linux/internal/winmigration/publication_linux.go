@@ -374,12 +374,8 @@ func validatePublicationReport(report Report, expectedSource, expectedOutput str
 		report.LegacyUsagePolicy != "legacy quota limits and usage windows are retained only in the protected cutover override plan for explicit post-provision application" {
 		return errors.New("migration report security policies are invalid")
 	}
-	if !publicationFingerprintPattern.MatchString(report.SourcePortalSHA256) || !publicationFingerprintPattern.MatchString(report.SourcePortalWALSHA256) || !publicationFingerprintPattern.MatchString(report.SourcePortalSHMSHA256) || !publicationFingerprintPattern.MatchString(report.SourceCPAStateSHA256) || (report.SourceExternalManifestSHA256 != "" && !publicationFingerprintPattern.MatchString(report.SourceExternalManifestSHA256)) {
-		return errors.New("migration report source hashes are invalid")
-	}
-	recomputed, err := sourceFingerprint(report)
-	if err != nil || recomputed != report.SourceFingerprint {
-		return errors.New("migration report source fingerprint is not canonical")
+	if err := ValidateReportSourceFingerprint(report); err != nil {
+		return fmt.Errorf("migration report frozen source binding is invalid: %w", err)
 	}
 	seenTenant := make(map[string]bool, len(report.Tenants))
 	seenRuntime := make(map[string]bool, len(report.Tenants))

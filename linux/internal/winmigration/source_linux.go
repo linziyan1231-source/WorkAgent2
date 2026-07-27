@@ -23,6 +23,19 @@ import (
 
 const sourceResolveFlags = unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_XDEV
 
+func validateSnapshotRootMetadata(snapshotRoot string) error {
+	fd, err := openSnapshotRoot(snapshotRoot)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != 0 || stat.Gid != 0 || os.FileMode(stat.Mode).Perm() != 0o700 {
+		return errors.New("snapshot root must be an exact root:root 0700 real directory")
+	}
+	return nil
+}
+
 func openSnapshotRoot(snapshotRoot string) (int, error) {
 	resolved, err := filepath.EvalSymlinks(snapshotRoot)
 	if err != nil {

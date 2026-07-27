@@ -177,7 +177,60 @@ rehashes all files and pinned local inputs, validates the start journal and
 both evidence documents against the completion manifest, rejects unexpected
 entries, and matches the complete manifest before returning success.
 
+## Separate final-delta check
+
 After capture, keep Windows frozen while the offline migration dry run and
-completed stage verification consume this exact immutable snapshot. Do not
-activate Linux production or describe the cutover as final until those gates
-and the separate final-delta check pass.
+completed stage verification consume this exact immutable snapshot. Then run
+the separate final-delta mode against that same capture ID and destination:
+
+```bash
+capture_id=cutover-20260727t120000z
+/opt/workagent/migration-tools/bin/workagent-capture-windows \
+  --spec /root/private/workagent-final-capture.json \
+  --verify-final-delta \
+  --capture-id "$capture_id" \
+  --destination "/root/private/windows-captures/$capture_id" \
+  --windows-frozen \
+  --confirm "FINAL-WINDOWS-DELTA:$capture_id"
+```
+
+This is an independent read-only check, not a replay of `--capture` and not a
+substitute for the external freeze. Before opening any SSH channel, it:
+
+1. reopens the strict private spec and rehashes every pinned local input;
+2. requires the capture parent and completed capture to remain real,
+   root-owned private directories;
+3. strictly decodes and stably hashes the exact `capture-manifest.json` bytes;
+4. revalidates the start journal, before/after evidence, every captured file,
+   directory and admitted symbolic link, the complete stored layout, and the
+   aggregate; and
+5. rereads the spec, local inputs, and manifest so a change during local
+   verification fails before Windows is contacted.
+
+Only after all local checks pass does it collect two new Windows inventories
+and anonymous OAuth evidence sets through the fixed read-only SSH protocol.
+The two collections must match each other and must exactly equal both the
+capture's before and after evidence, including source identity/content/archive
+projections, each approved-exclusion digest, OAuth count/bytes/digest, source
+cardinality, and aggregate. It then repeats the complete local capture gate and
+requires the exact same binding before reporting success, so local capture or
+input drift during the remote window also fails closed. The mode never streams
+tar data and has no Windows mutation capability.
+
+Success is the anonymous `complete-frozen-final-delta` JSON report. It binds
+the capture ID, private spec digest, exact completion-manifest digest, original
+capture completion time, verification completion time, source count,
+aggregate, and anonymous OAuth summary; it contains no Windows paths, tenant
+leaves, exclusion paths, or OAuth filenames. Re-running the command performs a
+new offline verification and two new Windows reads; a previous success is
+never treated as cached evidence.
+
+The local-only Go API
+`wincapture.VerifyCompletedCapture(wincapture.CompletedCaptureOptions{...})`
+exposes the verified capture ID, spec digest, exact manifest digest, original
+completion time, and aggregate for later private migration evidence. It
+performs the same complete local integrity gate and cannot contact Windows.
+
+Do not activate Linux production or describe the cutover as final until the
+offline migration gates and this separate final-delta check pass while the
+Windows freeze is still in force.

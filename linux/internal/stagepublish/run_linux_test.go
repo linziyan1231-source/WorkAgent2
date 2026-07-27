@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/winmigration"
@@ -17,28 +18,39 @@ type stoppedController struct {
 	seen     map[string]bool
 }
 
-func TestValidateTenantDropInNamespaceRejectsSocketAndTemplateOverrides(t *testing.T) {
+func TestValidateTenantDropInNamespaceUsesExactTopLevelAllowlist(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("production systemd ownership fixture requires root")
 	}
 	tenantID := "11111111-1111-4111-8111-111111111111"
 	wanted := map[string]bool{tenantID + ".json": true}
-	for _, name := range []string{
-		"workagent-userhost@" + tenantID + ".socket.d",
-		"workagent-userhost@.service.d",
-		"workagent-userhost@-.service.d",
+	for _, attack := range []struct {
+		name    string
+		regular bool
+	}{
+		{name: "workagent-userhost@" + tenantID + ".socket.d"},
+		{name: "workagent-userhost@.service.d"},
+		{name: "workagent-userhost@-.service.d"},
+		{name: "workagent-userhost@" + tenantID + ".service", regular: true},
+		{name: "workagent-userhost@" + tenantID + ".service.wants"},
+		{name: "workagent-userhost@" + tenantID + ".service.requires"},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(attack.name, func(t *testing.T) {
 			root := t.TempDir()
 			if err := os.Chmod(root, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Mkdir(filepath.Join(root, name), 0o755); err != nil {
+			path := filepath.Join(root, attack.name)
+			if attack.regular {
+				if err := os.WriteFile(path, []byte("[Unit]\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Mkdir(path, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			r := runner{layout: layout{systemdRoot: root}}
 			if err := r.validateTenantDropInNamespace(wanted); err == nil {
-				t.Fatalf("unexpected UserHost drop-in %q was accepted", name)
+				t.Fatalf("unexpected UserHost top-level entry %q was accepted", attack.name)
 			}
 		})
 	}
@@ -46,6 +58,11 @@ func TestValidateTenantDropInNamespaceRejectsSocketAndTemplateOverrides(t *testi
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for _, template := range []string{"workagent-userhost@.service", "workagent-userhost@.socket"} {
+		if err := os.WriteFile(filepath.Join(root, template), []byte("[Unit]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	approved := filepath.Join(root, "workagent-userhost@"+tenantID+".service.d")
 	if err := os.Mkdir(approved, 0o755); err != nil {
@@ -70,7 +87,12 @@ func (c *stoppedController) Properties(_ context.Context, unit string, _ ...stri
 	if value, ok := c.override[unit]; ok {
 		return value, nil
 	}
-	return map[string]string{"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead", "MainPID": "0", "ControlPID": "0"}, nil
+	unitFileState := "disabled"
+	if unit == "workagent-backup.service" || unit == "workagent-healthcheck.service" || unit == "workagent-tenant-catalog-ready.target" || unit == "workagent-tenant-config-reconcile.service" ||
+		(strings.HasPrefix(unit, "workagent-userhost@") && strings.HasSuffix(unit, ".service")) {
+		unitFileState = "static"
+	}
+	return map[string]string{"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead", "MainPID": "0", "ControlPID": "0", "UnitFileState": unitFileState}, nil
 }
 func (*stoppedController) Action(context.Context, ...string) error {
 	return errors.New("unexpected action")
@@ -85,16 +107,22 @@ func TestRequireUnitsStoppedIncludesEveryDiscoveredAndReportedInstance(t *testin
 	if err := requireUnitsStopped(context.Background(), controller, verified, discovered); err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"caddy.service", "cliproxyapi.service", "workagent-portal.service", "workagent-userhost@" + tenantID + ".socket", "workagent-userhost@" + otherID + ".service"} {
+	for _, required := range []string{"caddy.service", "cliproxyapi.service", "workagent-portal.service", "workagent-tenant-catalog-ready.target", "workagent-tenant-config-reconcile.service", "workagent-userhost@" + tenantID + ".socket", "workagent-userhost@" + otherID + ".service"} {
 		if !controller.seen[required] {
 			t.Fatalf("required unit %s was not checked", required)
 		}
 	}
 	controller.override = map[string]map[string]string{
-		"workagent-userhost@" + otherID + ".service": {"LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": "99", "ControlPID": "0"},
+		"workagent-userhost@" + otherID + ".service": {"LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": "99", "ControlPID": "0", "UnitFileState": "static"},
 	}
 	if err := requireUnitsStopped(context.Background(), controller, verified, discovered); err == nil {
 		t.Fatal("active discovered UserHost instance was accepted")
+	}
+	controller.override = map[string]map[string]string{
+		"workagent-portal.service": {"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead", "MainPID": "0", "ControlPID": "0", "UnitFileState": "enabled"},
+	}
+	if err := requireUnitsStopped(context.Background(), controller, verified, discovered); err == nil {
+		t.Fatal("enabled future boot entrypoint was accepted")
 	}
 }
 

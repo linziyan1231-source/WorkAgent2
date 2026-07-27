@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/wincapture"
 	_ "modernc.org/sqlite"
 )
 
@@ -32,12 +34,13 @@ type migrationFixture struct {
 }
 
 func TestMigrationEndToEnd(t *testing.T) {
+	requireRootMigrationFixture(t)
 	fixture := createMigrationFixture(t)
 
 	withoutManifest := fixture.options
 	withoutManifest.ExternalWorkspaceManifest = ""
 	withoutManifest.DryRun = true
-	if _, err := Migrate(context.Background(), withoutManifest); err == nil || !strings.Contains(err.Error(), "without an exact external-workspace mapping") {
+	if _, err := Migrate(context.Background(), withoutManifest); err == nil || !strings.Contains(err.Error(), "exactly <snapshot-root>/external-workspaces.json") {
 		t.Fatalf("missing manifest error = %v", err)
 	}
 
@@ -47,7 +50,9 @@ func TestMigrationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	if planned.Status != "planned" || planned.Portal.Users != 1 || planned.Portal.InvalidatedSessions != 1 || planned.Portal.InvalidatedOAuthStates != 1 {
+	if planned.SchemaVersion != 3 || planned.Status != "planned" || planned.CaptureID != filepath.Base(fixture.options.SnapshotRoot) ||
+		planned.CaptureSpecSHA256 == "" || planned.CaptureManifestSHA256 == "" || planned.CaptureCompletedAt.IsZero() ||
+		planned.Portal.Users != 1 || planned.Portal.InvalidatedSessions != 1 || planned.Portal.InvalidatedOAuthStates != 1 {
 		t.Fatalf("unexpected dry-run report: %+v", planned)
 	}
 	if _, err := os.Lstat(fixture.options.StagingDir); !errors.Is(err, os.ErrNotExist) {
@@ -89,9 +94,25 @@ func TestMigrationEndToEnd(t *testing.T) {
 	if resultAgain.OutputFingerprint != complete.OutputFingerprint || resultAgain.SourceFingerprint != complete.SourceFingerprint {
 		t.Fatal("idempotent rerun returned different fingerprints")
 	}
+	detached := complete
+	detached.CaptureSpecSHA256 = ""
+	detached.SourceFingerprint, err = sourceFingerprint(detached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePublicationReport(detached, detached.SourceFingerprint, detached.OutputFingerprint); err == nil {
+		t.Fatal("publication accepted a report detached from its frozen capture spec")
+	}
+	if err := writePrivateJSON(filepath.Join(fixture.options.StagingDir, "report.json"), detached); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Migrate(context.Background(), fixture.options); err == nil || !strings.Contains(err.Error(), "does not match this migration plan") {
+		t.Fatalf("stage replay accepted an unbound migration report: %v", err)
+	}
 }
 
 func TestMigrationIncludesUncheckpointedPortalWALAndArchivesExactTrio(t *testing.T) {
+	requireRootMigrationFixture(t)
 	fixture := createMigrationFixture(t)
 	snapshotPath := filepath.Join(fixture.options.SnapshotRoot, filepath.FromSlash(sourcePortalRelative))
 	installUncheckpointedPortalWALFixture(t, snapshotPath, fixture.sid)
@@ -147,6 +168,7 @@ func TestMigrationIncludesUncheckpointedPortalWALAndArchivesExactTrio(t *testing
 }
 
 func TestPlanRequiresCompletePortalSQLiteTrioAndCleansWorkingCopy(t *testing.T) {
+	requireRootMigrationFixture(t)
 	for _, missing := range []string{sourcePortalWALRelative, sourcePortalSHMRelative} {
 		t.Run(filepath.Base(missing), func(t *testing.T) {
 			fixture := createMigrationFixture(t)
@@ -262,6 +284,7 @@ func slicesEqual(first, second []string) bool {
 }
 
 func TestPlanRejectsUnsafeTenantEntries(t *testing.T) {
+	requireRootMigrationFixture(t)
 	t.Run("unapproved symlink", func(t *testing.T) {
 		fixture := createMigrationFixture(t)
 		if err := os.Symlink("/etc/passwd", filepath.Join(fixture.tenantSource, "bad-link")); err != nil {
@@ -297,6 +320,13 @@ func TestPlanRejectsUnsafeTenantEntries(t *testing.T) {
 			t.Fatalf("public manifest error = %v", err)
 		}
 	})
+}
+
+func requireRootMigrationFixture(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("production snapshot ownership requires the root test pass")
+	}
 }
 
 func createMigrationFixture(t *testing.T) migrationFixture {
@@ -376,12 +406,24 @@ func createMigrationFixture(t *testing.T) migrationFixture {
 	}
 	manifestPath := filepath.Join(snapshot, "external-workspaces.json")
 	writeJSONFixture(t, manifestPath, manifest, 0o600)
+	captureSpec := filepath.Join(root, "capture-private", "capture-spec.json")
 	return migrationFixture{
-		options: Options{SnapshotRoot: snapshot, StagingDir: stage, TenantDataRoot: "/srv/workagent/users", ExternalWorkspaceManifest: manifestPath},
-		sid:     sid, tenantSource: tenantSource, externalWindowsPath: externalWindowsPath, externalCapture: externalCapture,
+		options: Options{
+			SnapshotRoot: snapshot, CaptureSpec: captureSpec, StagingDir: stage, TenantDataRoot: "/srv/workagent/users",
+			ExternalWorkspaceManifest: manifestPath, verifyCompletedCapture: migrationFixtureCaptureVerifier,
+		},
+		sid: sid, tenantSource: tenantSource, externalWindowsPath: externalWindowsPath, externalCapture: externalCapture,
 		manifestPath: manifestPath, codexSecret: codexSecret, kimiSecret: kimiSecret, messageWindowsText: messageWindowsText,
 		externalFileContents: externalFileContents,
 	}
+}
+
+func migrationFixtureCaptureVerifier(options wincapture.CompletedCaptureOptions) (wincapture.CompletedCaptureBinding, error) {
+	return wincapture.CompletedCaptureBinding{
+		SchemaVersion: 1, CaptureID: filepath.Base(options.Destination),
+		SpecSHA256: strings.Repeat("a", 64), CaptureManifestSHA256: strings.Repeat("b", 64),
+		CompletedAt: time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC),
+	}, nil
 }
 
 func createPortalFixture(t *testing.T, target, sid string) {

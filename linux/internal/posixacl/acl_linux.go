@@ -43,6 +43,48 @@ func VerifyExclusiveUserPermissions(path string, uid uint32, expected os.FileMod
 	return verifyExclusiveUserPermissions(payload, uid, expected)
 }
 
+// VerifyExclusiveUserPermissionsFD is the descriptor-bound form used while a
+// transaction inode is still anonymous.
+func VerifyExclusiveUserPermissionsFD(fd int, uid uint32, expected os.FileMode) error {
+	payload, err := readAccessACLFD(fd)
+	if err != nil {
+		return err
+	}
+	return verifyExclusiveUserPermissions(payload, uid, expected)
+}
+
+// SetExclusiveUserPermissionsFD installs the canonical WorkAgent file ACL on
+// an already-open descriptor. Descriptor-based authoring lets callers finish
+// an anonymous O_TMPFILE inode before making any pathname visible.
+func SetExclusiveUserPermissionsFD(fd int, uid uint32, permissions os.FileMode) error {
+	if fd < 0 || uid == aclUndefinedID || permissions.Perm()&^os.FileMode(0o7) != 0 {
+		return errors.New("POSIX ACL descriptor, user, or permissions are invalid")
+	}
+	payload := make([]byte, 4+5*8)
+	binary.LittleEndian.PutUint32(payload[:4], aclXattrVersion)
+	entries := []struct {
+		tag        uint16
+		permission uint16
+		id         uint32
+	}{
+		{aclUserObjTag, 0o6, aclUndefinedID},
+		{aclUserTag, uint16(permissions.Perm()), uid},
+		{aclGroupObjTag, 0o4, aclUndefinedID},
+		{aclMaskTag, uint16(permissions.Perm()), aclUndefinedID},
+		{aclOtherTag, 0, aclUndefinedID},
+	}
+	for index, entry := range entries {
+		offset := 4 + index*8
+		binary.LittleEndian.PutUint16(payload[offset:offset+2], entry.tag)
+		binary.LittleEndian.PutUint16(payload[offset+2:offset+4], entry.permission)
+		binary.LittleEndian.PutUint32(payload[offset+4:offset+8], entry.id)
+	}
+	if err := unix.Fsetxattr(fd, "system.posix_acl_access", payload, 0); err != nil {
+		return fmt.Errorf("set exclusive POSIX ACL: %w", err)
+	}
+	return nil
+}
+
 func verifyExclusiveUserPermissions(payload []byte, uid uint32, expected os.FileMode) error {
 	parsed, err := parseAccessACL(payload)
 	if err != nil {
@@ -91,6 +133,28 @@ func readAccessACL(path string) ([]byte, error) {
 	}
 	if read != size {
 		return nil, errors.New("POSIX ACL changed while it was read")
+	}
+	return payload, nil
+}
+
+func readAccessACLFD(fd int) ([]byte, error) {
+	if fd < 0 {
+		return nil, errors.New("POSIX ACL descriptor is invalid")
+	}
+	size, err := unix.Fgetxattr(fd, "system.posix_acl_access", nil)
+	if err != nil {
+		return nil, fmt.Errorf("read POSIX ACL descriptor size: %w", err)
+	}
+	if size < 4 || size > 64*1024 {
+		return nil, errors.New("POSIX ACL descriptor has an invalid size")
+	}
+	payload := make([]byte, size)
+	read, err := unix.Fgetxattr(fd, "system.posix_acl_access", payload)
+	if err != nil {
+		return nil, fmt.Errorf("read POSIX ACL descriptor: %w", err)
+	}
+	if read != size {
+		return nil, errors.New("POSIX ACL descriptor changed while it was read")
 	}
 	return payload, nil
 }

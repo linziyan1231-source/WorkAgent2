@@ -3,6 +3,8 @@ package cliproxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,9 +12,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/modelbootstrap"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/winmigration"
 )
@@ -27,18 +31,25 @@ func migrationTestReportAndPlan(t *testing.T) (winmigration.Report, migrationQuo
 	usage := json.RawMessage(fmt.Sprintf(`{"daily":{"total_usd":1.25,"window_start":%q,"input_tokens":10,"call_count":2},"weekly":{"total_usd":2.5,"window_start":%q,"input_tokens":20,"call_count":3},"by_alias":{"gpt-5.6-sol":{"daily":{"total_usd":1.25,"window_start":%q,"input_tokens":10,"call_count":2},"weekly":{"total_usd":2.5,"window_start":%q,"input_tokens":20,"call_count":3}}}}`, dailyStart, weeklyStart, dailyStart, weeklyStart))
 	report := winmigration.Report{
 		SchemaVersion: winmigration.ReportSchemaVersion, Status: "complete",
-		SourceFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		OutputFingerprint: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		TenantDataRoot:    "/srv/workagent/users", Portal: winmigration.PortalReport{Users: 1},
+		CaptureID:         "capture-20260728",
+		CaptureSpecSHA256: repeatTest("a", 64), CaptureManifestSHA256: repeatTest("b", 64),
+		CaptureCompletedAt: time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC),
+		SourcePortalSHA256: repeatTest("c", 64), SourcePortalWALSHA256: repeatTest("d", 64),
+		SourcePortalSHMSHA256: repeatTest("e", 64), SourceCPAStateSHA256: repeatTest("f", 64),
+		SourceExternalManifestSHA256: repeatTest("0", 64),
+		OutputFingerprint:            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		TenantDataRoot:               "/srv/workagent/users", Portal: winmigration.PortalReport{Users: 1},
 		Tenants: []winmigration.TenantReport{{
 			Username: "alice", TenantID: migrationTestTenant, RuntimeUser: "workagent_alice",
-			DataRoot: "/srv/workagent/users/" + migrationTestTenant,
+			DataRoot: "/srv/workagent/users/" + migrationTestTenant, SourceTreeSHA256: repeatTest("1", 64),
+			ExternalWorkspaces: []winmigration.ExternalWorkspaceReport{{SourcePathSHA256: repeatTest("2", 64), SourceTreeSHA256: repeatTest("3", 64)}},
 			QuotaOverrides: []winmigration.QuotaOverrideReport{
 				{Provider: "codex", NewKeyID: ids.CodexKeyID, DailyLimitUSD: "20", WeeklyLimitUSD: "40"},
 				{Provider: "kimi", NewKeyID: ids.KimiKeyID, DailyLimitUSD: "10", WeeklyLimitUSD: "30"},
 			},
 		}},
 	}
+	report.SourceFingerprint = migrationTestSourceFingerprint(t, report)
 	plan := migrationQuotaPlan{
 		SchemaVersion: migrationPlanSchemaVersion, SourceFingerprint: report.SourceFingerprint,
 		ApplyAfter: migrationApplyAfter, KeyPolicy: migrationKeyPolicy,
@@ -48,6 +59,37 @@ func migrationTestReportAndPlan(t *testing.T) (winmigration.Report, migrationQuo
 		},
 	}
 	return report, plan
+}
+
+func migrationTestSourceFingerprint(t *testing.T, report winmigration.Report) string {
+	t.Helper()
+	payload, err := json.Marshal(struct {
+		SchemaVersion                int
+		CaptureID                    string
+		CaptureSpecSHA256            string
+		CaptureManifestSHA256        string
+		CaptureCompletedAt           time.Time
+		SourcePortalSHA256           string
+		SourcePortalWALSHA256        string
+		SourcePortalSHMSHA256        string
+		SourceCPAStateSHA256         string
+		SourceExternalManifestSHA256 string
+		TenantDataRoot               string
+		Portal                       winmigration.PortalReport
+		Tenants                      []winmigration.TenantReport
+	}{
+		SchemaVersion: report.SchemaVersion, CaptureID: report.CaptureID,
+		CaptureSpecSHA256: report.CaptureSpecSHA256, CaptureManifestSHA256: report.CaptureManifestSHA256,
+		CaptureCompletedAt: report.CaptureCompletedAt, SourcePortalSHA256: report.SourcePortalSHA256,
+		SourcePortalWALSHA256: report.SourcePortalWALSHA256, SourcePortalSHMSHA256: report.SourcePortalSHMSHA256,
+		SourceCPAStateSHA256: report.SourceCPAStateSHA256, SourceExternalManifestSHA256: report.SourceExternalManifestSHA256,
+		TenantDataRoot: report.TenantDataRoot, Portal: report.Portal, Tenants: report.Tenants,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
 }
 
 func TestValidateMigrationPlanBindsEveryDeterministicKey(t *testing.T) {
@@ -63,6 +105,14 @@ func TestValidateMigrationPlanBindsEveryDeterministicKey(t *testing.T) {
 	broken.Overrides[0].NewKeyID = "legacy-tenant-chatgpt"
 	if err := validateMigrationReportAndPlan(report, &broken); err == nil {
 		t.Fatal("non-deterministic key id was accepted")
+	}
+	detachedReport := report
+	detachedReport.CaptureManifestSHA256 = ""
+	detachedReport.SourceFingerprint = migrationTestSourceFingerprint(t, detachedReport)
+	detachedPlan := plan
+	detachedPlan.SourceFingerprint = detachedReport.SourceFingerprint
+	if err := validateMigrationReportAndPlan(detachedReport, &detachedPlan); err == nil {
+		t.Fatal("CLIProxy cutover accepted a report detached from its frozen capture manifest")
 	}
 }
 
@@ -310,6 +360,113 @@ func TestValidatedCLIProxyMigrationLockExcludesConcurrentStart(t *testing.T) {
 	}
 	if _, err := acquireValidatedCLIProxyMigrationLock(path, 65534); err == nil {
 		t.Fatal("symlinked cutover lock was accepted")
+	}
+}
+
+func TestValidatedCLIProxyMigrationSharedLockIsReadOnlyAndExcludesApply(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root ownership fixture requires root")
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "cliproxy-migration.lock")
+	if err := os.WriteFile(path, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, 0, 65534); err != nil || os.Chmod(path, 0o640) != nil {
+		t.Fatal("prepare group-owned lock")
+	}
+	first, err := acquireValidatedCLIProxyMigrationLockOperation(path, 65534, unix.LOCK_SH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	flags, err := unix.FcntlInt(first.Fd(), unix.F_GETFL, 0)
+	if err != nil || flags&unix.O_ACCMODE != unix.O_RDONLY {
+		t.Fatalf("shared migration descriptor is not read-only: flags=%#x err=%v", flags, err)
+	}
+	second, err := acquireValidatedCLIProxyMigrationLockOperation(path, 65534, unix.LOCK_SH)
+	if err != nil {
+		t.Fatalf("concurrent shared migration verifier was rejected: %v", err)
+	}
+	if _, err := acquireValidatedCLIProxyMigrationLock(path, 65534); err == nil {
+		t.Fatal("offline apply acquired migration EX while live migration readers held SH")
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := acquireValidatedCLIProxyMigrationLock(path, 65534)
+	if err != nil {
+		t.Fatalf("offline apply remained blocked after live readers exited: %v", err)
+	}
+	if err := apply.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidatedCLIProxyMigrationLockRejectsMetadataAndPathReplacement(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root ownership fixture requires root")
+	}
+	for name, mutate := range map[string]func(string) error{
+		"mode":     func(path string) error { return os.Chmod(path, 0o660) },
+		"owner":    func(path string) error { return os.Chown(path, 0, 65533) },
+		"nonempty": func(path string) error { return os.WriteFile(path, []byte("x"), 0o640) },
+		"hardlink": func(path string) error { return os.Link(path, path+".link") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Chmod(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "cliproxy-migration.lock")
+			if err := os.WriteFile(path, nil, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(path, 0, 65534); err != nil || os.Chmod(path, 0o640) != nil {
+				t.Fatal("prepare group-owned lock")
+			}
+			if err := mutate(path); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := acquireValidatedCLIProxyMigrationLockOperation(path, 65534, unix.LOCK_SH); err == nil {
+				t.Fatal("unsafe migration lock metadata was accepted")
+			}
+		})
+	}
+
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "cliproxy-migration.lock")
+	if err := os.WriteFile(path, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, 0, 65534); err != nil || os.Chmod(path, 0o640) != nil {
+		t.Fatal("prepare group-owned lock")
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	if err := os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, 0, 65534); err != nil || os.Chmod(path, 0o640) != nil {
+		t.Fatal("prepare replacement group-owned lock")
+	}
+	if err := validateCLIProxyMigrationLockFD(fd, path, 65534, true); err == nil || !strings.Contains(err.Error(), "opened inode") {
+		t.Fatalf("replaced migration lock pathname was accepted: %v", err)
 	}
 }
 

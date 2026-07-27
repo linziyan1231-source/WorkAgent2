@@ -114,6 +114,78 @@ func TestLockRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestAcquireExclusiveExistingIdentityPinsPrivateEmptyInode(t *testing.T) {
+	makeLock := func(t *testing.T) (string, uint32, uint32) {
+		t.Helper()
+		root := t.TempDir()
+		uid, gid := privateTestIdentity(t, root)
+		path := filepath.Join(root, ".runtime.lock")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chown(path, int(uid), int(gid)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path, uid, gid
+	}
+	t.Run("exact", func(t *testing.T) {
+		path, uid, gid := makeLock(t)
+		lock, err := AcquireExclusiveExistingIdentity(path, uid, gid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lock.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("active", func(t *testing.T) {
+		path, uid, gid := makeLock(t)
+		fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.Close(fd)
+		if err := syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := AcquireExclusiveExistingIdentity(path, uid, gid); err == nil {
+			t.Fatal("offline identity lock waited through an active service")
+		}
+	})
+	for _, kind := range []string{"content", "hardlink", "mode", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			path, uid, gid := makeLock(t)
+			switch kind {
+			case "content":
+				if err := os.WriteFile(path, []byte("not empty"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				if err := os.Link(path, path+".second-name"); err != nil {
+					t.Fatal(err)
+				}
+			case "mode":
+				if err := os.Chmod(path, 0o640); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Rename(path, path+".target"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Base(path)+".target", path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := AcquireExclusiveExistingIdentity(path, uid, gid); err == nil {
+				t.Fatalf("unsafe %s offline lock was accepted", kind)
+			}
+		})
+	}
+}
+
 func mustStat(t *testing.T, path string) *syscall.Stat_t {
 	t.Helper()
 	info, err := os.Stat(path)

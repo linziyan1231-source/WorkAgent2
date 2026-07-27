@@ -19,6 +19,7 @@ import (
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/admin"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/portal"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/productconfig"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/safelog"
@@ -37,6 +38,11 @@ func main() {
 	if configPath == "" {
 		logger.Fatal("--config is required")
 	}
+	guards, err := lifecyclelock.AdoptSystemdRuntimeGuards()
+	if err != nil {
+		logger.Fatal(err)
+	}
+	defer guards.Close()
 	cfg, err := config.LoadPortal(configPath)
 	if err != nil {
 		logger.Fatal(err)
@@ -44,7 +50,16 @@ func main() {
 	if err := cfg.ValidateProductionLayout(configPath); err != nil {
 		logger.Fatal(err)
 	}
+	if !cfg.Renderer.Configured() {
+		logger.Fatal("the production Renderer release channel is required")
+	}
+	if err := guards.ValidateChannel(cfg.Renderer.ReleasesRoot, cfg.Renderer.PointerFile); err != nil {
+		logger.Fatal(err)
+	}
 	if err := admin.VerifyPortalFiles(cfg, configPath); err != nil {
+		logger.Fatal(err)
+	}
+	if err := admin.AssertTenantFileCatalogClean(cfg); err != nil {
 		logger.Fatal(err)
 	}
 	serviceContext, cancelServiceCheck := context.WithTimeout(context.Background(), 10*time.Second)
@@ -74,8 +89,23 @@ func main() {
 		logger.Fatal(err)
 	}
 	defer data.Close()
+	identityContext, cancelIdentityCheck := context.WithTimeout(context.Background(), 30*time.Second)
+	identityErr := admin.VerifyLiveTenantIdentityCatalog(identityContext, cfg, data)
+	cancelIdentityCheck()
+	if identityErr != nil {
+		logger.Fatal(identityErr)
+	}
+	activationContext, cancelActivationCheck := context.WithTimeout(context.Background(), 2*time.Minute)
+	activationErr := admin.VerifyLiveTenantActivationCatalog(activationContext, cfg, data, nil)
+	cancelActivationCheck()
+	if activationErr != nil {
+		logger.Fatal(activationErr)
+	}
 	application, err := portal.New(cfg, data, brand, policy, logger)
 	if err != nil {
+		logger.Fatal(err)
+	}
+	if err := guards.ReleaseCatalog(); err != nil {
 		logger.Fatal(err)
 	}
 	listener, cleanup, err := listen(cfg.Listener)

@@ -19,7 +19,7 @@ time and an externally retained decision/reference. It must cover, at minimum:
 | control | WorkAgent2 source, embedded assets, Go modules, configuration and documentation shipped in `/opt/workagent/control` |
 | runtime | AionUi `.21` and its Windows `.20` reference material, AionCore `.10`, Renderer, `@noble/hashes`, Codex, Kimi Code, Python and every packaged transitive dependency/asset |
 | shared | CLIProxyAPI, `per-key-models.4`, `cpa-key-policy`, ChatForward, extension, Node.js, `ws` and every packaged transitive dependency/asset |
-| migration | the separately distributed offline Windows migration tool and any copied compatibility material |
+| migration | the separately distributed offline Windows capture and migration tools and any copied compatibility material |
 
 The generated `licenses.review.json` is a private, deliberately unapproved
 draft. An authorized reviewer must provide one real SPDX expression and

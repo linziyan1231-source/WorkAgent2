@@ -48,4 +48,4 @@ go vet ./...
 scripts/audit-tree.sh
 ```
 
-`scripts/source-gate.sh` 还会固定运行 ShellCheck 0.11.0、Gitleaks 8.28.0、Syft 1.29.0 和 govulncheck 1.6.0，生成十个在线控制面二进制（包含受签名根管控、仅由 root 显式运行的 `workagent-import-stage`）、健康检查 helper、独立离线迁移工具、SPDX 和校验记录。真实发布随后必须通过 `workagent-release` 的许可证审批报告、可复现 provenance、Ed25519 签名、数据 schema 兼容性、预检和备份门禁；具体流程见 [发布证据](docs/RELEASE_EVIDENCE.md)。
+`scripts/source-gate.sh` 默认运行 `quality` 模式，固定执行 ShellCheck 0.11.0、Gitleaks 8.28.0、Syft 1.29.0 和 govulncheck 1.6.0，但不生成可发布 payload。只有 CI 中在同一 revision 的 quality job 通过后、从全新主机执行的最终 `verify` artifact job，才会生成十个在线控制面二进制（包含受签名根管控、仅由 root 显式运行的 `workagent-import-stage`）、健康检查 helper、独立离线迁移工具、SPDX 和校验记录。本地 artifact 模式产物只能用于演练，不是生产授权。真实发布随后必须通过 `workagent-release` 的许可证审批报告、可复现 provenance、Ed25519 签名、数据 schema 兼容性、预检和备份门禁；具体流程见 [发布证据](docs/RELEASE_EVIDENCE.md)。

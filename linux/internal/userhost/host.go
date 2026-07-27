@@ -116,16 +116,16 @@ func New(cfg config.Tenant, listener net.Listener, logger *log.Logger) (*Host, e
 			_ = runtimeLock.Close()
 		}
 	}()
-	requiredPaths := []string{cfg.Backend.Executable}
-	requiredPaths = append(requiredPaths, cfg.Backend.RequiredReleaseFiles...)
+	requiredPaths := append([]string(nil), cfg.Backend.RequiredReleaseFiles...)
+	requiredExecutables := []string{cfg.Backend.Executable}
 	if cfg.Backend.Migration.Enabled {
-		requiredPaths = append(requiredPaths, cfg.Backend.Migration.Executable)
+		requiredExecutables = append(requiredExecutables, cfg.Backend.Migration.Executable)
 	}
 	if cfg.Backend.AgentCLI.BinDirectory != "" {
-		requiredPaths = append(requiredPaths, cfg.Backend.AgentCLI.CodexExecutable, cfg.Backend.AgentCLI.KimiExecutable, cfg.Backend.AgentCLI.PythonExecutable)
+		requiredExecutables = append(requiredExecutables, cfg.Backend.AgentCLI.CodexExecutable, cfg.Backend.AgentCLI.KimiExecutable, cfg.Backend.AgentCLI.PythonExecutable)
 	}
 	verifiedRelease, err := release.ResolveActive(cfg.Release.ReleasesRoot, cfg.Release.PointerFile, cfg.Release.PublicKeyFile, release.ResolveOptions{
-		Scope: cfg.Release.Scope, RequiredPaths: requiredPaths, RequireRootOwner: true, RequiredComponents: release.RequiredComponentsForScope(cfg.Release.Scope),
+		Scope: cfg.Release.Scope, RequiredPaths: requiredPaths, RequiredExecutablePaths: requiredExecutables, RequireRootOwner: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("verify runtime release: %w", err)

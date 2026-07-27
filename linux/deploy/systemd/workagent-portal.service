@@ -1,10 +1,17 @@
 [Unit]
 Description=WorkAgent2 Portal
-After=network-online.target
+After=network-online.target workagent-tenant-catalog-ready.target
 Wants=network-online.target
+Requires=workagent-tenant-catalog-ready.target
 RequiresMountsFor=/var/lib/workagent/portal
 ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-portal
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
 ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/run/workagent/release-config.lock
+ConditionPathExists=/run/workagent/activation.lock
+ConditionPathExists=/opt/workagent/control.lock
+ConditionPathExists=/opt/workagent/aionui/current.json.lock
 ConditionPathIsReadWrite=/var/lib/workagent/portal
 
 [Service]
@@ -13,9 +20,14 @@ NotifyAccess=main
 WatchdogSec=60s
 User=workagent
 Group=workagent
+OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only
+OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only
+OpenFile=/opt/workagent/aionui/current.json.lock:workagent-runtime-release-lock:read-only
 WorkingDirectory=/var/lib/workagent/portal
-ExecStartPre=+/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required bin/workagent-release --required bin/workagent-portal
-ExecStart=/opt/workagent/control/bin/workagent-portal --config /etc/workagent/portal.json
+ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
+ExecStartPre=+/usr/libexec/workagent-recovery-activation-admission-v1
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal
+ExecStart=/bin/bash -c '/usr/bin/flock --shared 3 || exit 70; exec "$@"' workagent-runtime-start /opt/workagent/control/bin/workagent-portal --config /etc/workagent/portal.json
 # Provider credentials are intentionally absent from the deny-all staging
 # baseline. Production adds LoadCredential entries in a root-owned drop-in.
 Restart=on-failure

@@ -4,6 +4,7 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/admin"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
 )
 
@@ -42,6 +44,21 @@ type recoveryTenantLister struct {
 	recoveryGateController
 	units []string
 	err   error
+}
+
+func TestRecoveryTenantReadbackUsesCanonicalJSONEquality(t *testing.T) {
+	expected := config.Tenant{Backend: config.Backend{Environment: map[string]string{}, RequiredReleaseFiles: []string{}}}
+	payload, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var installed config.Tenant
+	if err := json.Unmarshal(payload, &installed); err != nil {
+		t.Fatal(err)
+	}
+	if !admin.CanonicalTenantConfigEqual(installed, expected) {
+		t.Fatal("recovery rejected a canonical omitempty round trip")
+	}
 }
 
 func (controller recoveryTenantLister) ListUnits(context.Context, ...string) ([]string, error) {
@@ -220,14 +237,14 @@ func TestRecoveryActivationJournalAndRollbackOrder(t *testing.T) {
 	firstService := strings.TrimSuffix(first, ".socket") + ".service"
 	secondService := strings.TrimSuffix(second, ".socket") + ".service"
 	value, err := activationJournalForUnits([]string{
-		"cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service",
+		"workagent-tenant-catalog-ready.target", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service",
 		second, first, "workagent-chatforward-browser.service", "workagent-portal.service",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	expectedUnits := []string{
-		"cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service",
+		"workagent-tenant-catalog-ready.target", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service",
 		firstService, secondService, first, second, "workagent-chatforward-browser.service", "workagent-portal.service",
 	}
 	if strings.Join(value.Units, ",") != strings.Join(expectedUnits, ",") {
@@ -237,8 +254,11 @@ func TestRecoveryActivationJournalAndRollbackOrder(t *testing.T) {
 	for _, unit := range value.Units {
 		values[unit] = stoppedRecoveryProperties()
 	}
+	values["workagent-tenant-config-reconcile.service"] = stoppedRecoveryProperties()
+	values["workagent-tenant-config-reconcile.service"]["UnitFileState"] = "static"
 	values[firstService]["UnitFileState"] = "static"
 	values[secondService]["UnitFileState"] = "static"
+	values["workagent-tenant-catalog-ready.target"]["UnitFileState"] = "static"
 	controller := &recordingRecoveryController{values: values}
 	if err := stopRecoveryActivationUnits(controller, value); err != nil {
 		t.Fatal(err)
@@ -254,6 +274,8 @@ func TestRecoveryActivationJournalAndRollbackOrder(t *testing.T) {
 		{"stop", "workagent-chatforward.service"},
 		{"stop", "workagent-notification.service"},
 		{"stop", "cliproxyapi.service"},
+		{"stop", "workagent-tenant-catalog-ready.target"},
+		{"stop", "workagent-tenant-config-reconcile.service"},
 	}
 	if len(controller.actions) != len(expectedActions) {
 		t.Fatalf("rollback actions=%v", controller.actions)
@@ -265,9 +287,9 @@ func TestRecoveryActivationJournalAndRollbackOrder(t *testing.T) {
 	}
 	for _, invalid := range []recoveryActivationJournal{
 		{SchemaVersion: 1, Units: []string{"workagent-portal.service", "cliproxyapi.service"}},
-		{SchemaVersion: 1, Units: []string{"cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", "ssh.service", "workagent-chatforward-browser.service", "workagent-portal.service"}},
-		{SchemaVersion: 1, Units: []string{"cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", secondService, firstService, second, first, "workagent-chatforward-browser.service", "workagent-portal.service"}},
-		{SchemaVersion: 1, Units: []string{"cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", firstService, second, "workagent-chatforward-browser.service", "workagent-portal.service"}},
+		{SchemaVersion: 1, Units: []string{"workagent-tenant-catalog-ready.target", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", "ssh.service", "workagent-chatforward-browser.service", "workagent-portal.service"}},
+		{SchemaVersion: 1, Units: []string{"workagent-tenant-catalog-ready.target", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", secondService, firstService, second, first, "workagent-chatforward-browser.service", "workagent-portal.service"}},
+		{SchemaVersion: 1, Units: []string{"workagent-tenant-catalog-ready.target", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service", firstService, second, "workagent-chatforward-browser.service", "workagent-portal.service"}},
 	} {
 		if err := validateRecoveryActivationJournal(invalid); err == nil {
 			t.Fatalf("unsafe activation journal accepted: %+v", invalid)
@@ -277,6 +299,7 @@ func TestRecoveryActivationJournalAndRollbackOrder(t *testing.T) {
 
 func TestKnownActivationRollbackRetainsJournalUntilStopProofSucceeds(t *testing.T) {
 	value := recoveryActivationJournal{SchemaVersion: 1, Units: []string{
+		"workagent-tenant-catalog-ready.target",
 		"cliproxyapi.service",
 		"workagent-notification.service",
 		"workagent-chatforward.service",
@@ -287,6 +310,9 @@ func TestKnownActivationRollbackRetainsJournalUntilStopProofSucceeds(t *testing.
 	for _, unit := range value.Units {
 		values[unit] = stoppedRecoveryProperties()
 	}
+	values["workagent-tenant-config-reconcile.service"] = stoppedRecoveryProperties()
+	values["workagent-tenant-config-reconcile.service"]["UnitFileState"] = "static"
+	values["workagent-tenant-catalog-ready.target"]["UnitFileState"] = "static"
 	loaded, removed := false, false
 	controller := &recordingRecoveryController{values: values, errAt: "disable"}
 	err := rollbackKnownRecoveryActivationWithIO(
@@ -364,6 +390,45 @@ func TestKnownActivationRollbackRetainsJournalUntilStopProofSucceeds(t *testing.
 	)
 	if err != nil || !removed {
 		t.Fatalf("completed activation rollback did not remove its journal: err=%v removed=%t", err, removed)
+	}
+}
+
+func TestRecoveryRollbackRetainsJournalUntilPulledInReconcileStops(t *testing.T) {
+	value := recoveryActivationJournal{SchemaVersion: 1, Units: []string{
+		"workagent-tenant-catalog-ready.target",
+		"cliproxyapi.service",
+		"workagent-notification.service",
+		"workagent-chatforward.service",
+		"workagent-chatforward-browser.service",
+		"workagent-portal.service",
+	}}
+	values := make(map[string]map[string]string, len(value.Units)+1)
+	for _, unit := range value.Units {
+		values[unit] = stoppedRecoveryProperties()
+	}
+	values["workagent-tenant-catalog-ready.target"]["UnitFileState"] = "static"
+	values["workagent-tenant-config-reconcile.service"] = map[string]string{
+		"LoadState": "loaded", "ActiveState": "activating", "SubState": "start", "MainPID": "123", "ControlPID": "0", "UnitFileState": "static",
+	}
+	loaded, removed := false, false
+	controller := &recordingRecoveryController{values: values}
+	err := rollbackKnownRecoveryActivationWithIO(
+		controller, value, recoveryActivationJournalPath,
+		func(string) (recoveryActivationJournal, bool, error) {
+			loaded = true
+			return value, true, nil
+		},
+		func(string) error {
+			removed = true
+			return nil
+		},
+	)
+	if err == nil || loaded || removed {
+		t.Fatalf("running pulled-in reconciliation did not retain recovery journal: err=%v loaded=%t removed=%t", err, loaded, removed)
+	}
+	last := controller.actions[len(controller.actions)-1]
+	if strings.Join(last, ",") != "stop,workagent-tenant-config-reconcile.service" {
+		t.Fatalf("rollback did not explicitly stop the pulled-in reconciliation unit: %v", controller.actions)
 	}
 }
 
@@ -455,6 +520,9 @@ func recoveryRegularStat(t *testing.T, path string) *syscall.Stat_t {
 }
 
 func TestCopyRecoveredRegularFileCrashSafeCases(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("recovered production file ownership requires root")
+	}
 	for name, payload := range map[string][]byte{"nonempty": []byte("restored state"), "empty": {}} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()

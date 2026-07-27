@@ -149,8 +149,19 @@ func ApplyMigrationPlan(ctx context.Context, options ApplyMigrationPlanOptions) 
 }
 
 func acquireCLIProxyMigrationLock() (*os.File, error) {
+	return acquireCLIProxyMigrationLockOperation(unix.LOCK_EX)
+}
+
+func acquireCLIProxyMigrationSharedLock() (*os.File, error) {
+	return acquireCLIProxyMigrationLockOperation(unix.LOCK_SH)
+}
+
+func acquireCLIProxyMigrationLockOperation(operation int) (*os.File, error) {
 	if effectiveUID() != 0 {
-		return nil, errors.New("CLIProxy migration cutover lock must be acquired by root")
+		return nil, errors.New("CLIProxy migration lock must be acquired by root")
+	}
+	if operation != unix.LOCK_SH && operation != unix.LOCK_EX {
+		return nil, errors.New("CLIProxy migration lock operation is invalid")
 	}
 	group, err := lookupCLIProxyMigrationGroup("cliproxyapi")
 	if err != nil {
@@ -160,46 +171,95 @@ func acquireCLIProxyMigrationLock() (*os.File, error) {
 	if err != nil {
 		return nil, errors.New("CLIProxy dedicated group identity is invalid")
 	}
-	return acquireValidatedCLIProxyMigrationLock(CLIProxyMigrationLockPath, gid)
+	return acquireValidatedCLIProxyMigrationLockOperation(CLIProxyMigrationLockPath, gid, operation)
 }
 
 func acquireValidatedCLIProxyMigrationLock(path string, expectedGID uint32) (*os.File, error) {
+	return acquireValidatedCLIProxyMigrationLockOperation(path, expectedGID, unix.LOCK_EX)
+}
+
+func acquireValidatedCLIProxyMigrationLockOperation(path string, expectedGID uint32, operation int) (*os.File, error) {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || expectedGID == 0 {
-		return nil, errors.New("CLIProxy migration cutover lock path or group is invalid")
+		return nil, errors.New("CLIProxy migration lock path or group is invalid")
+	}
+	if operation != unix.LOCK_SH && operation != unix.LOCK_EX {
+		return nil, errors.New("CLIProxy migration lock operation is invalid")
 	}
 	if err := rejectSymlinkAncestors(path); err != nil {
-		return nil, errors.New("CLIProxy migration cutover lock path is unsafe")
+		return nil, errors.New("CLIProxy migration lock path is unsafe")
 	}
 	parentInfo, err := os.Lstat(filepath.Dir(path))
 	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 || parentInfo.Mode().Perm() != 0o755 {
-		return nil, errors.New("CLIProxy migration cutover lock parent is unsafe")
+		return nil, errors.New("CLIProxy migration lock parent is unsafe")
 	}
 	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
 	if !ok || parentStat.Uid != 0 || parentStat.Gid != 0 {
-		return nil, errors.New("CLIProxy migration cutover lock parent must be root-owned")
+		return nil, errors.New("CLIProxy migration lock parent must be root-owned")
 	}
-	file, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0)
+	openMode := unix.O_RDONLY
+	readOnly := true
+	if operation == unix.LOCK_EX {
+		openMode = unix.O_RDWR
+		readOnly = false
+	}
+	fd, err := unix.Open(path, openMode|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, errors.New("CLIProxy migration cutover lock is missing or unavailable")
+		return nil, errors.New("CLIProxy migration lock is missing or unavailable")
 	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o640 {
-		file.Close()
-		return nil, errors.New("CLIProxy migration cutover lock must be a regular file with mode 0640")
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("CLIProxy migration lock descriptor is unavailable")
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != 0 || stat.Gid != expectedGID {
-		file.Close()
-		return nil, errors.New("CLIProxy migration cutover lock ownership is invalid")
+	if err := validateCLIProxyMigrationLockFD(fd, path, expectedGID, readOnly); err != nil {
+		_ = file.Close()
+		return nil, err
 	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		file.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, errors.New("CLIProxy is starting or running; exclusive migration cutover lock is unavailable")
+	if err := unix.Flock(fd, operation|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			if operation == unix.LOCK_EX {
+				return nil, errors.New("CLIProxy is starting or running; exclusive migration cutover lock is unavailable")
+			}
+			return nil, errors.New("CLIProxy offline migration is active; shared migration lock is unavailable")
 		}
-		return nil, errors.New("CLIProxy migration cutover lock could not be acquired")
+		return nil, errors.New("CLIProxy migration lock could not be acquired")
+	}
+	if err := validateCLIProxyMigrationLockFD(fd, path, expectedGID, readOnly); err != nil {
+		_ = file.Close()
+		return nil, err
 	}
 	return file, nil
+}
+
+func validateCLIProxyMigrationLockFD(fd int, path string, expectedGID uint32, readOnly bool) error {
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	if err != nil {
+		return errors.New("inspect CLIProxy migration lock descriptor access mode")
+	}
+	expectedAccess := unix.O_RDWR
+	if readOnly {
+		expectedAccess = unix.O_RDONLY
+	}
+	if flags&unix.O_ACCMODE != expectedAccess {
+		return errors.New("CLIProxy migration lock descriptor access mode is unsafe")
+	}
+	var opened unix.Stat_t
+	if err := unix.Fstat(fd, &opened); err != nil {
+		return errors.New("inspect CLIProxy migration lock descriptor")
+	}
+	if opened.Mode&unix.S_IFMT != unix.S_IFREG || opened.Mode&0o7777 != 0o640 || opened.Uid != 0 || opened.Gid != expectedGID || opened.Nlink != 1 || opened.Size != 0 {
+		return errors.New("CLIProxy migration lock descriptor metadata is unsafe")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("CLIProxy migration lock pathname is missing or unsafe")
+	}
+	named, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(named.Dev) != opened.Dev || named.Ino != opened.Ino || uint32(named.Mode) != opened.Mode || named.Uid != opened.Uid || named.Gid != opened.Gid || named.Nlink != opened.Nlink || named.Size != opened.Size {
+		return errors.New("CLIProxy migration lock pathname does not identify the opened inode")
+	}
+	return nil
 }
 
 func requireCLIProxyStopped(ctx context.Context, controller systemdctl.Controller) error {

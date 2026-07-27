@@ -11,6 +11,7 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/admin"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/ipc"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/safelog"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/userhost"
 )
@@ -25,6 +26,11 @@ func main() {
 	if configPath == "" || tenantID == "" {
 		logger.Fatal("--config and --tenant-id are required")
 	}
+	guards, err := lifecyclelock.AdoptSystemdRuntimeGuards()
+	if err != nil {
+		logger.Fatal(err)
+	}
+	defer guards.Close()
 	cfg, err := config.LoadTenant(configPath)
 	if err != nil {
 		logger.Fatal(err)
@@ -33,6 +39,12 @@ func main() {
 		logger.Fatal("tenant ID does not match the service instance")
 	}
 	if err := admin.VerifyRuntimeTenantConfigPath(cfg, configPath); err != nil {
+		logger.Fatal(err)
+	}
+	if err := admin.AssertRuntimeTenantFileCatalogClean(cfg, configPath); err != nil {
+		logger.Fatal(err)
+	}
+	if err := guards.ValidateChannel(cfg.Release.ReleasesRoot, cfg.Release.PointerFile); err != nil {
 		logger.Fatal(err)
 	}
 	if os.Getenv("LISTEN_FDS") == "" {
@@ -45,6 +57,9 @@ func main() {
 	defer listener.Close()
 	host, err := userhost.New(cfg, listener, logger)
 	if err != nil {
+		logger.Fatal(err)
+	}
+	if err := guards.ReleaseCatalog(); err != nil {
 		logger.Fatal(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/cliproxy"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/hostcheck"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/servicelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
@@ -51,12 +53,22 @@ type Installed struct {
 // blank, package-prepared host. Existing non-matching files are never
 // overwritten. Matching partial results are accepted so an interrupted blank-
 // host recovery can be resumed safely.
-func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, options InstallOptions) (Installed, error) {
+func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, options InstallOptions) (installedResult Installed, resultErr error) {
 	if os.Geteuid() != 0 {
 		return Installed{}, errors.New("blank-host recovery must run as root")
 	}
 	if options.Confirmation != BlankHostConfirmation {
 		return Installed{}, fmt.Errorf("blank-host recovery requires --confirm %s", BlankHostConfirmation)
+	}
+	// Prove this cross-system transaction boundary before even creating a
+	// missing volatile recovery lock. Recheck under A_EX below to close the
+	// race with an activation transaction that was already in flight.
+	if err := admin.AssertTenantActivationClean(); err != nil {
+		return Installed{}, fmt.Errorf("blank-host recovery requires a clean tenant activation transaction: %w", err)
+	}
+	bootID, err := currentRecoveryBootID()
+	if err != nil {
+		return Installed{}, err
 	}
 	controller := options.Controller
 	if controller == nil {
@@ -67,7 +79,21 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 	if err != nil {
 		return Installed{}, err
 	}
-	defer installLock.Close()
+	defer func() { resultErr = errors.Join(resultErr, installLock.Close()) }()
+	activationGuard, err := lifecyclelock.AcquireActivationExclusive(ctx)
+	if err != nil {
+		return Installed{}, fmt.Errorf("acquire blank-host activation lifecycle lock: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, activationGuard.Close()) }()
+	if err := admin.AssertTenantActivationClean(); err != nil {
+		return Installed{}, fmt.Errorf("tenant activation transaction appeared before blank-host recovery serialization: %w", err)
+	}
+	// SIGKILL leaves the permit inode in this boot's volatile directory but
+	// releases its flock. Only the serialized recovery path holding the exact
+	// permit-bound install-lock inode may remove it before durable rollback.
+	if err := reconcileStaleRecoveryActivationPermit(recoveryActivationPermitPath, recoveryActivationJournalPath, bootID, installLock, openRecoveryControlParent); err != nil {
+		return Installed{}, fmt.Errorf("reconcile stale blank-host recovery activation permit: %w", err)
+	}
 	// A SIGKILL after activation begins leaves a durable, unit-restricted
 	// journal. Reconcile it before inspecting or mutating a new restore tree so
 	// no previous partial activation can overlap this installation.
@@ -158,6 +184,8 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 		"workagent-chatforward.service",
 		"workagent-chatforward-browser.service",
 		"workagent-portal.service",
+		"workagent-tenant-catalog-ready.target",
+		"workagent-tenant-config-reconcile.service",
 	}
 	units = append(units, cutoverBlockedUnits...)
 	disabledUnitFiles := []string{
@@ -173,270 +201,165 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 	staticUnitFiles := []string{
 		"workagent-backup.service",
 		"workagent-healthcheck.service",
+		"workagent-tenant-catalog-ready.target",
+		"workagent-tenant-config-reconcile.service",
 	}
 	for _, tenant := range tenants {
 		units = append(units, "workagent-userhost@"+tenant.TenantID+".socket", "workagent-userhost@"+tenant.TenantID+".service")
 		disabledUnitFiles = append(disabledUnitFiles, "workagent-userhost@"+tenant.TenantID+".socket")
 		staticUnitFiles = append(staticUnitFiles, "workagent-userhost@"+tenant.TenantID+".service")
 	}
-	if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
-		return Installed{}, err
-	}
-	if err := requireRecoveryUnitFileState(ctx, controller, disabledUnitFiles, "disabled"); err != nil {
-		return Installed{}, fmt.Errorf("blank-host recovery requires every future entrypoint to be disabled: %w", err)
-	}
-	if err := requireRecoveryUnitFileState(ctx, controller, staticUnitFiles, "static"); err != nil {
-		return Installed{}, fmt.Errorf("blank-host recovery package unit topology is invalid: %w", err)
-	}
-	// Properties above forces every expected template instance to be loaded;
-	// the list readback can now require exact equality rather than merely
-	// rejecting foreign instances.
-	if err := requireExactRecoveryTenantUnits(ctx, controller, tenants); err != nil {
-		return Installed{}, err
-	}
-	if err := requireRecoveryUnitRunning(ctx, controller, "mihomo.service"); err != nil {
-		return Installed{}, fmt.Errorf("blank-host recovery egress prerequisite: %w", err)
-	}
-	proxyLock, err := cliproxy.AcquireProductionMigrationLock()
-	if err != nil {
-		return Installed{}, fmt.Errorf("lock CLIProxy policy state for recovery: %w", err)
-	}
-	defer func() {
-		if proxyLock != nil {
-			_ = proxyLock.Close()
-		}
-	}()
-	stagedPortalInfo, err := os.Lstat(translate(portal.Paths.PortalState))
-	productionPortalInfo, productionPortalErr := os.Lstat(portal.Paths.PortalState)
-	if err != nil || productionPortalErr != nil {
-		return Installed{}, errors.New("restored or package-prepared Portal state root is missing")
-	}
-	stagedPortalStat, stagedPortalOK := stagedPortalInfo.Sys().(*syscall.Stat_t)
-	productionPortalStat, productionPortalOK := productionPortalInfo.Sys().(*syscall.Stat_t)
-	if !stagedPortalOK || stagedPortalInfo.Mode()&os.ModeSymlink != 0 || !stagedPortalInfo.IsDir() || stagedPortalInfo.Mode().Perm() != 0o700 ||
-		!productionPortalOK || productionPortalInfo.Mode()&os.ModeSymlink != 0 || !productionPortalInfo.IsDir() || productionPortalInfo.Mode().Perm() != 0o700 {
-		return Installed{}, errors.New("restored or package-prepared Portal state root is unsafe")
-	}
-	packagePortalIdentity := recoveredIdentity{uid: uint32(portalUID), gid: uint32(portalGID)}
-	stagedPortalIdentity := recoveredIdentity{uid: stagedPortalStat.Uid, gid: stagedPortalStat.Gid}
-	currentPortalIdentity := recoveredIdentity{uid: productionPortalStat.Uid, gid: productionPortalStat.Gid}
-	if stagedPortalIdentity.uid == 0 || stagedPortalIdentity.gid == 0 || currentPortalIdentity.uid == 0 || currentPortalIdentity.gid == 0 {
-		return Installed{}, errors.New("restored Portal state ownership evidence is invalid")
-	}
-	if currentPortalIdentity != packagePortalIdentity && currentPortalIdentity != stagedPortalIdentity {
-		return Installed{}, errors.New("partially restored Portal state ownership is not resumable")
-	}
-	portalLock, err := acquireRecoveredPortalLock(
-		filepath.Join(portal.Paths.PortalState, ".runtime.lock"),
-		[]recoveredIdentity{packagePortalIdentity, stagedPortalIdentity},
-	)
-	if err != nil {
-		return Installed{}, fmt.Errorf("lock Portal state for recovery: %w", err)
-	}
-	defer portalLock.Close()
-	if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
-		return Installed{}, err
-	}
-	for _, tenant := range tenants {
-		if tenant.Capacity.MaxInstances != portal.Runtime.MaxConcurrentInstances {
-			return Installed{}, errors.New("restored tenant capacity does not match the Portal policy")
-		}
-		if err := admin.EnsureCapacitySlots(ctx, tenant.Capacity.SlotDirectory, tenant.Capacity.MaxInstances); err != nil {
-			return Installed{}, fmt.Errorf("restore capacity slots: %w", err)
-		}
-	}
-	restoredIdentities := make(map[string]recoveredIdentity, len(tenants))
-	for _, tenant := range tenants {
-		dataInfo, err := os.Lstat(translate(tenant.DataRoot))
-		if err != nil {
-			return Installed{}, err
-		}
-		stat, ok := dataInfo.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid == 0 || stat.Gid == 0 {
-			return Installed{}, errors.New("restored tenant ownership evidence is invalid")
-		}
-		if err := ensureRecoveredRuntimeAccount(ctx, tenant, stat.Uid, stat.Gid); err != nil {
-			return Installed{}, fmt.Errorf("restore tenant account %s: %w", tenant.RuntimeUser, err)
-		}
-		restoredIdentities[tenant.TenantID] = recoveredIdentity{uid: stat.Uid, gid: stat.Gid}
-	}
-	tenantLocks := make([]io.Closer, 0, len(tenants))
-	defer func() {
-		for index := len(tenantLocks) - 1; index >= 0; index-- {
-			_ = tenantLocks[index].Close()
-		}
-	}()
-	for _, tenant := range tenants {
-		identity := restoredIdentities[tenant.TenantID]
-		if err := prepareRecoveredTenantRoot(tenant, identity.uid, identity.gid); err != nil {
-			return Installed{}, fmt.Errorf("prepare restored tenant root %s: %w", tenant.TenantID, err)
-		}
-		lock, err := servicelock.AcquireExclusive(filepath.Join(tenant.DataRoot, ".runtime.lock"), identity.uid, identity.gid)
-		if err != nil {
-			return Installed{}, fmt.Errorf("lock restored tenant root %s: %w", tenant.TenantID, err)
-		}
-		tenantLocks = append(tenantLocks, lock)
-	}
-	if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
-		return Installed{}, err
-	}
-	for _, source := range manifest.Sources {
-		staged := translate(source.Path)
-		if err := copyRecoveredPath(staged, source.Path); err != nil {
-			return Installed{}, fmt.Errorf("install restored source %s: %w", source.Name, err)
-		}
-	}
-	stagedPortalConfigInfo, err := os.Lstat(translate(manifest.PortalConfig))
-	if err != nil {
-		return Installed{}, errors.New("restored Portal configuration ownership evidence is missing")
-	}
-	stagedPortalConfigStat, ok := stagedPortalConfigInfo.Sys().(*syscall.Stat_t)
-	if !ok || stagedPortalConfigInfo.Mode()&os.ModeSymlink != 0 || !stagedPortalConfigInfo.Mode().IsRegular() || stagedPortalConfigStat.Uid != 0 || stagedPortalConfigStat.Gid == 0 {
-		return Installed{}, errors.New("restored Portal configuration ownership evidence is invalid")
-	}
-	configurationGroups := map[uint32]uint32{}
-	if err := addRecoveredGroupMapping(configurationGroups, stagedPortalConfigStat.Gid, uint32(portalGID)); err != nil {
-		return Installed{}, err
-	}
-	for path, accountName := range map[string]string{
-		"/etc/workagent/chatforward.env":   "workagent-chatforward",
-		"/etc/workagent/notification.json": "workagent-notification",
-	} {
-		stagedInfo, err := os.Lstat(translate(path))
-		if err != nil || stagedInfo.Mode()&os.ModeSymlink != 0 || !stagedInfo.Mode().IsRegular() || stagedInfo.Mode().Perm() != 0o640 {
-			return Installed{}, fmt.Errorf("restored %s configuration ownership evidence is invalid", accountName)
-		}
-		stagedStat, ok := stagedInfo.Sys().(*syscall.Stat_t)
-		if !ok || stagedStat.Uid != 0 || stagedStat.Gid == 0 {
-			return Installed{}, fmt.Errorf("restored %s configuration ownership is invalid", accountName)
-		}
-		account, err := user.Lookup(accountName)
-		if err != nil {
-			return Installed{}, fmt.Errorf("the WorkAgent package must create %s before recovery", accountName)
-		}
-		packageGID, err := strconv.ParseUint(account.Gid, 10, 32)
-		if err != nil || packageGID == 0 {
-			return Installed{}, fmt.Errorf("the package-created %s group is invalid", accountName)
-		}
-		if err := addRecoveredGroupMapping(configurationGroups, stagedStat.Gid, uint32(packageGID)); err != nil {
-			return Installed{}, err
-		}
-	}
-	if err := normalizeRecoveredPortalConfiguration(filepath.Dir(manifest.PortalConfig), configurationGroups); err != nil {
-		return Installed{}, fmt.Errorf("normalize restored Portal configuration tree: %w", err)
-	}
-	if err := chownRecoveredTree(portal.Paths.PortalState, int(portalUID), int(portalGID)); err != nil {
-		return Installed{}, fmt.Errorf("normalize restored Portal state ownership: %w", err)
-	}
-	for path, accountName := range map[string]string{
-		"/etc/workagent/chatforward.env":   "workagent-chatforward",
-		"/etc/workagent/notification.json": "workagent-notification",
-	} {
-		if err := verifyServiceRecoveryFile(path, accountName); err != nil {
-			return Installed{}, fmt.Errorf("verify restored %s configuration: %w", accountName, err)
-		}
-	}
-	policyParentInfo, err := os.Lstat(filepath.Dir(portal.CLIProxy.PolicyStateFile))
-	if err != nil {
-		return Installed{}, errors.New("package-prepared CLIProxy policy directory is missing")
-	}
-	policyParentStat, policyParentOK := policyParentInfo.Sys().(*syscall.Stat_t)
-	if !policyParentOK || policyParentInfo.Mode()&os.ModeSymlink != 0 || !policyParentInfo.IsDir() || policyParentInfo.Mode().Perm() != 0o700 ||
-		policyParentStat.Uid != uint32(proxyUID) || policyParentStat.Gid != uint32(proxyGID) {
-		return Installed{}, errors.New("package-prepared CLIProxy policy directory is unsafe")
-	}
-	if err := normalizeRecoveredPolicyState(portal.CLIProxy.PolicyStateFile, uint32(proxyUID), uint32(proxyGID)); err != nil {
-		return Installed{}, fmt.Errorf("normalize restored CLIProxy policy state: %w", err)
-	}
-	if err := cliproxy.VerifyProductionPolicyState(portal.CLIProxy.PolicyStateFile, uint32(proxyUID), uint32(proxyGID)); err != nil {
-		return Installed{}, fmt.Errorf("verify restored CLIProxy policy state: %w", err)
-	}
-	for index, tenant := range tenants {
-		installed, err := config.LoadTenant(filepath.Join(portal.Paths.TenantConfigs, tenant.TenantID+".json"))
-		if err != nil {
-			return Installed{}, err
-		}
-		installed.PortalUID = uint32(portalUID)
-		if err := admin.WriteTenantFiles(ctx, portal, installed); err != nil {
-			return Installed{}, fmt.Errorf("rebuild tenant configuration ACL and service metadata: %w", err)
-		}
-		if installed.Capacity.ProjectID != 0 {
-			if _, err := hostcheck.VerifyTenantQuota(installed.DataRoot, installed.Capacity.ProjectID, installed.Capacity.DiskHardLimitBytes); err != nil {
-				return Installed{}, fmt.Errorf("verify restored tenant project quota: %w", err)
+	var catalogInstall recoveredCatalogInstall
+	if err := admin.WithTenantFileCatalogTransaction(ctx, func(transaction *admin.TenantFileCatalogTransaction) error {
+		_, lockedErr := func() (Installed, error) {
+			// C_EX is deliberately outermost. CLIProxy migration and all runtime
+			// locks are acquired only after it, matching production lock order and
+			// preventing a migration_EX <-> catalog_EX inversion.
+			if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
+				return Installed{}, err
 			}
-		}
-		tenants[index] = installed
-	}
-	if err := controller.Action(ctx, "daemon-reload"); err != nil {
+			if err := requireRecoveryUnitFileState(ctx, controller, disabledUnitFiles, "disabled"); err != nil {
+				return Installed{}, fmt.Errorf("blank-host recovery requires every future entrypoint to be disabled: %w", err)
+			}
+			if err := requireRecoveryUnitFileState(ctx, controller, staticUnitFiles, "static"); err != nil {
+				return Installed{}, fmt.Errorf("blank-host recovery package unit topology is invalid: %w", err)
+			}
+			// Properties above forces every expected template instance to be
+			// loaded; exact enumeration is authoritative only while C_EX remains.
+			if err := requireExactRecoveryTenantUnits(ctx, controller, tenants); err != nil {
+				return Installed{}, err
+			}
+			if err := requireRecoveryUnitRunning(ctx, controller, "mihomo.service"); err != nil {
+				return Installed{}, fmt.Errorf("blank-host recovery egress prerequisite: %w", err)
+			}
+			proxyLock, err := cliproxy.AcquireProductionMigrationLock()
+			if err != nil {
+				return Installed{}, fmt.Errorf("lock CLIProxy policy state for recovery: %w", err)
+			}
+			defer func() {
+				if proxyLock != nil {
+					_ = proxyLock.Close()
+				}
+			}()
+			stagedPortalInfo, err := os.Lstat(translate(portal.Paths.PortalState))
+			productionPortalInfo, productionPortalErr := os.Lstat(portal.Paths.PortalState)
+			if err != nil || productionPortalErr != nil {
+				return Installed{}, errors.New("restored or package-prepared Portal state root is missing")
+			}
+			stagedPortalStat, stagedPortalOK := stagedPortalInfo.Sys().(*syscall.Stat_t)
+			productionPortalStat, productionPortalOK := productionPortalInfo.Sys().(*syscall.Stat_t)
+			if !stagedPortalOK || stagedPortalInfo.Mode()&os.ModeSymlink != 0 || !stagedPortalInfo.IsDir() || stagedPortalInfo.Mode().Perm() != 0o700 ||
+				!productionPortalOK || productionPortalInfo.Mode()&os.ModeSymlink != 0 || !productionPortalInfo.IsDir() || productionPortalInfo.Mode().Perm() != 0o700 {
+				return Installed{}, errors.New("restored or package-prepared Portal state root is unsafe")
+			}
+			packagePortalIdentity := recoveredIdentity{uid: uint32(portalUID), gid: uint32(portalGID)}
+			stagedPortalIdentity := recoveredIdentity{uid: stagedPortalStat.Uid, gid: stagedPortalStat.Gid}
+			currentPortalIdentity := recoveredIdentity{uid: productionPortalStat.Uid, gid: productionPortalStat.Gid}
+			if stagedPortalIdentity.uid == 0 || stagedPortalIdentity.gid == 0 || currentPortalIdentity.uid == 0 || currentPortalIdentity.gid == 0 {
+				return Installed{}, errors.New("restored Portal state ownership evidence is invalid")
+			}
+			if currentPortalIdentity != packagePortalIdentity && currentPortalIdentity != stagedPortalIdentity {
+				return Installed{}, errors.New("partially restored Portal state ownership is not resumable")
+			}
+			portalLock, err := acquireRecoveredPortalLock(
+				filepath.Join(portal.Paths.PortalState, ".runtime.lock"),
+				[]recoveredIdentity{packagePortalIdentity, stagedPortalIdentity},
+			)
+			if err != nil {
+				return Installed{}, fmt.Errorf("lock Portal state for recovery: %w", err)
+			}
+			defer func() {
+				if portalLock != nil {
+					_ = portalLock.Close()
+				}
+			}()
+			if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
+				return Installed{}, err
+			}
+			for _, tenant := range tenants {
+				if tenant.Capacity.MaxInstances != portal.Runtime.MaxConcurrentInstances {
+					return Installed{}, errors.New("restored tenant capacity does not match the Portal policy")
+				}
+				if err := admin.EnsureCapacitySlots(ctx, tenant.Capacity.SlotDirectory, tenant.Capacity.MaxInstances); err != nil {
+					return Installed{}, fmt.Errorf("restore capacity slots: %w", err)
+				}
+			}
+			restoredIdentities := make(map[string]recoveredIdentity, len(tenants))
+			for _, tenant := range tenants {
+				dataInfo, err := os.Lstat(translate(tenant.DataRoot))
+				if err != nil {
+					return Installed{}, err
+				}
+				stat, ok := dataInfo.Sys().(*syscall.Stat_t)
+				if !ok || stat.Uid == 0 || stat.Gid == 0 {
+					return Installed{}, errors.New("restored tenant ownership evidence is invalid")
+				}
+				if err := ensureRecoveredRuntimeAccount(ctx, tenant, stat.Uid, stat.Gid); err != nil {
+					return Installed{}, fmt.Errorf("restore tenant account %s: %w", tenant.RuntimeUser, err)
+				}
+				restoredIdentities[tenant.TenantID] = recoveredIdentity{uid: stat.Uid, gid: stat.Gid}
+			}
+			tenantLocks := make([]io.Closer, 0, len(tenants))
+			defer func() {
+				for index := len(tenantLocks) - 1; index >= 0; index-- {
+					_ = tenantLocks[index].Close()
+				}
+			}()
+			for _, tenant := range tenants {
+				identity := restoredIdentities[tenant.TenantID]
+				if err := prepareRecoveredTenantRoot(tenant, identity.uid, identity.gid); err != nil {
+					return Installed{}, fmt.Errorf("prepare restored tenant root %s: %w", tenant.TenantID, err)
+				}
+				lock, err := servicelock.AcquireExclusive(filepath.Join(tenant.DataRoot, ".runtime.lock"), identity.uid, identity.gid)
+				if err != nil {
+					return Installed{}, fmt.Errorf("lock restored tenant root %s: %w", tenant.TenantID, err)
+				}
+				tenantLocks = append(tenantLocks, lock)
+			}
+			if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
+				return Installed{}, err
+			}
+			var installErr error
+			catalogInstall, installErr = installRecoveredCatalogLocked(
+				ctx, transaction, translate, manifest, portal, tenants,
+				uint32(portalUID), uint32(portalGID), uint32(proxyUID), uint32(proxyGID), controller,
+			)
+			if installErr != nil {
+				return Installed{}, installErr
+			}
+			if err := requireRecoveryUnitsStopped(ctx, controller, units); err != nil {
+				return Installed{}, err
+			}
+			for index := len(tenantLocks) - 1; index >= 0; index-- {
+				if err := tenantLocks[index].Close(); err != nil {
+					return Installed{}, errors.New("release tenant recovery lock")
+				}
+			}
+			tenantLocks = nil
+			if err := portalLock.Close(); err != nil {
+				return Installed{}, errors.New("release Portal recovery lock")
+			}
+			portalLock = nil
+			if err := proxyLock.Close(); err != nil {
+				return Installed{}, errors.New("release CLIProxy recovery lock")
+			}
+			proxyLock = nil
+			return Installed{}, nil
+		}()
+		return lockedErr
+	}); err != nil {
 		return Installed{}, err
 	}
-	installedPortal, err := config.LoadPortal(manifest.PortalConfig)
+	installedPortal := catalogInstall.portal
+	tenants = catalogInstall.tenants
+	result := catalogInstall.result
+	enabledSocketUnits := catalogInstall.enabledSocketUnits
+	enabledTenants := catalogInstall.enabledTenants
+	managerContract, err := newProductionRecoverySystemdContract(installedPortal, tenants)
 	if err != nil {
-		return Installed{}, err
+		return Installed{}, fmt.Errorf("build exact signed systemd contract before blank-host activation: %w", err)
 	}
-	if err := admin.VerifyPortalFiles(installedPortal, manifest.PortalConfig); err != nil {
-		return Installed{}, fmt.Errorf("verify restored Portal configuration protection: %w", err)
-	}
-	rendererIndex := filepath.ToSlash(filepath.Join(installedPortal.Renderer.RelativeRoot, "index.html"))
-	if _, err := release.ResolveActive(
-		installedPortal.Renderer.ReleasesRoot,
-		installedPortal.Renderer.PointerFile,
-		installedPortal.Renderer.PublicKeyFile,
-		release.ResolveOptions{
-			Scope: installedPortal.Renderer.Scope, RequiredPaths: []string{rendererIndex}, RequireRootOwner: true,
-			RequiredComponents: release.RequiredComponentsForScope(installedPortal.Renderer.Scope),
-		},
-	); err != nil {
-		return Installed{}, fmt.Errorf("verify restored signed Renderer release: %w", err)
-	}
-	if err := verifyRecoveredPreviousRelease(
-		installedPortal.Renderer.ReleasesRoot,
-		installedPortal.Renderer.PointerFile,
-		installedPortal.Renderer.PublicKeyFile,
-		installedPortal.Renderer.Scope,
-		[]string{rendererIndex},
-	); err != nil {
-		return Installed{}, fmt.Errorf("verify restored previous Renderer release: %w", err)
-	}
-	data, err := store.Open(installedPortal.DatabasePath(), installedPortal.AuditPath())
-	if err != nil {
-		return Installed{}, err
-	}
-	users, listErr := data.ListUsers(ctx)
-	closeErr := data.Close()
-	if listErr != nil || closeErr != nil {
-		return Installed{}, errors.Join(listErr, closeErr)
-	}
-	enabledTenants := make(map[string]bool)
-	for _, value := range users {
-		enabledTenants[value.TenantID] = value.Enabled
-	}
-	result := Installed{TenantCount: len(tenants)}
-	enabledSocketUnits := make([]string, 0, len(tenants))
-	for _, tenant := range tenants {
-		if _, err := admin.VerifyTenantHost(installedPortal, tenant); err != nil {
-			return Installed{}, fmt.Errorf("verify restored tenant %s: %w", tenant.TenantID, err)
-		}
-		required := []string{tenant.Backend.Executable}
-		required = append(required, tenant.Backend.RequiredReleaseFiles...)
-		if tenant.Backend.Migration.Enabled {
-			required = append(required, tenant.Backend.Migration.Executable)
-		}
-		if tenant.Backend.AgentCLI.BinDirectory != "" {
-			required = append(required, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
-		}
-		if err := verifyRecoveredPreviousRelease(
-			tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.PublicKeyFile, tenant.Release.Scope, required,
-		); err != nil {
-			return Installed{}, fmt.Errorf("verify restored previous tenant release %s: %w", tenant.TenantID, err)
-		}
-		if err := admin.VerifyTenantService(ctx, installedPortal, tenant, admin.ServiceVerificationOptions{Controller: controller}); err != nil {
-			return Installed{}, fmt.Errorf("verify restored tenant service %s: %w", tenant.TenantID, err)
-		}
-		if enabledTenants[tenant.TenantID] {
-			enabledSocketUnits = append(enabledSocketUnits, "workagent-userhost@"+tenant.TenantID+".socket")
-		}
-	}
+	baselineUnitFileStates := managerContract.baselineUnitFileStates()
 	// Everything above is a validation or an inactive-state installation. Only
 	// now release the exclusive lock and begin activation. A failed activation
 	// is stopped in reverse order and remains safely resumable.
@@ -455,7 +378,10 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 	if err := requireRecoveryUnitRunning(ctx, controller, "mihomo.service"); err != nil {
 		return Installed{}, fmt.Errorf("blank-host recovery egress prerequisite changed: %w", err)
 	}
-	activationUnits := []string{"cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service"}
+	if err := managerContract.requireFleet(ctx, controller, baselineUnitFileStates); err != nil {
+		return Installed{}, fmt.Errorf("authenticate exact package-prepared systemd fleet before recovery activation intent: %w", err)
+	}
+	activationUnits := []string{"workagent-tenant-catalog-ready.target", "cliproxyapi.service", "workagent-notification.service", "workagent-chatforward.service"}
 	activationUnits = append(activationUnits, enabledSocketUnits...)
 	activationUnits = append(activationUnits, "workagent-chatforward-browser.service", "workagent-portal.service")
 	activationJournal, err := activationJournalForUnits(activationUnits)
@@ -469,20 +395,88 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 		rollbackErr := rollbackKnownRecoveryActivation(controller, activationJournal, recoveryActivationJournalPath)
 		return Installed{}, errors.Join(cause, rollbackErr)
 	}
-	for index := len(tenantLocks) - 1; index >= 0; index-- {
-		if err := tenantLocks[index].Close(); err != nil {
-			return failActivation(errors.New("release tenant recovery lock"))
+	// Bind the durable intent to the same exact manager cache and signed source
+	// contract that was authenticated before publication. No permit may exist
+	// while a fragment, drop-in, command, helper, daemon cache, or persistent
+	// unit-file state is ambiguous.
+	if err := managerContract.requireFleet(ctx, controller, baselineUnitFileStates); err != nil {
+		return failActivation(fmt.Errorf("re-prove exact systemd fleet after recording recovery activation intent: %w", err))
+	}
+	activationPermit, err := acquireAuthorizedRecoveryActivationPermit(installLock, recoveryActivationJournalPath, bootID)
+	if err != nil {
+		rollbackErr := rollbackKnownRecoveryActivation(controller, activationJournal, recoveryActivationJournalPath)
+		return Installed{}, errors.Join(fmt.Errorf("authorize this-boot blank-host recovery activation: %w", err), rollbackErr)
+	}
+	activationPermitOpen := true
+	defer func() {
+		if activationPermitOpen {
+			resultErr = errors.Join(resultErr, activationPermit.Close())
 		}
+	}()
+	if err := managerContract.requireFleet(ctx, controller, baselineUnitFileStates); err != nil {
+		return failActivation(fmt.Errorf("re-prove exact systemd fleet after recovery permit publication: %w", err))
 	}
-	tenantLocks = nil
-	if err := portalLock.Close(); err != nil {
-		return failActivation(errors.New("release Portal recovery lock"))
+	// Persist durable intent before changing any boot state, then establish the
+	// exact DB-enabled -> socket UnitFileState mapping while every unit remains
+	// stopped. The catalog-ready target's offline gate can therefore prove the
+	// normal boot invariant. A crash in this window is reversed from the
+	// journal on the next recovery invocation.
+	enableUnits := recoveryActivationEnableUnits(activationJournal)
+	if err := recoverySystemdActionUnits(ctx, controller, "enable", enableUnits); err != nil {
+		return failActivation(fmt.Errorf("enable restored services before readiness reconciliation: %w", err))
 	}
-	if err := proxyLock.Close(); err != nil {
-		return failActivation(errors.New("release CLIProxy recovery lock"))
+	if err := requireRecoveryUnitFileState(ctx, controller, enableUnits, "enabled"); err != nil {
+		return failActivation(fmt.Errorf("prove restored service enablement before readiness reconciliation: %w", err))
 	}
-	proxyLock = nil
+	activatedUnitFileStates, err := managerContract.activatedUnitFileStates(activationJournal)
+	if err != nil {
+		return failActivation(err)
+	}
+	if err := managerContract.requireFleet(ctx, controller, activatedUnitFileStates); err != nil {
+		return failActivation(fmt.Errorf("authenticate exact systemd fleet after durable recovery enablement: %w", err))
+	}
+	// The persistent readiness latch is itself activation state. Journal it
+	// before first start so SIGKILL cannot make the next recovery fail its
+	// inactive-host admission gate forever.
+	if err := managerContract.requireUnits(ctx, controller, activatedUnitFileStates,
+		"workagent-tenant-config-reconcile.service", "workagent-tenant-catalog-ready.target"); err != nil {
+		return failActivation(fmt.Errorf("authenticate tenant reconciliation and readiness units before recovery start: %w", err))
+	}
+	if err := controller.Action(ctx, "start", "workagent-tenant-catalog-ready.target"); err != nil {
+		return failActivation(fmt.Errorf("establish tenant catalog readiness before recovery activation: %w", err))
+	}
+	if err := requireRecoveryCatalogReady(ctx, controller); err != nil {
+		return failActivation(err)
+	}
+	if err := managerContract.requireUnits(ctx, controller, activatedUnitFileStates,
+		"workagent-tenant-config-reconcile.service", "workagent-tenant-catalog-ready.target"); err != nil {
+		return failActivation(fmt.Errorf("re-read tenant reconciliation and readiness unit contract after recovery start: %w", err))
+	}
+	catalogSnapshot, err := lifecyclelock.AcquireCatalogShared(ctx)
+	if err != nil {
+		return failActivation(fmt.Errorf("acquire tenant catalog snapshot for recovery activation: %w", err))
+	}
+	defer func() { resultErr = errors.Join(resultErr, catalogSnapshot.Close()) }()
+	currentPortal, err := config.LoadPortal(manifest.PortalConfig)
+	if err != nil || !reflect.DeepEqual(currentPortal, installedPortal) {
+		return failActivation(fmt.Errorf("restored Portal catalog changed before activation: %w", err))
+	}
+	if err := admin.AssertTenantFileCatalogClean(currentPortal); err != nil {
+		return failActivation(fmt.Errorf("restored tenant catalog is not committed before activation: %w", err))
+	}
+	if err := verifyRecoveredTenantCatalogSnapshot(currentPortal, tenants); err != nil {
+		return failActivation(err)
+	}
+	if err := requireRecoveryCatalogReady(ctx, controller); err != nil {
+		return failActivation(err)
+	}
 	for _, unit := range activationUnits {
+		if unit == "workagent-tenant-catalog-ready.target" {
+			continue
+		}
+		if err := managerContract.requireUnits(ctx, controller, activatedUnitFileStates, unit); err != nil {
+			return failActivation(fmt.Errorf("authenticate restored unit %s immediately before start: %w", unit, err))
+		}
 		if err := controller.Action(ctx, "start", unit); err != nil {
 			return failActivation(fmt.Errorf("start restored unit %s: %w", unit, err))
 		}
@@ -490,6 +484,9 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 			if err := requireRecoveryUnitRunning(ctx, controller, unit); err != nil {
 				return failActivation(err)
 			}
+		}
+		if err := managerContract.requireUnits(ctx, controller, activatedUnitFileStates, unit); err != nil {
+			return failActivation(fmt.Errorf("re-read restored unit %s exact contract after start: %w", unit, err))
 		}
 		if unit == "cliproxyapi.service" {
 			result.CLIProxyStarted = true
@@ -503,12 +500,6 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 			result.PortalStarted = true
 		}
 	}
-	if err := recoverySystemdActionUnits(ctx, controller, "enable", activationUnits); err != nil {
-		return failActivation(fmt.Errorf("enable restored services: %w", err))
-	}
-	if err := requireRecoveryUnitFileState(ctx, controller, activationUnits, "enabled"); err != nil {
-		return failActivation(fmt.Errorf("prove restored service enablement: %w", err))
-	}
 	for _, tenant := range tenants {
 		if enabledTenants[tenant.TenantID] {
 			if err := admin.VerifyTenantService(ctx, installedPortal, tenant, admin.ServiceVerificationOptions{RequireReadySocket: true, Controller: controller}); err != nil {
@@ -521,6 +512,12 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 	// external edge/timer can start between its first readiness check and the
 	// durable activation-journal commit.
 	for _, unit := range activationUnits {
+		if unit == "workagent-tenant-catalog-ready.target" {
+			if err := requireRecoveryCatalogReady(ctx, controller); err != nil {
+				return failActivation(err)
+			}
+			continue
+		}
 		if strings.HasSuffix(unit, ".socket") {
 			continue
 		}
@@ -559,8 +556,30 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 	if err := requireExactRecoveryTenantUnits(ctx, controller, tenants); err != nil {
 		return failActivation(fmt.Errorf("loaded tenant-unit set changed during activation: %w", err))
 	}
+	activationStore, err := store.Open(currentPortal.DatabasePath(), currentPortal.AuditPath())
+	if err != nil {
+		return failActivation(fmt.Errorf("open restored Portal store for final activation proof: %w", err))
+	}
+	activationProofErr := admin.VerifyLiveTenantActivationCatalog(ctx, currentPortal, activationStore, controller)
+	if err := errors.Join(activationProofErr, activationStore.Close()); err != nil {
+		return failActivation(fmt.Errorf("prove restored tenant enabled/systemd activation catalog: %w", err))
+	}
 	if err := requireRecoveryUnitRunning(ctx, controller, "mihomo.service"); err != nil {
 		return failActivation(fmt.Errorf("blank-host recovery egress prerequisite changed before commit: %w", err))
+	}
+	if err := managerContract.requireFleet(ctx, controller, activatedUnitFileStates); err != nil {
+		return failActivation(fmt.Errorf("final exact signed systemd fleet readback before recovery commit: %w", err))
+	}
+	// Revoke the volatile authorization before committing the durable journal.
+	// A crash in this narrow interval is deliberately treated as an unfinished
+	// activation and rolled back by the next authenticated recovery.
+	if err := activationPermit.Close(); err != nil {
+		activationPermitOpen = false
+		return failActivation(fmt.Errorf("revoke blank-host recovery activation permit: %w", err))
+	}
+	activationPermitOpen = false
+	if err := managerContract.requireFleet(ctx, controller, activatedUnitFileStates); err != nil {
+		return failActivation(fmt.Errorf("exact systemd fleet changed after recovery permit revocation: %w", err))
 	}
 	if err := removeRecoveryActivationJournal(recoveryActivationJournalPath); err != nil {
 		return failActivation(fmt.Errorf("commit blank-host activation journal: %w", err))
@@ -569,7 +588,209 @@ func InstallRestoredTree(ctx context.Context, target string, manifest Manifest, 
 	return result, nil
 }
 
-func verifyRecoveredPreviousRelease(releasesRoot, pointerPath, publicKeyPath, scope string, requiredPaths []string) error {
+type recoveredCatalogInstall struct {
+	portal             config.Portal
+	tenants            []config.Tenant
+	result             Installed
+	enabledSocketUnits []string
+	enabledTenants     map[string]bool
+}
+
+// installRecoveredCatalogLocked starts immediately before the first restored
+// production-configuration byte is copied. Its caller owns C_EX for the whole
+// function, including normalization, one batch tenant publication/reload, and
+// every loaded-unit verification. Runtime activation begins only after the
+// callback returns and releases that guard.
+func installRecoveredCatalogLocked(
+	ctx context.Context,
+	transaction *admin.TenantFileCatalogTransaction,
+	translate func(string) string,
+	manifest Manifest,
+	portal config.Portal,
+	tenants []config.Tenant,
+	portalUID, portalGID, proxyUID, proxyGID uint32,
+	controller systemdctl.Controller,
+) (recoveredCatalogInstall, error) {
+	if transaction == nil || translate == nil || controller == nil {
+		return recoveredCatalogInstall{}, errors.New("recovered catalog transaction is unavailable")
+	}
+	// A previous attempt may have died after publishing the global tenant
+	// intent but before its verified commit. Close that generation before the
+	// recursive configuration copy performs exact destination enumeration.
+	// This uses the staged, authenticated Portal policy only to bind the fixed
+	// production paths; no restored byte has been installed yet.
+	if _, err := transaction.ReconcilePendingTenantFiles(ctx, portal, controller); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("reconcile interrupted tenant catalog before recovery copy: %w", err)
+	}
+	tenantManagedSources := make(map[string]bool, len(tenants))
+	for _, tenant := range tenants {
+		tenantManagedSources[filepath.Join("/etc/systemd/system", "workagent-userhost@"+tenant.TenantID+".service.d", "identity.conf")] = true
+	}
+	for _, source := range manifest.Sources {
+		staged := translate(source.Path)
+		// Tenant configs and identity/resource drop-ins are a single catalog
+		// generation owned by UpdateTenantFiles. Raw recursive copy would expose
+		// a prefix of that generation without a durable batch intent.
+		if tenantManagedSources[source.Path] {
+			continue
+		}
+		var copyErr error
+		if source.Path == filepath.Dir(manifest.PortalConfig) {
+			copyErr = copyRecoveredPathExcluding(staged, source.Path, map[string]bool{portal.Paths.TenantConfigs: true})
+		} else {
+			copyErr = copyRecoveredPath(staged, source.Path)
+		}
+		if copyErr != nil {
+			return recoveredCatalogInstall{}, fmt.Errorf("install restored source %s: %w", source.Name, copyErr)
+		}
+	}
+	stagedPortalConfigInfo, err := os.Lstat(translate(manifest.PortalConfig))
+	if err != nil {
+		return recoveredCatalogInstall{}, errors.New("restored Portal configuration ownership evidence is missing")
+	}
+	stagedPortalConfigStat, ok := stagedPortalConfigInfo.Sys().(*syscall.Stat_t)
+	if !ok || stagedPortalConfigInfo.Mode()&os.ModeSymlink != 0 || !stagedPortalConfigInfo.Mode().IsRegular() || stagedPortalConfigStat.Uid != 0 || stagedPortalConfigStat.Gid == 0 {
+		return recoveredCatalogInstall{}, errors.New("restored Portal configuration ownership evidence is invalid")
+	}
+	configurationGroups := map[uint32]uint32{}
+	if err := addRecoveredGroupMapping(configurationGroups, stagedPortalConfigStat.Gid, portalGID); err != nil {
+		return recoveredCatalogInstall{}, err
+	}
+	for path, accountName := range map[string]string{
+		"/etc/workagent/chatforward.env":   "workagent-chatforward",
+		"/etc/workagent/notification.json": "workagent-notification",
+	} {
+		stagedInfo, err := os.Lstat(translate(path))
+		if err != nil || stagedInfo.Mode()&os.ModeSymlink != 0 || !stagedInfo.Mode().IsRegular() || stagedInfo.Mode().Perm() != 0o640 {
+			return recoveredCatalogInstall{}, fmt.Errorf("restored %s configuration ownership evidence is invalid", accountName)
+		}
+		stagedStat, ok := stagedInfo.Sys().(*syscall.Stat_t)
+		if !ok || stagedStat.Uid != 0 || stagedStat.Gid == 0 {
+			return recoveredCatalogInstall{}, fmt.Errorf("restored %s configuration ownership is invalid", accountName)
+		}
+		account, err := user.Lookup(accountName)
+		if err != nil {
+			return recoveredCatalogInstall{}, fmt.Errorf("the WorkAgent package must create %s before recovery", accountName)
+		}
+		packageGID, err := strconv.ParseUint(account.Gid, 10, 32)
+		if err != nil || packageGID == 0 {
+			return recoveredCatalogInstall{}, fmt.Errorf("the package-created %s group is invalid", accountName)
+		}
+		if err := addRecoveredGroupMapping(configurationGroups, stagedStat.Gid, uint32(packageGID)); err != nil {
+			return recoveredCatalogInstall{}, err
+		}
+	}
+	if err := normalizeRecoveredPortalConfiguration(filepath.Dir(manifest.PortalConfig), portal.Paths.TenantConfigs, configurationGroups); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("normalize restored Portal configuration tree: %w", err)
+	}
+	if err := chownRecoveredTree(portal.Paths.PortalState, int(portalUID), int(portalGID)); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("normalize restored Portal state ownership: %w", err)
+	}
+	for path, accountName := range map[string]string{
+		"/etc/workagent/chatforward.env":   "workagent-chatforward",
+		"/etc/workagent/notification.json": "workagent-notification",
+	} {
+		if err := verifyServiceRecoveryFile(path, accountName); err != nil {
+			return recoveredCatalogInstall{}, fmt.Errorf("verify restored %s configuration: %w", accountName, err)
+		}
+	}
+	policyParentInfo, err := os.Lstat(filepath.Dir(portal.CLIProxy.PolicyStateFile))
+	if err != nil {
+		return recoveredCatalogInstall{}, errors.New("package-prepared CLIProxy policy directory is missing")
+	}
+	policyParentStat, policyParentOK := policyParentInfo.Sys().(*syscall.Stat_t)
+	if !policyParentOK || policyParentInfo.Mode()&os.ModeSymlink != 0 || !policyParentInfo.IsDir() || policyParentInfo.Mode().Perm() != 0o700 ||
+		policyParentStat.Uid != proxyUID || policyParentStat.Gid != proxyGID {
+		return recoveredCatalogInstall{}, errors.New("package-prepared CLIProxy policy directory is unsafe")
+	}
+	if err := normalizeRecoveredPolicyState(portal.CLIProxy.PolicyStateFile, proxyUID, proxyGID); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("normalize restored CLIProxy policy state: %w", err)
+	}
+	if err := cliproxy.VerifyProductionPolicyState(portal.CLIProxy.PolicyStateFile, proxyUID, proxyGID); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("verify restored CLIProxy policy state: %w", err)
+	}
+	installedPortal, err := config.LoadPortal(manifest.PortalConfig)
+	if err != nil {
+		return recoveredCatalogInstall{}, err
+	}
+	if err := admin.VerifyPortalFiles(installedPortal, manifest.PortalConfig); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("verify restored Portal configuration protection: %w", err)
+	}
+	for index, tenant := range tenants {
+		installed := tenant
+		installed.PortalUID = portalUID
+		if installed.Capacity.ProjectID != 0 {
+			if _, err := hostcheck.VerifyTenantQuota(installed.DataRoot, installed.Capacity.ProjectID, installed.Capacity.DiskHardLimitBytes); err != nil {
+				return recoveredCatalogInstall{}, fmt.Errorf("verify restored tenant project quota: %w", err)
+			}
+		}
+		tenants[index] = installed
+	}
+	if err := transaction.UpdateTenantFiles(ctx, installedPortal, tenants, controller); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("rebuild tenant configuration ACLs and service metadata: %w", err)
+	}
+	rendererIndex := filepath.ToSlash(filepath.Join(installedPortal.Renderer.RelativeRoot, "index.html"))
+	if _, err := release.ResolveActive(
+		installedPortal.Renderer.ReleasesRoot,
+		installedPortal.Renderer.PointerFile,
+		installedPortal.Renderer.PublicKeyFile,
+		release.ResolveOptions{
+			Scope: installedPortal.Renderer.Scope, RequiredPaths: []string{rendererIndex}, RequireRootOwner: true,
+		},
+	); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("verify restored signed Renderer release: %w", err)
+	}
+	if err := verifyRecoveredPreviousRelease(
+		installedPortal.Renderer.ReleasesRoot,
+		installedPortal.Renderer.PointerFile,
+		installedPortal.Renderer.PublicKeyFile,
+		installedPortal.Renderer.Scope,
+		[]string{rendererIndex},
+		nil,
+	); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("verify restored previous Renderer release: %w", err)
+	}
+	identities, err := store.InspectPortalIdentitiesOffline(ctx, installedPortal.DatabasePath(), portalUID, portalGID)
+	if err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("inspect restored Portal identity catalog while quiesced: %w", err)
+	}
+	if err := admin.VerifyTenantIdentityCatalog(tenants, identities); err != nil {
+		return recoveredCatalogInstall{}, fmt.Errorf("restored Portal identity catalog does not match tenant configurations: %w", err)
+	}
+	enabledTenants := make(map[string]bool)
+	for _, value := range identities {
+		enabledTenants[value.TenantID] = value.Enabled
+	}
+	result := Installed{TenantCount: len(tenants)}
+	enabledSocketUnits := make([]string, 0, len(tenants))
+	for _, tenant := range tenants {
+		if _, err := admin.VerifyTenantHost(installedPortal, tenant); err != nil {
+			return recoveredCatalogInstall{}, fmt.Errorf("verify restored tenant %s: %w", tenant.TenantID, err)
+		}
+		required := append([]string(nil), tenant.Backend.RequiredReleaseFiles...)
+		requiredExecutables := []string{tenant.Backend.Executable}
+		if tenant.Backend.Migration.Enabled {
+			requiredExecutables = append(requiredExecutables, tenant.Backend.Migration.Executable)
+		}
+		if tenant.Backend.AgentCLI.BinDirectory != "" {
+			requiredExecutables = append(requiredExecutables, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
+		}
+		if err := verifyRecoveredPreviousRelease(
+			tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.PublicKeyFile, tenant.Release.Scope, required, requiredExecutables,
+		); err != nil {
+			return recoveredCatalogInstall{}, fmt.Errorf("verify restored previous tenant release %s: %w", tenant.TenantID, err)
+		}
+		if enabledTenants[tenant.TenantID] {
+			enabledSocketUnits = append(enabledSocketUnits, "workagent-userhost@"+tenant.TenantID+".socket")
+		}
+	}
+	return recoveredCatalogInstall{
+		portal: installedPortal, tenants: tenants, result: result, enabledSocketUnits: enabledSocketUnits,
+		enabledTenants: enabledTenants,
+	}, nil
+}
+
+func verifyRecoveredPreviousRelease(releasesRoot, pointerPath, publicKeyPath, scope string, requiredPaths, requiredExecutablePaths []string) error {
 	pointer, err := release.LoadProtectedPointer(pointerPath, true)
 	if err != nil || pointer.Scope != scope {
 		return errors.New("restored release pointer changed before previous-release verification")
@@ -579,9 +800,9 @@ func verifyRecoveredPreviousRelease(releasesRoot, pointerPath, publicKeyPath, sc
 	}
 	root := filepath.Join(releasesRoot, pointer.Previous)
 	_, err = release.Verify(root, filepath.Join(root, "manifest.json"), release.VerifyOptions{
-		ExpectedReleaseID: pointer.Previous, RequiredPaths: requiredPaths, RequireRootOwner: true, RequireSignature: true,
+		ExpectedReleaseID: pointer.Previous, RequiredPaths: requiredPaths, RequiredExecutablePaths: requiredExecutablePaths, RequireRootOwner: true, RequireSignature: true,
 		SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKeyPath,
-		AllowedScopes: []string{scope}, RequiredComponents: release.RequiredComponentsForScope(scope),
+		AllowedScopes: []string{scope},
 	})
 	return err
 }
@@ -601,13 +822,21 @@ func requireRecoveryUnitsStopped(ctx context.Context, controller systemdctl.Cont
 		return errors.New("blank-host recovery systemd gate is unavailable")
 	}
 	for _, unit := range units {
-		properties, err := controller.Properties(ctx, unit, "LoadState", "ActiveState", "SubState", "MainPID", "ControlPID")
+		propertyNames := []string{"LoadState", "ActiveState", "SubState"}
+		if !strings.HasSuffix(unit, ".target") {
+			propertyNames = append(propertyNames, "MainPID", "ControlPID")
+		}
+		properties, err := controller.Properties(ctx, unit, propertyNames...)
 		if err != nil || properties["LoadState"] != "loaded" {
 			return fmt.Errorf("package-prepared systemd unit %s is unavailable: %w", unit, err)
 		}
-		mainPID, mainErr := strconv.ParseUint(properties["MainPID"], 10, 64)
-		controlPID, controlErr := strconv.ParseUint(properties["ControlPID"], 10, 64)
-		if properties["ActiveState"] != "inactive" || properties["SubState"] != "dead" || mainErr != nil || controlErr != nil || mainPID != 0 || controlPID != 0 {
+		processFree := true
+		if !strings.HasSuffix(unit, ".target") {
+			mainPID, mainErr := strconv.ParseUint(properties["MainPID"], 10, 64)
+			controlPID, controlErr := strconv.ParseUint(properties["ControlPID"], 10, 64)
+			processFree = mainErr == nil && controlErr == nil && mainPID == 0 && controlPID == 0
+		}
+		if properties["ActiveState"] != "inactive" || properties["SubState"] != "dead" || !processFree {
 			return fmt.Errorf("blank-host recovery requires %s to be inactive/dead with no process", unit)
 		}
 	}
@@ -633,6 +862,62 @@ func requireRecoveryUnitFileState(ctx context.Context, controller systemdctl.Con
 		if err != nil || properties["LoadState"] != "loaded" || properties["UnitFileState"] != expected {
 			return fmt.Errorf("package-prepared systemd unit %s must have UnitFileState=%s: %w", unit, expected, err)
 		}
+	}
+	return nil
+}
+
+func requireRecoveryCatalogReady(ctx context.Context, controller systemdctl.Controller) error {
+	if controller == nil {
+		return errors.New("blank-host recovery tenant catalog readiness gate is unavailable")
+	}
+	properties, err := controller.Properties(ctx, "workagent-tenant-catalog-ready.target", "LoadState", "ActiveState", "UnitFileState")
+	if err != nil {
+		return fmt.Errorf("inspect tenant catalog readiness target during recovery: %w", err)
+	}
+	if properties["LoadState"] != "loaded" || properties["ActiveState"] != "active" || properties["UnitFileState"] != "static" {
+		return errors.New("tenant catalog readiness target is not loaded, active, and static during recovery")
+	}
+	return nil
+}
+
+func verifyRecoveredTenantCatalogSnapshot(portal config.Portal, expected []config.Tenant) error {
+	if len(expected) == 0 {
+		return errors.New("recovered tenant catalog snapshot is empty")
+	}
+	wanted := make(map[string]config.Tenant, len(expected))
+	for _, tenant := range expected {
+		if _, duplicate := wanted[tenant.TenantID]; duplicate {
+			return errors.New("recovered tenant catalog snapshot contains a duplicate tenant")
+		}
+		wanted[tenant.TenantID] = tenant
+	}
+	entries, err := os.ReadDir(portal.Paths.TenantConfigs)
+	if err != nil {
+		return fmt.Errorf("enumerate recovered tenant catalog before activation: %w", err)
+	}
+	if len(entries) != len(wanted) {
+		return errors.New("recovered tenant catalog changed before activation")
+	}
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".json" {
+			return fmt.Errorf("recovered tenant catalog contains unexpected entry %q", name)
+		}
+		tenantID := strings.TrimSuffix(name, ".json")
+		expectedTenant, ok := wanted[tenantID]
+		if !ok || seen[tenantID] {
+			return errors.New("recovered tenant catalog identity set changed before activation")
+		}
+		path := filepath.Join(portal.Paths.TenantConfigs, name)
+		actual, err := config.LoadTenant(path)
+		if err != nil || !admin.CanonicalTenantConfigEqual(actual, expectedTenant) {
+			return fmt.Errorf("recovered tenant configuration %s changed before activation: %w", tenantID, err)
+		}
+		if err := admin.VerifyTenantConfigPath(portal, actual, path); err != nil {
+			return fmt.Errorf("verify recovered tenant configuration %s before activation: %w", tenantID, err)
+		}
+		seen[tenantID] = true
 	}
 	return nil
 }
@@ -760,8 +1045,8 @@ func prepareRecoveredTenantRoot(tenant config.Tenant, uid, gid uint32) error {
 	return err
 }
 
-func normalizeRecoveredPortalConfiguration(root string, groupMappings map[uint32]uint32) error {
-	if root != "/etc/workagent" || len(groupMappings) == 0 {
+func normalizeRecoveredPortalConfiguration(root, excludedTenantConfigRoot string, groupMappings map[uint32]uint32) error {
+	if root != "/etc/workagent" || excludedTenantConfigRoot != filepath.Join(root, "users") || len(groupMappings) == 0 {
 		return errors.New("Portal configuration group normalization input is invalid")
 	}
 	for archivedGID, packageGID := range groupMappings {
@@ -777,6 +1062,13 @@ func normalizeRecoveredPortalConfiguration(root string, groupMappings map[uint32
 	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if path == excludedTenantConfigRoot {
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || stat.Uid != 0 || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+				return errors.New("tenant configuration root is unsafe during recovery normalization")
+			}
+			return filepath.SkipDir
 		}
 		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
 			return errors.New("restored Portal configuration contains an unsupported entry")
@@ -1098,6 +1390,14 @@ func runRecoveryCommand(ctx context.Context, name string, arguments ...string) e
 }
 
 func copyRecoveredPath(source, destination string) error {
+	return copyRecoveredPathExcluding(source, destination, nil)
+}
+
+// copyRecoveredPathExcluding retains the exact recursive-copy checks while
+// leaving selected destination subtrees untouched. Every excluded name must
+// still exist in both directory enumerations, so exclusion cannot hide an
+// extra destination entry or a missing authenticated source entry.
+func copyRecoveredPathExcluding(source, destination string, excludedDestinations map[string]bool) error {
 	if !cleanAbsolute(source) || !cleanAbsolute(destination) || destination == string(filepath.Separator) {
 		return errors.New("recovery copy path is invalid")
 	}
@@ -1178,7 +1478,12 @@ func copyRecoveredPath(source, destination string) error {
 			}
 		}
 		for _, entry := range sourceEntries {
-			if err := copyRecoveredPath(filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
+			childSource := filepath.Join(source, entry.Name())
+			childDestination := filepath.Join(destination, entry.Name())
+			if excludedDestinations[childDestination] {
+				continue
+			}
+			if err := copyRecoveredPathExcluding(childSource, childDestination, excludedDestinations); err != nil {
 				return err
 			}
 		}

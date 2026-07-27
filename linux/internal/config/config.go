@@ -376,7 +376,7 @@ func (p Portal) ValidateProductionLayout(configPath string) error {
 			return errors.New("Portal production trusted proxies must be restricted to loopback CIDRs")
 		}
 	}
-	if !p.Renderer.Configured() || p.Renderer.ReleasesRoot != "/opt/workagent/aionui/releases" || p.Renderer.PointerFile != "/opt/workagent/aionui/current.json" || p.Renderer.PublicKeyFile != "/etc/workagent/trust/release-signing.pub" {
+	if !p.Renderer.Configured() || p.Renderer.ReleasesRoot != "/opt/workagent/aionui/releases" || p.Renderer.PointerFile != "/opt/workagent/aionui/current.json" || p.Renderer.PublicKeyFile != "/etc/workagent/trust/release-signing.pub" || p.Renderer.Scope != "runtime" || p.Renderer.RelativeRoot != "static" {
 		return errors.New("Portal production Renderer channel is not canonical")
 	}
 	if p.AdminMasterPasswordHashFile != "" && p.AdminMasterPasswordHashFile != "/run/credentials/workagent-portal.service/admin-master-password-hash" {

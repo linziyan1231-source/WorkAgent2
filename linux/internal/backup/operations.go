@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -23,6 +24,7 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/admin"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/cliproxy"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/servicelock"
 
@@ -48,7 +50,28 @@ type Snapshot struct {
 	PortalConfig    string
 	Sources         []Source
 	ReleasePointers []ReleasePointer
+	catalogGuard    io.Closer
 	locks           []io.Closer
+}
+
+type snapshotCatalogAcquire func(context.Context) (io.Closer, error)
+
+func beginCatalogLockedSnapshot(ctx context.Context, portalConfigPath string, acquire snapshotCatalogAcquire) (*Snapshot, error) {
+	if ctx == nil || acquire == nil {
+		return nil, errors.New("backup catalog snapshot guard is unavailable")
+	}
+	guard, err := acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire backup catalog lifecycle lock: %w", err)
+	}
+	if guard == nil || (reflect.ValueOf(guard).Kind() == reflect.Pointer && reflect.ValueOf(guard).IsNil()) {
+		return nil, errors.New("backup catalog lifecycle lock acquisition returned no guard")
+	}
+	return &Snapshot{PortalConfig: portalConfigPath, catalogGuard: guard, locks: []io.Closer{guard}}, nil
+}
+
+func acquireProductionSnapshotCatalog(ctx context.Context) (io.Closer, error) {
+	return lifecyclelock.AcquireCatalogShared(ctx)
 }
 
 type Created struct {
@@ -119,6 +142,21 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 	if err := backupConfig.Validate(); err != nil {
 		return nil, err
 	}
+	// This shared guard is the outermost snapshot lock. It is acquired before
+	// any production configuration is read and remains in Snapshot.locks until
+	// Create has archived and authenticated every source. Tenant configuration
+	// publication takes the same inode exclusively, so discovery and archive
+	// can never span two catalog generations even outside the systemd wrapper.
+	snapshot, err := beginCatalogLockedSnapshot(context.Background(), portalConfigPath, acquireProductionSnapshotCatalog)
+	if err != nil {
+		return nil, err
+	}
+	keepLocks := false
+	defer func() {
+		if !keepLocks {
+			_ = snapshot.Close()
+		}
+	}()
 	portal, err := config.LoadPortal(portalConfigPath)
 	if err != nil {
 		return nil, err
@@ -137,14 +175,6 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 			return nil, fmt.Errorf("backup service configuration %s: %w", path, err)
 		}
 	}
-	snapshot := &Snapshot{PortalConfig: portalConfigPath}
-	keepLocks := false
-	defer func() {
-		if !keepLocks {
-			_ = snapshot.Close()
-		}
-	}()
-
 	tenantEntries, err := os.ReadDir(portal.Paths.TenantConfigs)
 	if err != nil {
 		return nil, fmt.Errorf("read tenant configurations: %w", err)
@@ -236,7 +266,6 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 		portal.Renderer.PublicKeyFile,
 		release.ResolveOptions{
 			Scope: portal.Renderer.Scope, RequiredPaths: []string{rendererIndex}, RequireRootOwner: true,
-			RequiredComponents: release.RequiredComponentsForScope(portal.Renderer.Scope),
 		},
 	); err != nil {
 		return nil, fmt.Errorf("Renderer current release is not recoverable: %w", err)
@@ -247,6 +276,7 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 		portal.Renderer.PublicKeyFile,
 		portal.Renderer.Scope,
 		[]string{rendererIndex},
+		nil,
 	); err != nil {
 		return nil, fmt.Errorf("Renderer previous release is not recoverable: %w", err)
 	}
@@ -254,13 +284,13 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 		if _, err := admin.VerifyTenantHost(portal, tenant); err != nil {
 			return nil, fmt.Errorf("tenant %s is not recoverable: %w", tenant.TenantID, err)
 		}
-		required := []string{tenant.Backend.Executable}
-		required = append(required, tenant.Backend.RequiredReleaseFiles...)
+		required := append([]string(nil), tenant.Backend.RequiredReleaseFiles...)
+		requiredExecutables := []string{tenant.Backend.Executable}
 		if tenant.Backend.Migration.Enabled {
-			required = append(required, tenant.Backend.Migration.Executable)
+			requiredExecutables = append(requiredExecutables, tenant.Backend.Migration.Executable)
 		}
 		if tenant.Backend.AgentCLI.BinDirectory != "" {
-			required = append(required, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
+			requiredExecutables = append(requiredExecutables, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
 		}
 		if err := verifyRecoveredPreviousRelease(
 			tenant.Release.ReleasesRoot,
@@ -268,6 +298,7 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 			tenant.Release.PublicKeyFile,
 			tenant.Release.Scope,
 			required,
+			requiredExecutables,
 		); err != nil {
 			return nil, fmt.Errorf("tenant %s previous release is not recoverable: %w", tenant.TenantID, err)
 		}
@@ -369,6 +400,138 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 	}
 	keepLocks = true
 	return snapshot, nil
+}
+
+// BuildActivationBackupContract derives the exact authenticated source and
+// release-pointer set that a pre-upgrade backup must contain. It deliberately
+// performs no quiescing; callers combine it with the release/config lifecycle
+// lock before authorizing a pointer change.
+func BuildActivationBackupContract(portalConfigPath string, backupConfig Config) (CreateInput, error) {
+	if err := backupConfig.Validate(); err != nil {
+		return CreateInput{}, err
+	}
+	portal, err := config.LoadPortal(portalConfigPath)
+	if err != nil {
+		return CreateInput{}, err
+	}
+	if err := portal.ValidateProductionLayout(portalConfigPath); err != nil {
+		return CreateInput{}, fmt.Errorf("activation backup production layout: %w", err)
+	}
+	if err := admin.VerifyPortalFiles(portal, portalConfigPath); err != nil {
+		return CreateInput{}, fmt.Errorf("activation backup Portal file protection: %w", err)
+	}
+	entries, err := os.ReadDir(portal.Paths.TenantConfigs)
+	if err != nil {
+		return CreateInput{}, err
+	}
+	tenants := make([]config.Tenant, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			return CreateInput{}, errors.New("activation backup tenant configuration directory contains an unexpected entry")
+		}
+		path := filepath.Join(portal.Paths.TenantConfigs, entry.Name())
+		tenant, err := config.LoadTenant(path)
+		if err != nil || entry.Name() != tenant.TenantID+".json" {
+			return CreateInput{}, errors.New("activation backup tenant configuration set is invalid")
+		}
+		if err := admin.ValidateTenantBinding(portal, tenant); err != nil {
+			return CreateInput{}, fmt.Errorf("activation backup tenant %s binding: %w", tenant.TenantID, err)
+		}
+		if err := admin.VerifyTenantConfigPath(portal, tenant, path); err != nil {
+			return CreateInput{}, fmt.Errorf("activation backup tenant %s config protection: %w", tenant.TenantID, err)
+		}
+		tenants = append(tenants, tenant)
+	}
+	if len(tenants) == 0 {
+		return CreateInput{}, errors.New("activation backup contract contains no tenant")
+	}
+	sort.Slice(tenants, func(i, j int) bool { return tenants[i].TenantID < tenants[j].TenantID })
+
+	contract := CreateInput{PortalConfig: portalConfigPath}
+	contract.Sources = append(contract.Sources,
+		Source{Name: "configuration", Path: filepath.Dir(portalConfigPath)},
+		Source{Name: "portal-state", Path: portal.Paths.PortalState},
+		Source{Name: "cliproxy-policy-state", Path: portal.CLIProxy.PolicyStateFile},
+		Source{Name: "release-pointer-renderer", Path: portal.Renderer.PointerFile},
+	)
+	pointerSources := map[string]bool{portal.Renderer.PointerFile: true}
+	for _, tenant := range tenants {
+		identityPath := filepath.Join("/etc/systemd/system", "workagent-userhost@"+tenant.TenantID+".service.d", "identity.conf")
+		contract.Sources = append(contract.Sources,
+			Source{Name: "tenant-" + tenant.TenantID, Path: tenant.DataRoot},
+			Source{Name: "systemd-identity-" + tenant.TenantID, Path: identityPath},
+		)
+		if !pointerSources[tenant.Release.PointerFile] {
+			contract.Sources = append(contract.Sources, Source{Name: "release-pointer-" + tenant.TenantID, Path: tenant.Release.PointerFile})
+			pointerSources[tenant.Release.PointerFile] = true
+		}
+	}
+	contract.Sources = append(contract.Sources, backupConfig.AdditionalSources...)
+	if err := validateSources(contract.Sources); err != nil {
+		return CreateInput{}, err
+	}
+	sort.Slice(contract.Sources, func(i, j int) bool { return contract.Sources[i].Path < contract.Sources[j].Path })
+
+	pointers := make(map[string]ReleasePointer, len(pointerSources))
+	addPointer := func(path, scope string) error {
+		pointer, err := release.LoadProtectedPointer(path, true)
+		if err != nil || pointer.Scope != scope {
+			return fmt.Errorf("activation backup release pointer %s is invalid: %w", path, err)
+		}
+		pointers[path] = ReleasePointer{Path: path, Scope: pointer.Scope, Current: pointer.Current, Previous: pointer.Previous, Activated: pointer.ActivatedAt.UTC().Format(time.RFC3339Nano)}
+		return nil
+	}
+	if err := addPointer(portal.Renderer.PointerFile, portal.Renderer.Scope); err != nil {
+		return CreateInput{}, err
+	}
+	for _, tenant := range tenants {
+		if _, exists := pointers[tenant.Release.PointerFile]; !exists {
+			if err := addPointer(tenant.Release.PointerFile, tenant.Release.Scope); err != nil {
+				return CreateInput{}, err
+			}
+		}
+	}
+	for _, pointer := range pointers {
+		contract.ReleasePointers = append(contract.ReleasePointers, pointer)
+	}
+	sort.Slice(contract.ReleasePointers, func(i, j int) bool { return contract.ReleasePointers[i].Path < contract.ReleasePointers[j].Path })
+	return contract, nil
+}
+
+func ValidateActivationBackupManifest(manifest Manifest, contract CreateInput) error {
+	if !cleanAbsolute(contract.PortalConfig) || manifest.PortalConfig != contract.PortalConfig || len(contract.Sources) == 0 || len(contract.ReleasePointers) == 0 {
+		return errors.New("activation backup manifest does not match the protected Portal identity")
+	}
+	expectedSources := append([]Source(nil), contract.Sources...)
+	actualSources := append([]Source(nil), manifest.Sources...)
+	sort.Slice(expectedSources, func(i, j int) bool { return expectedSources[i].Path < expectedSources[j].Path })
+	sort.Slice(actualSources, func(i, j int) bool { return actualSources[i].Path < actualSources[j].Path })
+	if len(actualSources) != len(expectedSources) {
+		return errors.New("activation backup manifest source set is incomplete or contains extras")
+	}
+	for index := range expectedSources {
+		if actualSources[index] != expectedSources[index] {
+			return errors.New("activation backup manifest source set does not match the current recovery contract")
+		}
+	}
+	expectedPointers := append([]ReleasePointer(nil), contract.ReleasePointers...)
+	actualPointers := append([]ReleasePointer(nil), manifest.ReleasePointers...)
+	sort.Slice(expectedPointers, func(i, j int) bool { return expectedPointers[i].Path < expectedPointers[j].Path })
+	sort.Slice(actualPointers, func(i, j int) bool { return actualPointers[i].Path < actualPointers[j].Path })
+	if !equalReleasePointers(expectedPointers, actualPointers) {
+		return errors.New("activation backup manifest release-pointer set does not match the current channel state")
+	}
+	entryPaths := make(map[string]bool, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		entryPaths[entry.Path] = true
+	}
+	for _, source := range expectedSources {
+		rootEntry := "rootfs" + filepath.ToSlash(source.Path)
+		if !entryPaths[rootEntry] {
+			return fmt.Errorf("activation backup manifest omits source root %s", source.Name)
+		}
+	}
+	return nil
 }
 
 func verifyProtectedRecoveryFile(path string, maximumMode os.FileMode) error {
@@ -556,11 +719,12 @@ func (s *Snapshot) Close() error {
 		}
 	}
 	s.locks = nil
+	s.catalogGuard = nil
 	return first
 }
 
 func Create(snapshot *Snapshot, configuration Config, key []byte, now time.Time) (Created, error) {
-	if snapshot == nil || len(snapshot.locks) == 0 || len(key) != keySize {
+	if snapshot == nil || snapshot.catalogGuard == nil || len(snapshot.locks) == 0 || len(key) != keySize {
 		return Created{}, errors.New("a locked snapshot and encryption key are required")
 	}
 	// Do not rely on a caller having run a preflight at some earlier point.

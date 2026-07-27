@@ -147,6 +147,8 @@ workagent_services_inactive() {
   local unit state active=0
   local -a units=(
     workagent-portal.service
+    workagent-tenant-catalog-ready.target
+    workagent-tenant-config-reconcile.service
     cliproxyapi.service
     workagent-notification.service
     workagent-chatforward.service
@@ -186,10 +188,10 @@ check_host_primitives() {
     fail "Linux is required"
   fi
   version=$(systemctl --version 2>/dev/null | awk 'NR == 1 {print $2}')
-  if [[ $version =~ ^[0-9]+$ ]] && (( version >= 252 )); then
+  if [[ $version =~ ^[0-9]+$ ]] && (( version >= 255 )); then
     pass "systemd $version satisfies the service contract"
   else
-    fail "systemd 252 or newer is required"
+    fail "systemd 255 or newer is required for named OpenFile lifecycle guards"
   fi
   if [[ -f /sys/fs/cgroup/cgroup.controllers ]]; then
     controllers=$(< /sys/fs/cgroup/cgroup.controllers)

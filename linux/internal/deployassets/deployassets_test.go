@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,7 +76,7 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 	if err := portal.ValidateProductionLayout("/etc/workagent/portal.json"); err != nil {
 		t.Fatal(err)
 	}
-	if portal.Listener.PublicOrigin != "https://workagent.example.invalid" || portal.OutboundProxyURL != "http://127.0.0.1:8118" || portal.Runtime.MaxConcurrentInstances != 20 || portal.Runtime.IdleReapSeconds != 1800 || portal.Notifications.Endpoint != "http://127.0.0.1:25888/notification" {
+	if portal.Listener.PublicOrigin != "https://workagent.example.invalid" || portal.OutboundProxyURL != "http://127.0.0.1:8118" || portal.Runtime.MaxConcurrentInstances != 20 || portal.Runtime.IdleReapSeconds != 1800 || portal.Notifications.Endpoint != "http://127.0.0.1:25888/notification" || portal.Renderer.RelativeRoot != "static" {
 		t.Fatalf("Portal production contract drifted: %#v", portal)
 	}
 
@@ -87,7 +88,7 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 	if err := tenant.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if tenant.PortalOrigin != portal.Listener.PublicOrigin || tenant.OutboundProxyURL != portal.OutboundProxyURL || tenant.IdleReapSeconds != 1800 || tenant.Capacity.MaxInstances != 20 || tenant.Capacity.DiskHardLimitBytes != 20*1024*1024*1024 {
+	if tenant.PortalOrigin != portal.Listener.PublicOrigin || tenant.OutboundProxyURL != portal.OutboundProxyURL || tenant.IdleReapSeconds != 1800 || tenant.Capacity.MaxInstances != 20 || tenant.Capacity.DiskHardLimitBytes != 20*1024*1024*1024 || !slices.Contains(tenant.Backend.RequiredReleaseFiles, filepath.Join(portal.Renderer.RelativeRoot, "index.html")) {
 		t.Fatal("tenant example does not match the 20-instance/20-GiB migrated host contract")
 	}
 
@@ -106,6 +107,31 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 
 	proxy := repositoryFile(t, "deploy/cliproxyapi/config.yaml")
 	requireContains(t, proxy, "host: \"127.0.0.1\"", "allow-remote: false", "proxy-url: \"http://127.0.0.1:8118\"")
+}
+
+func TestChatForwardInteractiveLoginIsInsideTheSignedSharedContract(t *testing.T) {
+	const loginPath = "chatforward/integration/login.sh"
+	releaseEvidence := repositoryFile(t, "docs/RELEASE_EVIDENCE.md")
+	loginRunbook := repositoryFile(t, "docs/CHATFORWARD_LINUX.md")
+	lifecycleHelper := repositoryFile(t, "deploy/libexec/workagent-fixed-root-exec-v1")
+	buildScript := repositoryFile(t, "scripts/build-chatforward.sh")
+	requireContains(t, releaseEvidence, loginPath)
+	requireContains(t, buildScript, "integration/login.sh")
+	requireContains(t, loginRunbook,
+		"/usr/libexec/workagent-fixed-root-exec-v1 chatforward-login",
+		"/opt/workagent/shared/"+loginPath,
+	)
+	requireContains(t, lifecycleHelper,
+		"--required chatforward/app/extension/manifest.json",
+		"--required-executable "+loginPath,
+		"--required-executable chatforward/integration/readiness.mjs",
+		"--required-executable chatforward/node/bin/node",
+	)
+	for _, unsupported := range []string{"--manifest ", "--signature "} {
+		if strings.Contains(loginRunbook, unsupported) {
+			t.Fatalf("ChatForward login verification uses unsupported flag %q", unsupported)
+		}
+	}
 }
 
 func TestProductionUnitsFailClosedOnStorageDependenciesAndCredentials(t *testing.T) {
@@ -134,10 +160,10 @@ func TestProductionUnitsFailClosedOnStorageDependenciesAndCredentials(t *testing
 		"ProtectProc=invisible",
 		"ProcSubset=pid",
 	)
-	const guardedTenantVerification = "ExecStartPre=+/opt/workagent/control/bin/workagent-admin verify-tenant --tenant-id %i --require-quiescent"
+	const guardedTenantVerification = "ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-admin verify-tenant --tenant-id %i --require-quiescent"
 	guardedLines := 0
 	for _, line := range strings.Split(userHost, "\n") {
-		if !strings.HasPrefix(line, "ExecStartPre=+/opt/workagent/control/bin/workagent-admin verify-tenant") {
+		if !strings.HasPrefix(line, "ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-admin verify-tenant") {
 			continue
 		}
 		guardedLines++
@@ -194,9 +220,15 @@ func TestEveryWorkAgentExecutableStartsFromAVerifiedSignedRoot(t *testing.T) {
 		}
 	}
 	cliproxyUnit := repositoryFile(t, "deploy/systemd/cliproxyapi.service")
-	requireContains(t, cliproxyUnit, "ExecStart=/usr/bin/flock --shared --nonblock --no-fork --conflict-exit-code 75 /run/workagent/cliproxy-migration.lock ")
+	requireContains(t, cliproxyUnit,
+		"OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only",
+		"ExecStart=/usr/libexec/workagent-fixed-root-exec-v1 cliproxyapi ",
+	)
 	tmpfiles := repositoryFile(t, "deploy/tmpfiles.d/workagent.conf")
-	requireContains(t, tmpfiles, "f /run/workagent/cliproxy-migration.lock 0640 root cliproxyapi -")
+	requireContains(t, tmpfiles,
+		"f /run/workagent/cliproxy-migration.lock 0640 root cliproxyapi -",
+		"f /run/workagent/cliproxy-oauth.lock 0640 root cliproxyapi -",
+	)
 
 }
 
@@ -204,8 +236,27 @@ func TestBlankHostRecoveryInstallLockIsPrecreatedAndPreflighted(t *testing.T) {
 	tmpfiles := repositoryFile(t, "deploy/tmpfiles.d/workagent.conf")
 	requireContains(t, tmpfiles, "f /run/workagent-backup/recovery-install.lock 0600 root root -")
 	preflight := repositoryFile(t, "scripts/production-preflight.sh")
-	requireContains(t, preflight, `protected_root_file_exact /run/workagent-backup/recovery-install.lock "blank-host recovery install lock" 600`)
+	requireContains(t, preflight, `protected_lock_inode /run/workagent-backup/recovery-install.lock "blank-host recovery install lock" 600`)
+	requireContains(t, preflight, `absent_path /run/workagent-backup/recovery-activation.permit "volatile blank-host recovery activation permit"`)
 	requireContains(t, preflight, `absent_path /var/lib/workagent-backup/recovery-activation.json "unfinished blank-host recovery activation journal"`)
+	requireContains(t, preflight, `absent_path /run/workagent-backup/quiesce.json "unfinished backup service quiescence journal"`)
+	requireContains(t, preflight, `absent_path /var/lib/workagent/tenant-activation.json "unfinished tenant activation transaction journal" 755`)
+}
+
+func TestRuntimeLifecycleLocksAreSystemdProvisionedAndAdopted(t *testing.T) {
+	tmpfiles := repositoryFile(t, "deploy/tmpfiles.d/workagent.conf")
+	requireContains(t, tmpfiles, "f /run/workagent/release-config.lock 0600 root root -")
+	requireContains(t, tmpfiles, "f /opt/workagent/aionui/current.json.lock 0600 root root -")
+	for _, unit := range []string{"deploy/systemd/workagent-portal.service", "deploy/systemd/workagent-userhost@.service"} {
+		payload := repositoryFile(t, unit)
+		requireContains(t, payload, "OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only")
+		requireContains(t, payload, "OpenFile=/opt/workagent/aionui/current.json.lock:workagent-runtime-release-lock:read-only")
+	}
+	socket := repositoryFile(t, "deploy/systemd/workagent-userhost@.socket")
+	requireContains(t, socket, "FileDescriptorName=workagent-userhost-socket")
+	preflight := repositoryFile(t, "scripts/production-preflight.sh")
+	requireContains(t, preflight, `protected_lock_inode /run/workagent/release-config.lock "release configuration lifecycle lock" 600`)
+	requireContains(t, preflight, `protected_lock_inode /opt/workagent/aionui/current.json.lock "runtime release lifecycle lock" 600`)
 }
 
 func TestNotificationPayloadIsReadableOnlyThroughItsDedicatedServiceIdentity(t *testing.T) {
@@ -245,17 +296,20 @@ func TestTrackedComponentListsMatchTheExecutableReleaseContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load %s components: %v", scope, err)
 		}
-		actual := make(map[string]string, len(components))
+		actual := make(map[string]release.Component, len(components))
 		for _, component := range components {
-			actual[component.Name] = component.Version
+			actual[component.Name] = component
 		}
-		expected := release.RequiredComponentsForScope(scope)
+		expected := release.ProductionRuntimeComponentEvidence()
+		if scope == release.ScopeShared {
+			expected = release.ProductionSharedComponentEvidence()
+		}
 		if len(actual) != len(expected) {
 			t.Fatalf("%s component count drifted: got %d want %d", scope, len(actual), len(expected))
 		}
-		for name, version := range expected {
-			if actual[name] != version {
-				t.Fatalf("%s component %s drifted: got %q want %q", scope, name, actual[name], version)
+		for name, component := range expected {
+			if actual[name] != component {
+				t.Fatalf("%s component %s drifted: got %+v want %+v", scope, name, actual[name], component)
 			}
 		}
 	}
@@ -538,9 +592,30 @@ func TestHostPreparationAndPreflightRetainExplicitBlockers(t *testing.T) {
 
 func TestSourceGatePackagesTheRootOnlyStagePublisher(t *testing.T) {
 	sourceGate := repositoryFile(t, "scripts/source-gate.sh")
+	arrayFields := func(name string) []string {
+		startMarker := name + "=(\n"
+		start := strings.Index(sourceGate, startMarker)
+		if start < 0 {
+			t.Fatalf("source gate omits %s", name)
+		}
+		start += len(startMarker)
+		end := strings.Index(sourceGate[start:], "\n)")
+		if end < 0 {
+			t.Fatalf("source gate contains an unterminated %s", name)
+		}
+		return strings.Fields(sourceGate[start : start+end])
+	}
+	wantControlCommands := []string{
+		"workagent-admin", "workagent-backup", "workagent-cliproxy", "workagent-import-stage", "workagent-notification",
+		"workagent-portal", "workagent-provision", "workagent-release", "workagent-secret", "workagent-userhost",
+	}
+	if got := arrayFields("go_control_commands"); !slices.Equal(got, wantControlCommands) {
+		t.Fatalf("source gate Go control command set drifted: got %q want %q", got, wantControlCommands)
+	}
 	requireContains(t, sourceGate,
-		"for command in workagent-admin workagent-backup workagent-cliproxy workagent-import-stage workagent-notification workagent-portal workagent-provision workagent-release workagent-secret workagent-userhost",
+		"for command in \"${go_control_commands[@]}\"; do\n  CGO_ENABLED=0 $go_binary build",
 		`-o "$binary_directory/$command" "./cmd/$command"`,
+		"for command in \"${go_control_commands[@]}\"; do\n  verify_go_build_identity \"$binary_directory/$command\" \"$command\"",
 	)
 	for _, unit := range []string{
 		"deploy/systemd/workagent-portal.service",
@@ -576,7 +651,16 @@ func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testi
 		t.Fatal("Caddy administrative API is exposed to tenant-reachable loopback TCP")
 	}
 	caddyDropIn := repositoryFile(t, "deploy/systemd/caddy.service.d/workagent.conf")
-	requireContains(t, caddyDropIn, "RuntimeDirectory=caddy-admin", "RuntimeDirectoryMode=0700")
+	requireContains(t, caddyDropIn,
+		"RuntimeDirectory=caddy-admin",
+		"RuntimeDirectoryMode=0700",
+		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
+		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
+		"NoNewPrivileges=yes",
+	)
+	if strings.Contains(caddyDropIn, "CAP_NET_ADMIN") {
+		t.Fatal("Caddy WorkAgent boundary retains host network-administration capability")
+	}
 
 	rules := repositoryFile(t, "deploy/monitoring/prometheus-rules.yml")
 	requireContains(t, rules,
@@ -600,10 +684,16 @@ func TestProductionRunbooksUseServiceScopedCLIProxyCredentials(t *testing.T) {
 	requireContains(t, migration,
 		"systemd-run --quiet --wait --pipe --collect --service-type=exec",
 		"/absolute/path/to/migration-tools/bin/workagent-migrate-windows",
+		"--capture-spec /private/workagent/final-capture/capture-spec.json",
+		"capture_spec_sha256",
+		"capture_manifest_sha256",
+		"capture_completed_at",
+		"<snapshot-root>/external-workspaces.json",
 		"--unit=workagent-cliproxy-migration-stage.service",
 		"--unit=workagent-cliproxy-migration-verify.service",
 		"--property=ProtectSystem=strict",
 		"--property='ReadWritePaths=/srv/workagent/users'",
+		"--property='ReadWritePaths=/srv/workagent/users /var/lib/workagent/migration/cutover'",
 		"--property=LoadCredentialEncrypted=cliproxy-management-key:/etc/credstore.encrypted/workagent/cliproxy-management-key.cred",
 		"--credential %d/cliproxy-management-key",
 		"/opt/workagent/control/bin/workagent-cliproxy stage-migration-bundles",
@@ -623,12 +713,20 @@ func TestProductionRunbooksUseServiceScopedCLIProxyCredentials(t *testing.T) {
 	requireContains(t, oauth,
 		"systemd-run --quiet --wait --pty --collect --service-type=exec",
 		"systemd-run --quiet --wait --pipe --collect --service-type=exec",
-		"--unit=workagent-cliproxy-oauth-codex.service",
-		"--unit=workagent-cliproxy-oauth-kimi.service",
-		"--unit=workagent-cliproxy-oauth-doctor.service",
+		"--unit=\"workagent-cliproxy-oauth-codex-${workagent_codex_oauth_run_id}.service\"",
+		"--unit=\"workagent-cliproxy-oauth-kimi-${workagent_kimi_oauth_run_id}.service\"",
+		"--unit=\"workagent-cliproxy-oauth-doctor-${workagent_oauth_doctor_run_id}.service\"",
 		"--uid=cliproxyapi --gid=cliproxyapi",
 		"--property='ReadWritePaths=/var/lib/cliproxyapi'",
 		"--property=LoadCredentialEncrypted=cliproxy-management-key:/etc/credstore.encrypted/workagent/cliproxy-management-key.cred",
+		"--property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only'",
+		"--property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only'",
+		"--property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only'",
+		"--property='OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only'",
+		"--property='OpenFile=/run/workagent/cliproxy-oauth.lock:workagent-cliproxy-oauth-lock:read-only'",
+		"/usr/libexec/workagent-fixed-root-exec-v1 cliproxy-oauth-codex",
+		"/usr/libexec/workagent-fixed-root-exec-v1 cliproxy-oauth-kimi",
+		"/usr/libexec/workagent-fixed-root-exec-v1 cliproxy-oauth-doctor",
 		"/opt/workagent/shared/cliproxyapi/bin/cli-proxy-api",
 		"--codex-device-login --no-browser",
 		"--kimi-login --no-browser",
@@ -637,6 +735,67 @@ func TestProductionRunbooksUseServiceScopedCLIProxyCredentials(t *testing.T) {
 	)
 	if strings.Count(oauth, "--service-type=exec") != 3 || strings.Contains(oauth, "--property=Type=exec") {
 		t.Fatal("OAuth transient service type contract is ambiguous or incomplete")
+	}
+	for _, lockOpen := range []string{
+		"--property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only'",
+		"--property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only'",
+		"--property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only'",
+		"--property='OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only'",
+	} {
+		if strings.Count(oauth, lockOpen) != 3 {
+			t.Fatalf("every OAuth/doctor transient unit must receive %q", lockOpen)
+		}
+	}
+	oauthWriterOpen := "--property='OpenFile=/run/workagent/cliproxy-oauth.lock:workagent-cliproxy-oauth-lock:read-only'"
+	if strings.Count(oauth, oauthWriterOpen) != 2 {
+		t.Fatalf("exactly the two provider authorization units must receive %q", oauthWriterOpen)
+	}
+	section := func(startMarker, endMarker string) string {
+		t.Helper()
+		start := strings.Index(oauth, startMarker)
+		if start < 0 {
+			t.Fatalf("OAuth runbook section %q is missing", startMarker)
+		}
+		end := len(oauth)
+		if endMarker != "" {
+			relativeEnd := strings.Index(oauth[start+len(startMarker):], endMarker)
+			if relativeEnd < 0 {
+				t.Fatalf("OAuth runbook section %q has no %q boundary", startMarker, endMarker)
+			}
+			end = start + len(startMarker) + relativeEnd
+		}
+		return oauth[start:end]
+	}
+	commonLockOpens := []string{
+		"--property='OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only'",
+		"--property='OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only'",
+		"--property='OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only'",
+		"--property='OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only'",
+	}
+	for name, body := range map[string]string{
+		"Codex":  section("## Authorize Codex", "## Authorize Kimi"),
+		"Kimi":   section("## Authorize Kimi", "## Enforce full readiness"),
+		"doctor": section("## Enforce full readiness", ""),
+	} {
+		previous := -1
+		for _, lockOpen := range commonLockOpens {
+			index := strings.Index(body, lockOpen)
+			if index < 0 || index <= previous {
+				t.Fatalf("%s transient unit does not preserve the common fd 3-6 order", name)
+			}
+			previous = index
+		}
+		writerIndex := strings.Index(body, oauthWriterOpen)
+		if name == "doctor" {
+			if writerIndex >= 0 {
+				t.Fatal("read-only OAuth doctor unexpectedly receives the writer descriptor")
+			}
+		} else if writerIndex <= previous || strings.Count(body, oauthWriterOpen) != 1 {
+			t.Fatalf("%s authorization unit does not receive exactly one writer lock after fd 6", name)
+		}
+	}
+	if strings.Contains(oauth, "/usr/bin/flock --shared --no-fork 3 ") || strings.Contains(oauth, "/usr/bin/flock --shared 3 /opt/") {
+		t.Fatal("OAuth runbook uses numeric descriptor flock in the invalid command/path form")
 	}
 	for _, pathDependent := range []string{"\nworkagent-", "\nsystemctl ", "\nsystemd-run ", "\ntest "} {
 		if strings.Contains(oauth, pathDependent) {

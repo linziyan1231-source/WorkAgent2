@@ -10,6 +10,9 @@ import (
 )
 
 func TestCapacityLeaseTracksLiveProcesses(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("production capacity slot ownership requires root")
+	}
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0o755); err != nil {
 		t.Fatal(err)
@@ -64,5 +67,17 @@ func TestBackendListenerMustBelongToSupervisedProcess(t *testing.T) {
 	}
 	if err := verifyBackendProcess(listener.Addr().String(), os.Getppid(), executable); err == nil {
 		t.Fatal("listener was attributed to an unrelated process")
+	}
+}
+
+func TestBackendSocketInspectionSurvivesProcSubsetPID(t *testing.T) {
+	want := [...]string{"/proc/self/net/tcp", "/proc/self/net/tcp6"}
+	if supervisorNetworkTables != want {
+		t.Fatalf("network tables=%v want=%v", supervisorNetworkTables, want)
+	}
+	for _, path := range supervisorNetworkTables {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("ProcSubset=pid-visible network table %s is unavailable: %v", path, err)
+		}
 	}
 }

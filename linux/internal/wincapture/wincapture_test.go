@@ -889,13 +889,16 @@ func privateTemp(t *testing.T) string {
 }
 
 type fixtureTransport struct {
-	t             *testing.T
-	spec          Spec
-	mu            sync.Mutex
-	calls         int
-	tarSeen       bool
-	driftAfterTar bool
-	tarError      error
+	t                    *testing.T
+	spec                 Spec
+	mu                   sync.Mutex
+	calls                int
+	tarSeen              bool
+	driftAfterTar        bool
+	inventoryMismatch    bool
+	driftAfterCollection bool
+	completedCollections int
+	tarError             error
 }
 
 type concurrencyFixtureTransport struct {
@@ -957,7 +960,7 @@ func (transport *fixtureTransport) run(_ context.Context, action string, argumen
 	case "inventory":
 		source := transport.source(arguments[0])
 		entries := fixtureEntries(source)
-		if transport.driftAfterTar && transport.tarSeen {
+		if transport.inventoryMismatch || (transport.driftAfterTar && transport.tarSeen) || (transport.driftAfterCollection && transport.completedCollections > 0) {
 			entries[len(entries)-1].SHA256 = strings.Repeat("f", 64)
 		}
 		_, err := output.Write(inventoryWire(entries))
@@ -966,6 +969,7 @@ func (transport *fixtureTransport) run(_ context.Context, action string, argumen
 		_, err := output.Write([]byte("WAX1\x00"))
 		return stderrSummary{}, err
 	case "oauth":
+		transport.completedCollections++
 		_, err := output.Write([]byte("WAO1\x00"))
 		return stderrSummary{}, err
 	case "tar":
@@ -995,6 +999,12 @@ func (transport *fixtureTransport) callCount() int {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	return transport.calls
+}
+
+func (transport *fixtureTransport) tarContacted() bool {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.tarSeen
 }
 
 func fixtureEntries(source Source) []inventoryEntry {

@@ -73,6 +73,7 @@ type portalMigrationUser struct {
 	TenantID     string
 	RuntimeUser  string
 	DataRoot     string
+	Enabled      bool
 }
 
 type migrationArtifacts struct {
@@ -154,6 +155,9 @@ func loadMigrationArtifacts(ctx context.Context, reportPath, planPath, portalDat
 }
 
 func validateMigrationReportAndPlan(report winmigration.Report, plan *migrationQuotaPlan) error {
+	if err := winmigration.ValidateReportSourceFingerprint(report); err != nil {
+		return fmt.Errorf("migration report frozen source binding is invalid: %w", err)
+	}
 	if report.SchemaVersion != winmigration.ReportSchemaVersion || report.Status != "complete" || !fingerprintPattern.MatchString(report.SourceFingerprint) ||
 		!fingerprintPattern.MatchString(report.OutputFingerprint) || report.Portal.Users < 1 || report.Portal.Users != len(report.Tenants) {
 		return errors.New("migration report is not a completed production stage")
@@ -353,7 +357,7 @@ func readMigrationPortalUsers(ctx context.Context, databasePath string) ([]porta
 	if err := foreignRows.Close(); err != nil {
 		return nil, err
 	}
-	rows, err := database.QueryContext(ctx, `SELECT username,username_norm,tenant_id,runtime_user,data_root FROM portal_users ORDER BY username_norm`)
+	rows, err := database.QueryContext(ctx, `SELECT username,username_norm,tenant_id,runtime_user,data_root,enabled FROM portal_users ORDER BY username_norm`)
 	if err != nil {
 		return nil, errors.New("list migrated Portal users")
 	}
@@ -361,9 +365,11 @@ func readMigrationPortalUsers(ctx context.Context, databasePath string) ([]porta
 	var users []portalMigrationUser
 	for rows.Next() {
 		var user portalMigrationUser
-		if err := rows.Scan(&user.Username, &user.UsernameNorm, &user.TenantID, &user.RuntimeUser, &user.DataRoot); err != nil {
+		var enabled int
+		if err := rows.Scan(&user.Username, &user.UsernameNorm, &user.TenantID, &user.RuntimeUser, &user.DataRoot, &enabled); err != nil || (enabled != 0 && enabled != 1) {
 			return nil, errors.New("read migrated Portal identity")
 		}
+		user.Enabled = enabled == 1
 		users = append(users, user)
 	}
 	if err := rows.Err(); err != nil {

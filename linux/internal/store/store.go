@@ -131,10 +131,10 @@ func Open(path, auditPath string) (*Store, error) {
 		runtimeLock.Close()
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := protectPortalSQLiteFileSet(path, stateStat.Uid, stateStat.Gid); err != nil {
 		database.Close()
 		runtimeLock.Close()
-		return nil, fmt.Errorf("protect Portal database: %w", err)
+		return nil, err
 	}
 	if err := value.CheckAuditSink(); err != nil {
 		database.Close()
@@ -388,6 +388,14 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 }
 
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash, tenantID, runtimeUser, dataRoot string, admin bool, now time.Time) (User, error) {
+	return s.CreateUserWithEnabled(ctx, username, passwordHash, tenantID, runtimeUser, dataRoot, true, admin, now)
+}
+
+// CreateUserWithEnabled is used by the root administration workflow to make
+// ordinary user creation fail closed: the durable DB row is initially
+// disabled until the separately crash-safe systemd+DB enable transition is
+// requested. Existing callers retain the historical enabled-by-default API.
+func (s *Store) CreateUserWithEnabled(ctx context.Context, username, passwordHash, tenantID, runtimeUser, dataRoot string, enabled, admin bool, now time.Time) (User, error) {
 	username = strings.TrimSpace(username)
 	norm := NormalizeUsername(username)
 	if norm == "" || strings.TrimSpace(passwordHash) == "" || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(runtimeUser) == "" || strings.TrimSpace(dataRoot) == "" {
@@ -396,7 +404,7 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, tenantID
 	stamp := now.UTC().Unix()
 	result, err := s.db.ExecContext(ctx, `INSERT INTO portal_users
  (username,username_norm,password_hash,tenant_id,runtime_user,data_root,enabled,is_admin,auth_version,created_at,updated_at)
- VALUES(?,?,?,?,?,?,1,?,1,?,?)`, username, norm, passwordHash, tenantID, runtimeUser, dataRoot, boolInt(admin), stamp, stamp)
+ VALUES(?,?,?,?,?,?,?,?,1,?,?)`, username, norm, passwordHash, tenantID, runtimeUser, dataRoot, boolInt(enabled), boolInt(admin), stamp, stamp)
 	if err != nil {
 		return User{}, fmt.Errorf("create Portal user: %w", err)
 	}

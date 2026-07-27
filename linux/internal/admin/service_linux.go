@@ -115,6 +115,15 @@ func VerifyTenantService(ctx context.Context, portal config.Portal, tenant confi
 		controller = value
 	}
 	serviceUnit := "workagent-userhost@" + tenant.TenantID + ".service"
+	serviceSource, err := controller.Properties(ctx, serviceUnit, "FragmentPath", "DropInPaths")
+	if err != nil {
+		return fmt.Errorf("inspect tenant service unit source: %w", err)
+	}
+	expectedServiceFragment := filepath.Join(root, tenantDropInPrefix+".service")
+	expectedServiceDropIns := []string{identityPath, resourcePath}
+	if serviceSource["FragmentPath"] != expectedServiceFragment || !sameWords(serviceSource["DropInPaths"], expectedServiceDropIns) {
+		return errors.New("tenant service fragment or drop-in source does not match the authenticated systemd namespace")
+	}
 	service, err := controller.Properties(ctx, serviceUnit,
 		"LoadState", "User", "Group", "SupplementaryGroups", "NoNewPrivileges", "MemoryHigh", "MemoryMax", "CPUQuotaPerSecUSec", "TasksMax",
 		"UMask", "KillMode", "PrivateDevices", "PrivateTmp", "ProtectClock", "ProtectControlGroups", "ProtectHome", "ProtectHostname", "ProtectKernelLogs",
@@ -150,15 +159,21 @@ func VerifyTenantService(ctx context.Context, portal config.Portal, tenant confi
 	if highErr != nil || maxErr != nil || tasksErr != nil || cpuErr != nil || memoryHigh != limits.MemoryBytes || memoryMax != limits.MemoryBytes || tasksMax != uint64(limits.ActiveProcesses) || cpuQuota != expectedCPUQuota {
 		return errors.New("tenant service resource limits do not match tenant configuration")
 	}
+	socketUnit := "workagent-userhost@" + tenant.TenantID + ".socket"
+	socket, err := controller.Properties(ctx, socketUnit, "LoadState", "ActiveState", "UnitFileState", "FragmentPath", "DropInPaths", "Listen", "SocketUser", "SocketGroup", "SocketMode", "DirectoryMode")
+	if err != nil {
+		return fmt.Errorf("inspect tenant socket unit source and configuration: %w", err)
+	}
+	expectedSocketFragment := filepath.Join(root, tenantDropInPrefix+".socket")
+	if socket["LoadState"] != "loaded" || socket["FragmentPath"] != expectedSocketFragment || !sameWords(socket["DropInPaths"], nil) ||
+		!exactTenantSocketListen(socket["Listen"], tenant.SocketPath) || socket["SocketUser"] != portal.RuntimeUser || socket["SocketGroup"] != portal.RuntimeUser ||
+		socket["SocketMode"] != "0600" || socket["DirectoryMode"] != "0700" {
+		return errors.New("tenant socket fragment, drop-ins, or static configuration do not match policy")
+	}
 	if !options.RequireReadySocket {
 		return nil
 	}
-	socketUnit := "workagent-userhost@" + tenant.TenantID + ".socket"
-	socket, err := controller.Properties(ctx, socketUnit, "LoadState", "ActiveState", "UnitFileState", "Listen", "SocketUser", "SocketGroup", "SocketMode", "DirectoryMode")
-	if err != nil {
-		return fmt.Errorf("inspect tenant socket unit: %w", err)
-	}
-	if socket["LoadState"] != "loaded" || socket["ActiveState"] != "active" || (socket["UnitFileState"] != "enabled" && socket["UnitFileState"] != "enabled-runtime") || !strings.Contains(socket["Listen"], tenant.SocketPath) || socket["SocketUser"] != portal.RuntimeUser || socket["SocketGroup"] != portal.RuntimeUser || socket["SocketMode"] != "0600" || socket["DirectoryMode"] != "0700" {
+	if socket["ActiveState"] != "active" || (socket["UnitFileState"] != "enabled" && socket["UnitFileState"] != "enabled-runtime") {
 		return errors.New("tenant socket unit is not enabled with the required ownership and mode")
 	}
 	socketInfo, err := os.Lstat(tenant.SocketPath)
@@ -178,6 +193,10 @@ func VerifyTenantService(ctx context.Context, portal config.Portal, tenant confi
 		return errors.New("active tenant socket has incorrect type, owner, or mode")
 	}
 	return nil
+}
+
+func exactTenantSocketListen(value, socketPath string) bool {
+	return value == socketPath || value == socketPath+" (Stream)"
 }
 
 func validateTenantSecretIsolation(properties map[string]string) error {

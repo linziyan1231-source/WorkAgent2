@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
 )
 
 func TestCreateCannotBypassProductionRemoteEnvironmentProof(t *testing.T) {
@@ -33,11 +35,108 @@ func TestCreateCannotBypassProductionRemoteEnvironmentProof(t *testing.T) {
 	}
 	snapshot := &Snapshot{
 		PortalConfig: "/etc/workagent/portal.json",
-		locks:        []io.Closer{io.NopCloser(strings.NewReader("locked"))},
+		catalogGuard: io.NopCloser(strings.NewReader("catalog-locked")),
+		locks:        []io.Closer{io.NopCloser(strings.NewReader("catalog-locked"))},
 	}
 	_, err := Create(snapshot, configuration, make([]byte, keySize), time.Unix(1_800_000_000, 0).UTC())
 	if err == nil || !strings.Contains(err.Error(), "verify backup environment at creation boundary") {
 		t.Fatalf("Create bypassed production remote-filesystem proof: %v", err)
+	}
+}
+
+func TestSnapshotCatalogGuardExcludesWritersAndMixedGenerations(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root-owned catalog lock fixture requires root")
+	}
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "release-config.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(root, "identity")
+	configPath := filepath.Join(root, "config")
+	for _, path := range []string{identityPath, configPath} {
+		if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acquireShared := func(ctx context.Context) (io.Closer, error) {
+		if ctx == nil {
+			return nil, errors.New("missing context")
+		}
+		fd, err := unix.Open(lockPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return nil, err
+		}
+		if err := unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB); err != nil {
+			_ = unix.Close(fd)
+			return nil, err
+		}
+		return os.NewFile(uintptr(fd), lockPath), nil
+	}
+	readGeneration := func() (string, string) {
+		t.Helper()
+		identity, identityErr := os.ReadFile(identityPath)
+		configPayload, configErr := os.ReadFile(configPath)
+		if identityErr != nil || configErr != nil {
+			t.Fatalf("read generation: identity=%v config=%v", identityErr, configErr)
+		}
+		return string(identity), string(configPayload)
+	}
+
+	snapshot, err := beginCatalogLockedSnapshot(context.Background(), "/etc/workagent/portal.json", acquireShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerFD, err := unix.Open(lockPath, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(writerFD)
+	if err := unix.Flock(writerFD, unix.LOCK_EX|unix.LOCK_NB); !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+		t.Fatalf("tenant writer was not blocked for snapshot lifetime: %v", err)
+	}
+	if identity, configPayload := readGeneration(); identity != "old\n" || configPayload != "old\n" {
+		t.Fatalf("catalog snapshot did not observe one old generation: identity=%q config=%q", identity, configPayload)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := unix.Flock(writerFD, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatalf("tenant writer remained blocked after snapshot close: %v", err)
+	}
+	if err := os.WriteFile(identityPath, []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := beginCatalogLockedSnapshot(context.Background(), "/etc/workagent/portal.json", acquireShared); !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+		t.Fatalf("backup admitted a mixed generation while the tenant writer held C_EX: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(writerFD, unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := beginCatalogLockedSnapshot(context.Background(), "/etc/workagent/portal.json", acquireShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer committed.Close()
+	if identity, configPayload := readGeneration(); identity != "new\n" || configPayload != "new\n" {
+		t.Fatalf("catalog snapshot did not observe one new generation: identity=%q config=%q", identity, configPayload)
+	}
+}
+
+func TestBeginCatalogLockedSnapshotRejectsNilGuard(t *testing.T) {
+	snapshot, err := beginCatalogLockedSnapshot(context.Background(), "/etc/workagent/portal.json", func(context.Context) (io.Closer, error) {
+		return nil, nil
+	})
+	if err == nil || snapshot != nil || !strings.Contains(err.Error(), "no guard") {
+		t.Fatalf("nil catalog guard was accepted: snapshot=%v err=%v", snapshot, err)
 	}
 }
 
@@ -52,6 +151,9 @@ func TestMountForPathSelectsLongestRemoteMount(t *testing.T) {
 }
 
 func TestBackupDirectoryGuardPinsIdentityAndRejectsPathReplacement(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("production backup directory identity requires root")
+	}
 	root := t.TempDir()
 	guardedPath := filepath.Join(root, "off-host")
 	if err := os.Mkdir(guardedPath, 0o700); err != nil {
@@ -107,6 +209,9 @@ func TestBackupDirectoryGuardPinsIdentityAndRejectsPathReplacement(t *testing.T)
 }
 
 func TestRetentionAlwaysPreservesNewBackupAcrossClockRollback(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("production backup retention ownership requires root")
+	}
 	directory := t.TempDir()
 	names := []string{
 		"workagent-20300101T000000Z-11111111-1111-4111-8111-111111111111.wab",
@@ -243,6 +348,46 @@ func TestCanonicalReleasePointerSourcesDeduplicatesSharedChannel(t *testing.T) {
 	}
 }
 
+func TestActivationBackupManifestRequiresExactRecoveryContract(t *testing.T) {
+	pointer := ReleasePointer{Path: "/opt/workagent/aionui/current.json", Scope: release.ScopeRuntime, Current: "release-one", Activated: "2027-01-15T08:00:00Z"}
+	contract := CreateInput{
+		PortalConfig: "/etc/workagent/portal.json",
+		Sources: []Source{
+			{Name: "configuration", Path: "/etc/workagent"},
+			{Name: "portal-state", Path: "/var/lib/workagent/portal"},
+		},
+		ReleasePointers: []ReleasePointer{pointer},
+	}
+	manifest := Manifest{
+		PortalConfig:    contract.PortalConfig,
+		Sources:         append([]Source(nil), contract.Sources...),
+		ReleasePointers: []ReleasePointer{pointer},
+		Entries: []Entry{
+			{Path: "rootfs/etc/workagent", Type: "directory"},
+			{Path: "rootfs/var/lib/workagent/portal", Type: "directory"},
+		},
+	}
+	if err := ValidateActivationBackupManifest(manifest, contract); err != nil {
+		t.Fatalf("complete activation backup contract was rejected: %v", err)
+	}
+	partial := manifest
+	partial.Sources = []Source{{Name: "dummy", Path: "/var/lib/dummy"}}
+	partial.Entries = []Entry{{Path: "rootfs/var/lib/dummy", Type: "directory"}}
+	if err := ValidateActivationBackupManifest(partial, contract); err == nil {
+		t.Fatal("authenticated but partial backup source set was accepted for activation")
+	}
+	missingRoot := manifest
+	missingRoot.Entries = missingRoot.Entries[:1]
+	if err := ValidateActivationBackupManifest(missingRoot, contract); err == nil {
+		t.Fatal("backup manifest that omitted a required source root was accepted")
+	}
+	extra := manifest
+	extra.Sources = append(extra.Sources, Source{Name: "dummy", Path: "/var/lib/dummy"})
+	if err := ValidateActivationBackupManifest(extra, contract); err == nil {
+		t.Fatal("backup manifest with an unapproved extra source was accepted")
+	}
+}
+
 func TestReleasePointerSnapshotLockExcludesActivation(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("production release-lock ownership requires root")
@@ -284,6 +429,9 @@ func TestReleasePointerSnapshotLockExcludesActivation(t *testing.T) {
 }
 
 func TestCopyRecoveredPathIsResumableButNeverOverwrites(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("recovered production path ownership requires root")
+	}
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	destination := filepath.Join(root, "destination")
@@ -304,5 +452,47 @@ func TestCopyRecoveredPathIsResumableButNeverOverwrites(t *testing.T) {
 	}
 	if err := copyRecoveredPath(source, destination); err == nil {
 		t.Fatal("recovery overwrote conflicting destination state")
+	}
+}
+
+func TestCopyRecoveredPathExcludingLeavesTenantCatalogForBatchPublisher(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("recovered production path ownership requires root")
+	}
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "destination")
+	for _, path := range []string{source, destination, filepath.Join(source, "users"), filepath.Join(destination, "users")} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "portal.json"), []byte("authenticated portal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "users", "archived.json"), []byte("must not be copied raw"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preserved := filepath.Join(destination, "users", ".workagent-tenant-batch.transaction.json")
+	if err := os.WriteFile(preserved, []byte("publisher-owned state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyRecoveredPathExcluding(source, destination, map[string]bool{filepath.Join(destination, "users"): true}); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err := os.ReadFile(preserved); err != nil || string(payload) != "publisher-owned state" {
+		t.Fatalf("excluded tenant catalog changed: payload=%q err=%v", payload, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "users", "archived.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("raw tenant config was copied: %v", err)
+	}
+	if payload, err := os.ReadFile(filepath.Join(destination, "portal.json")); err != nil || string(payload) != "authenticated portal" {
+		t.Fatalf("ordinary configuration was not copied: payload=%q err=%v", payload, err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "foreign"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyRecoveredPathExcluding(source, destination, map[string]bool{filepath.Join(destination, "users"): true}); err == nil {
+		t.Fatal("exclusion hid an unexpected destination entry")
 	}
 }

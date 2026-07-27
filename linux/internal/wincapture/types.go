@@ -110,14 +110,16 @@ type OAuthSummary struct {
 // Report is safe for stdout and operational logs. It contains neither source
 // paths, destination leaves, tenant identifiers, nor OAuth filenames.
 type Report struct {
-	SchemaVersion int          `json:"schema_version"`
-	Status        string       `json:"status"`
-	CaptureID     string       `json:"capture_id,omitempty"`
-	SpecSHA256    string       `json:"spec_sha256"`
-	Sources       int          `json:"sources"`
-	Summary       Summary      `json:"summary"`
-	OAuth         OAuthSummary `json:"oauth_evidence"`
-	CompletedAt   time.Time    `json:"completed_at,omitempty"`
+	SchemaVersion         int          `json:"schema_version"`
+	Status                string       `json:"status"`
+	CaptureID             string       `json:"capture_id,omitempty"`
+	SpecSHA256            string       `json:"spec_sha256"`
+	CaptureManifestSHA256 string       `json:"capture_manifest_sha256,omitempty"`
+	CaptureCompletedAt    *time.Time   `json:"capture_completed_at,omitempty"`
+	Sources               int          `json:"sources"`
+	Summary               Summary      `json:"summary"`
+	OAuth                 OAuthSummary `json:"oauth_evidence"`
+	CompletedAt           time.Time    `json:"completed_at,omitempty"`
 }
 
 type CheckOptions struct {
@@ -130,4 +132,35 @@ type CaptureOptions struct {
 	CaptureID     string
 	Confirm       string
 	WindowsFrozen bool
+}
+
+// FinalDeltaOptions binds a separate, read-only final-delta verification to
+// one already completed immutable capture. WindowsFrozen is only an operator
+// declaration; this package has no Windows writer-control capability.
+type FinalDeltaOptions struct {
+	SpecPath      string
+	Destination   string
+	CaptureID     string
+	Confirm       string
+	WindowsFrozen bool
+}
+
+// CompletedCaptureOptions identifies one immutable local capture. Verification
+// is entirely local and never constructs or invokes a Windows transport.
+type CompletedCaptureOptions struct {
+	SpecPath    string
+	Destination string
+	CaptureID   string
+}
+
+// CompletedCaptureBinding is safe to bind into later private migration
+// evidence. It deliberately contains no Windows paths, tenant leaves, or
+// OAuth filenames.
+type CompletedCaptureBinding struct {
+	SchemaVersion         int       `json:"schema_version"`
+	CaptureID             string    `json:"capture_id"`
+	SpecSHA256            string    `json:"spec_sha256"`
+	CaptureManifestSHA256 string    `json:"capture_manifest_sha256"`
+	CompletedAt           time.Time `json:"completed_at"`
+	Aggregate             Summary   `json:"aggregate"`
 }

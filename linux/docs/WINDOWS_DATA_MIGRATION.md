@@ -5,27 +5,43 @@ Linux-side-only procedure in [WINDOWS_FINAL_CAPTURE.md](WINDOWS_FINAL_CAPTURE.md
 An earlier copied snapshot or a successful read-only rehearsal is not final
 cutover evidence.
 
-`workagent-migrate-windows` converts a read-only WorkAgent Windows snapshot into an offline Linux staging tree. It does not publish files into production paths, start services, change ownership, assign XFS projects, or restore legacy credentials. Those remain explicit cutover steps after the staging report has been reviewed.
+`workagent-migrate-windows` converts one locally reverified, completed frozen WorkAgent Windows capture into an offline Linux staging tree. It does not accept an ad-hoc copied snapshot. It does not publish files into production paths, start services, change ownership, assign XFS projects, or restore legacy credentials. Those remain explicit cutover steps after the staging report has been reviewed.
 
 ## Required snapshot layout
 
-The snapshot root must be a real, private directory on one filesystem. The migration opens all source content beneath that directory without following symbolic links.
+The snapshot root basename is its capture ID and must be a real, exact
+`root:root` mode-`0700` directory on one filesystem. Its private capture spec
+must remain outside the capture under a real `root:root` mode-`0700` parent as
+a single-link mode-`0600` file. Before reading any snapshot data, migration
+passes that spec, the root and the derived capture ID to the local-only
+completed-capture verifier. The verifier revalidates the spec and pinned local
+input, the stable completion manifest and evidence, and every captured entry.
+The migration then opens source content without following symbolic links.
 
 ```text
 snapshot/
+  journal-start.json
+  evidence-before.json
+  evidence-after.json
+  capture-manifest.json
   global/portal.windows.db                 # Portal schema v3
   global/portal.windows.db-wal             # required; may be zero bytes
   global/portal.windows.db-shm             # required SQLite companion
   cliproxy/cpa-key-policy-state.json       # legacy quota/usage state
   tenants/raw/<SID-or-account>/AionUiPortal/
-  external-workspaces/                     # optional approved captures
-  external-workspaces.json                 # optional; mode 0600
+  external-workspaces/                     # required approved capture(s)
+  external-workspaces.json                 # required fixed local input; mode 0600
 ```
 
 Every Portal user must map to exactly one tenant directory, and every tenant directory must map to a Portal user. The tool deterministically derives the Linux tenant UUID, runtime user, data root, and XFS project ID from the canonical Windows SID, then rejects any collision. Each tenant is assigned a 20 GiB hard-limit plan.
 
 The Portal database, WAL, and SHM are one mandatory frozen source set. All three
-are hashed into report schema v2 and its source fingerprint. Migration copies
+are hashed into migration report schema v3 and its source fingerprint. Schema
+v3 also records `capture_id`, `capture_spec_sha256`,
+`capture_manifest_sha256`, and `capture_completed_at`; all four are canonical
+source-fingerprint inputs and are revalidated by stage replay, publication,
+and CLIProxy cutover. Legacy schema-v2 or otherwise unbound reports fail
+closed. Migration copies
 the set into a private temporary directory and opens only that copy with
 WAL-aware read-only SQLite semantics; it never opens the captured originals as
 a database. This preserves committed rows that have not yet been checkpointed
@@ -84,6 +100,7 @@ umask 077
 
 /absolute/path/to/migration-tools/bin/workagent-migrate-windows \
   --snapshot-root /private/workagent/windows-snapshot \
+  --capture-spec /private/workagent/final-capture/capture-spec.json \
   --staging-dir /private/workagent/linux-staging \
   --tenant-data-root /srv/workagent/users \
   --external-workspace-manifest /private/workagent/windows-snapshot/external-workspaces.json \
@@ -91,12 +108,21 @@ umask 077
 
 /absolute/path/to/migration-tools/bin/workagent-migrate-windows \
   --snapshot-root /private/workagent/windows-snapshot \
+  --capture-spec /private/workagent/final-capture/capture-spec.json \
   --staging-dir /private/workagent/linux-staging \
   --tenant-data-root /srv/workagent/users \
   --external-workspace-manifest /private/workagent/windows-snapshot/external-workspaces.json
 ```
 
-Omit `--external-workspace-manifest` when no external workspace is needed. A dry run reads, validates, hashes, and reports without creating the staging directory. A real run builds a private sibling partial directory, verifies it, syncs it, and publishes it with one rename. Repeating the same command against an existing matching stage performs an integrity and source-plan check and returns the original completed report.
+Both `--capture-spec` and `--external-workspace-manifest` are mandatory. The
+manifest argument must be exactly
+`<snapshot-root>/external-workspaces.json`; another file inside the capture is
+not accepted. A dry run first fully verifies the completed capture, then reads,
+validates, hashes, and reports without creating the staging directory. A real
+run builds a private sibling partial directory, verifies it, syncs it, and
+publishes it with one rename. Repeating the same command against an existing
+matching stage repeats completed-capture verification and performs an integrity
+and source-plan check before returning the original completed report.
 
 ## Migration semantics
 
@@ -138,7 +164,7 @@ Legacy managed Codex and Kimi credentials, bootstrap markers, pending bundles, t
 
 Before `--apply`, independently preserve the old synthetic Linux deployment in a recoverable archive and retain its receipt. The publisher does not create that archive and its JSON `rollback_destination` is only the protected, currently unused destination reserved for an operator-directed rollback; it must not be cited as backup evidence.
 
-The check and apply paths require the canonical production Portal configuration, the dedicated `/srv/workagent/users` XFS mount with `prjquota`, sufficient free space, a blank Portal database target, and a tenant root containing no data outside the matching durable journal. Caddy, Portal, CLIProxy, notifications, both ChatForward units, backup/health units and timers, every reported UserHost service/socket, and every other discovered UserHost instance must be loaded but exactly `inactive/dead` with zero main/control PID. The publisher also takes the CLIProxy migration lock and Portal/UserHost runtime locks, and repeats the systemd proof immediately before every atomic activation. It never starts or enables a unit.
+The check and apply paths require the canonical production Portal configuration, the dedicated `/srv/workagent/users` XFS mount with `prjquota`, sufficient free space, a blank Portal database target, and a tenant root containing no data outside the matching durable journal. Caddy, Portal, CLIProxy, notifications, both ChatForward units, backup/health units and timers, every reported UserHost service/socket, and every other discovered UserHost instance must be loaded but exactly `inactive/dead` with zero main/control PID. The apply path holds the global tenant activation lock before its exclusive catalog transaction and refuses either a recovery or tenant-activation journal; the publisher also takes the CLIProxy migration lock and Portal/UserHost runtime locks, and repeats the systemd proof immediately before every atomic activation. It never starts or enables a unit.
 
 The private stage root and `report.json` must be root-owned mode `0700`/`0600` real objects. Validation strictly decodes the completed report, recomputes its source fingerprint and the full output fingerprint, verifies the archived Portal DB/WAL/SHM files against their three report hashes, checks Portal schema v4 with SQLite `quick_check` and foreign keys, cross-checks every Portal/report identity, inventories every tenant content/type/mode/hash/count, admits only non-escaping relative in-tenant links, and proves that managed legacy auth/provider state is absent. Only `portal/portal.db` and `tenants/<uuid>/...` are selected for publication. `backups/`, `cutover/`, `portal/audit.jsonl`, the report itself, legacy OAuth/session material and every other stage object are never copied by this command.
 
@@ -150,7 +176,9 @@ If publication stops after one or more atomic tenant activations, keep every uni
 
 ## CLIProxy quota and usage cutover
 
-Install the completed `report.json` and its `cutover/cliproxy-quota-overrides.json` under `/var/lib/workagent/migration/`, owned by root with mode `0600`, and pre-create `/var/lib/workagent/migration/backups/cliproxy/` as `0700 root:root`. The deployed Portal database, every tenant root/`credentials` directory, CLIProxy state, `/run/workagent/cliproxy-migration.lock`, runtime accounts, policy, and management credential must already satisfy the production ownership contracts. The tracked tmpfiles rule creates the fixed lock as `0640 root:cliproxyapi`; the CLIProxy service can read/lock but cannot modify it, and holds a nonblocking shared lock for its entire process lifetime. Never create, replace, chmod, unlink, or bypass that lock during cutover.
+Install the completed `report.json` and its `cutover/cliproxy-quota-overrides.json` under `/var/lib/workagent/migration/`, owned by root with mode `0600`, and require both `/var/lib/workagent/migration/cutover/` and `/var/lib/workagent/migration/backups/cliproxy/` to be `0700 root:root`. The deployed Portal database, every tenant root/`credentials` directory, CLIProxy state, `/run/workagent/cliproxy-migration.lock`, runtime accounts, policy, and management credential must already satisfy the production ownership contracts. The tracked tmpfiles rule creates the fixed lock as `0640 root:cliproxyapi`; the CLIProxy service can read/lock but cannot modify it, and holds a nonblocking shared lock for its entire process lifetime. Never create, replace, chmod, unlink, or bypass that lock during cutover.
+
+All three `workagent-cliproxy` migration commands enforce their lifecycle locks internally; do not add, bypass, or reorder an outer `flock` chain. Each first acquires `A_EX`, proves that neither a recovery-activation journal nor a tenant-activation journal is pending, and only then enters the fixed-consumer chain. Staging and live verification acquire `A_EX -> C_SH -> control-channel SH -> CLIProxy migration SH`. Offline apply acquires `A_EX -> C_SH -> control-channel SH -> CLIProxy migration EX`, with its existing nonblocking exclusive migration lock taken only after the first three guards. The activation, catalog, and control guards, and the migration guard for staging/verification, remain held from before protected configuration loading through tenant locking, API or state work, durable receipt/state publication, all readback, and inner-lock release. Every supported fixed-root writer now also enters through `A_EX`, proves both activation journals clean, and only then takes its internal `C_EX -> control-channel EX` pair. This common outer order prevents a direct or transient command from racing tenant activation, a control-root swap, or a configuration transaction without introducing a lock inversion. It preserves the fixed-root writer's `C_EX -> control-channel EX` order and every activation writer's `A_EX -> C_*` order beneath the shared outer activation boundary.
 
 Keep every UserHost stopped, leave CLIProxy running, and stage all one-time tenant bundles:
 
@@ -186,7 +214,8 @@ This root-only command validates the completed report, protected plan, schema-v4
 Do not start a UserHost yet. Explicitly stop CLIProxy and prove that systemd reports `inactive/dead` with zero main/control PID, then run the offline importer:
 
 ```bash
-/usr/bin/systemctl stop cliproxyapi.service
+/opt/workagent/control/bin/workagent-admin service-action \
+  --action stop --unit cliproxyapi.service
 /usr/bin/systemctl show --property=ActiveState --property=SubState --property=MainPID --property=ControlPID cliproxyapi.service
 
 /opt/workagent/control/bin/workagent-cliproxy apply-migration-plan \
@@ -195,12 +224,13 @@ Do not start a UserHost yet. Explicitly stop CLIProxy and prove that systemd rep
   --plan /var/lib/workagent/migration/cutover/cliproxy-quota-overrides.json
 ```
 
-The importer first takes the fixed lock exclusively and nonblockingly, then rechecks systemd while holding it. A concurrent service start can therefore never overlap state replacement. It validates the protected v1 policy state and requires every newly provisioned deterministic key to have a valid new hash/preview. It changes only `daily_limit_usd`, `weekly_limit_usd`, and that key's archived `usage`; it refuses conflicting non-zero new-key usage and never restores a Windows hash or plaintext key. Before the first change it creates, without replacement, a root-owned `0600` backup under `/var/lib/workagent/migration/backups/cliproxy/`, named `cpa-key-policy-state.pre-windows-migration.<source-fingerprint>.json`; the CLIProxy service cannot alter this recovery evidence. The replacement and directory are fsynced, then parsed and checked again. Repeating a completed apply proves that applying the protected plan to that fingerprint-specific backup converges to the exact current state; repeating an interrupted pre-write apply requires the existing backup to match the exact pre-state.
+The importer takes the migration lock exclusively and nonblockingly only after its catalog and control-root shared guards, then rechecks systemd while holding all three. A concurrent service start can therefore never overlap state replacement. It validates the protected v1 policy state and requires every newly provisioned deterministic key to have a valid new hash/preview. It changes only `daily_limit_usd`, `weekly_limit_usd`, and that key's archived `usage`; it refuses conflicting non-zero new-key usage and never restores a Windows hash or plaintext key. Before the first change it creates, without replacement, a root-owned `0600` backup under `/var/lib/workagent/migration/backups/cliproxy/`, named `cpa-key-policy-state.pre-windows-migration.<source-fingerprint>.json`; the CLIProxy service cannot alter this recovery evidence. The replacement and directory are fsynced, then parsed and checked again. Repeating a completed apply proves that applying the protected plan to that fingerprint-specific backup converges to the exact current state; repeating an interrupted pre-write apply requires the existing backup to match the exact pre-state.
 
 Restart CLIProxy and, still before any UserHost starts, perform live readback:
 
 ```bash
-/usr/bin/systemctl start cliproxyapi.service
+/opt/workagent/control/bin/workagent-admin service-action \
+  --action start --unit cliproxyapi.service
 
 /usr/bin/systemd-run --quiet --wait --pipe --collect --service-type=exec \
   --unit=workagent-cliproxy-migration-verify.service \
@@ -209,7 +239,7 @@ Restart CLIProxy and, still before any UserHost starts, perform live readback:
   --property=ProtectSystem=strict \
   --property=ProtectHome=yes \
   --property=PrivateTmp=yes \
-  --property='ReadWritePaths=/srv/workagent/users' \
+  --property='ReadWritePaths=/srv/workagent/users /var/lib/workagent/migration/cutover' \
   --property='RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
   --property=LoadCredentialEncrypted=cliproxy-management-key:/etc/credstore.encrypted/workagent/cliproxy-management-key.cred \
   /opt/workagent/control/bin/workagent-cliproxy verify-migration-plan \
@@ -225,12 +255,59 @@ pre-OAuth CLIProxy build/plugin/policy/catalog contract, exact key
 configuration and transferred quotas, usage totals/counters, per-alias
 daily/weekly windows, pending-key previews through the loopback management
 API, and live authentication of both pending keys against the local
-`/v1/models` endpoint. It deliberately does not require provider OAuth: the
-new host's provider credentials do not exist yet. Only after it succeeds may
-UserHosts start and consume their pending bundles. If staging sees an applied
+`/v1/models` endpoint. It then re-reads the report, plan, complete Portal
+identity/enabled catalog, every pending bundle, policy-state file, live alias
+catalog, and stable key contract while all lifecycle and tenant locks remain
+held. It snapshots `cliproxyapi.service` immediately before and after final
+live readback and receipt publication, requiring one unchanged loaded,
+active/running `cliproxyapi:cliproxyapi` invocation with a positive main PID,
+zero control PID,
+successful result, monotonic activation timestamp, and the fixed production
+unit fragment with no drop-ins. The fragment may be installed only at the
+trusted `/etc/systemd/system` or `/usr/lib/systemd/system` service path; its
+descriptor-bound content hash must equal the read-only signed
+`/opt/workagent/control/share/deploy/systemd/cliproxyapi.service` asset, and
+systemd must report `NeedDaemonReload=no`; that hash and manager-cache state
+are part of the service-generation proof. Success atomically
+publishes the short-lived
+root-only `0600`,
+single-link, no-ACL receipt
+`/var/lib/workagent/migration/cutover/cliproxy-live-verification.json`; the
+command fails if that durable publication or its final readback fails. It
+deliberately does not require provider OAuth: the new host's provider
+credentials do not exist yet. Only after it succeeds may UserHosts start and
+consume their pending bundles. If staging sees an applied
 marker, apply sees active/conflicting state, or verification sees a
 consumed/mismatched handoff, stop and investigate; never force rotation, reset
 usage, edit the plan, or bypass a lock.
+
+Close the imported Portal enabled-state/systemd boundary before any UserHost
+can be used. The publisher intentionally left every socket disabled, while the
+imported database preserved each Windows user's enabled bit. This command is
+the only supported full-catalog bridge between those states:
+
+```bash
+/opt/workagent/control/bin/workagent-admin activate-tenant-catalog \
+  --config /etc/workagent/portal.json
+```
+
+It holds the global activation lock and, before changing systemd state,
+requires the unexpired live-verification receipt and re-reads every bound
+report/plan/Portal/pending/policy input under the same
+`A_EX -> C_SH -> control-channel SH -> CLIProxy migration SH -> tenant locks`
+order. It also requires that the exact receipt-bound CLIProxy invocation is
+still active; a stop, restart, PID/generation change, or unit source/drop-in
+drift invalidates the receipt without requiring the transient service's
+credential namespace. It then authenticates the complete bidirectional
+tenant config/database identity catalog, durably converges every socket to the
+database in one replayable transaction, starts the static catalog-ready target,
+then starts and read-verifies every enabled socket while retaining a shared
+catalog snapshot. Immediately before reporting success, while `A_EX` is still
+held, it rechecks that the same receipt-bound CLIProxy generation remains
+active. It never changes a user row. A retry is idempotent; a crash
+before or after the database-selected activation decision is resolved by the
+boot reconciler. Do not enable individual sockets or call `set-enabled` to
+work around a failure, because that would destroy the complete-catalog proof.
 
 ## Review and cutover handoff
 
@@ -240,11 +317,12 @@ Do not publish a stage unless `report.json` has `status: "complete"` and a non-e
 - all SID-to-tenant identities, runtime users, data roots, project IDs, and 20 GiB limits
 - zero `unmapped_external_windows_paths` for every tenant
 - source and output fingerprints
+- capture ID, capture-spec hash, completion-manifest hash, and capture completion time
 - skipped SQLite transient files
 - model invalidation counts and deterministic quota override IDs
 - external workspace captured/audited summaries and exclusions
 
-The separate privileged cutover must copy the staged Portal database and tenant trees into their production destinations, assign the recorded runtime ownership and XFS project quotas, install approved CLI packages, install retained project dependencies from lockfiles, execute the staged/offline/live CLIProxy sequence above, and start the normal readiness-gated services. The old Windows snapshot and private stage backups must remain unavailable to application users because they intentionally retain legacy encrypted and plaintext credential material for rollback/audit only.
+The separate privileged cutover must copy the staged Portal database and tenant trees into their production destinations, assign the recorded runtime ownership and XFS project quotas, install approved CLI packages, install retained project dependencies from lockfiles, execute the staged/offline/live CLIProxy sequence and full-catalog activation above, and start the normal readiness-gated services. The old Windows snapshot and private stage backups must remain unavailable to application users because they intentionally retain legacy encrypted and plaintext credential material for rollback/audit only.
 
 After the internal migration verification above succeeds, complete both
 host-local CLIProxyAPI provider OAuth flows by following

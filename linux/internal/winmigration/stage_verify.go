@@ -30,7 +30,8 @@ func verifyExistingStage(ctx context.Context, plan *migrationPlan) (Report, erro
 	var trailing any
 	trailingErr := decoder.Decode(&trailing)
 	closeErr := file.Close()
-	if decodeErr != nil || !errors.Is(trailingErr, io.EOF) || closeErr != nil || report.SchemaVersion != ReportSchemaVersion || report.Status != "complete" || report.SourceFingerprint != plan.report.SourceFingerprint || report.TenantDataRoot != plan.report.TenantDataRoot || report.OutputFingerprint == "" {
+	sourceBindingErr := ValidateReportSourceFingerprint(report)
+	if decodeErr != nil || !errors.Is(trailingErr, io.EOF) || closeErr != nil || sourceBindingErr != nil || report.SchemaVersion != ReportSchemaVersion || report.Status != "complete" || report.SourceFingerprint != plan.report.SourceFingerprint || report.TenantDataRoot != plan.report.TenantDataRoot || report.OutputFingerprint == "" {
 		return Report{}, errors.New("existing staging destination does not match this migration plan")
 	}
 	for _, backup := range []struct {

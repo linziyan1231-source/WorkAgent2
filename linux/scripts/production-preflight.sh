@@ -106,8 +106,47 @@ protected_root_file_exact() {
   fi
 }
 
+protected_lock_inode() {
+  local path=$1 description=$2 expected_mode=$3 shape
+  protected_root_file_exact "$path" "$description" "$expected_mode" || return 1
+  shape=$(stat -Lc '%h:%s' -- "$path" 2>/dev/null || true)
+  if [[ $shape == 1:0 ]]; then
+    pass "$description is an empty single-link lock inode"
+  else
+    block "$description must be empty and have exactly one hard link"
+    return 1
+  fi
+}
+
+protected_service_lock_inode() {
+  local path=$1 description=$2 expected_group=$3 expected_mode=$4 shape
+  protected_service_file "$path" "$description" "$expected_group" "$expected_mode" || return 1
+  shape=$(stat -Lc '%h:%s' -- "$path" 2>/dev/null || true)
+  if [[ $shape == 1:0 ]]; then
+    pass "$description is an empty single-link lock inode"
+  else
+    block "$description must be empty and have exactly one hard link"
+    return 1
+  fi
+}
+
+protected_canonical_root_directory() {
+  local path=$1 description=$2 owner mode
+  if [[ $path != /* || -L $path || ! -d $path || $(readlink -f -- "$path" 2>/dev/null || true) != "$path" ]]; then
+    block "$description is not a canonical directory"
+    return 1
+  fi
+  owner=$(stat -Lc '%u:%g' -- "$path" 2>/dev/null || true)
+  mode=$(stat -Lc '%a' -- "$path" 2>/dev/null || true)
+  if [[ $owner != 0:0 || ! $mode =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 022) != 0 )); then
+    block "$description is writable by an unprivileged account"
+    return 1
+  fi
+  pass "$description is canonical and root protected"
+}
+
 absent_path() {
-  local path=$1 description=$2 parent leaf parent_identity found find_status
+  local path=$1 description=$2 expected_parent_mode=${3:-700} parent leaf parent_identity found find_status
   parent=${path%/*}
   leaf=${path##*/}
   if [[ $path != /* || -z $leaf || $leaf == *[!A-Za-z0-9._-]* || -L $parent || ! -d $parent ||
@@ -116,8 +155,8 @@ absent_path() {
     return 1
   fi
   parent_identity=$(stat -Lc '%U:%G:%a' -- "$parent" 2>/dev/null || true)
-  if [[ $parent_identity != root:root:700 ]]; then
-    block "$description parent must be root:root mode 700"
+  if [[ $parent_identity != "root:root:$expected_parent_mode" ]]; then
+    block "$description parent must be root:root mode $expected_parent_mode"
     return 1
   fi
   if [[ -e $path || -L $path ]]; then
@@ -267,10 +306,10 @@ else
 fi
 
 systemd_version=$(systemctl --version 2>/dev/null | awk 'NR == 1 {print $2}')
-if [[ $systemd_version =~ ^[0-9]+$ ]] && (( systemd_version >= 252 )); then
+if [[ $systemd_version =~ ^[0-9]+$ ]] && (( systemd_version >= 255 )); then
   pass "systemd $systemd_version satisfies the sandbox contract"
 else
-  block "systemd 252 or newer is required"
+  block "systemd 255 or newer is required for named OpenFile lifecycle guards"
 fi
 if [[ -f /sys/fs/cgroup/cgroup.controllers ]] && grep -qw cpu /sys/fs/cgroup/cgroup.controllers && grep -qw memory /sys/fs/cgroup/cgroup.controllers && grep -qw pids /sys/fs/cgroup/cgroup.controllers; then
   pass "cgroup v2 cpu, memory, and pids controllers are available"
@@ -305,8 +344,30 @@ if [[ -x /usr/bin/google-chrome-stable ]]; then
     block "Google Chrome must match the accepted 150.0.7871.186-1 x86_64 package"
   fi
 fi
+protected_executable /usr/bin/caddy "Caddy edge proxy"
+if [[ -x /usr/bin/caddy ]]; then
+  caddy_version=$(/usr/bin/caddy version 2>/dev/null || true)
+  caddy_package=$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' caddy 2>/dev/null || true)
+  if [[ $caddy_version == 'v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=' ]] &&
+     [[ $caddy_package == 'caddy-2.11.4-2.el9.x86_64' ]]; then
+    pass "the accepted Caddy 2.11.4-2 package is installed"
+    verified_rpm_payload caddy "Caddy" /etc/caddy/Caddyfile
+  else
+    block "Caddy must match the accepted 2.11.4-2.el9 x86_64 package"
+  fi
+fi
 protected_executable /usr/bin/Xvfb "Xvfb"
 protected_executable /usr/bin/xauth "xauth"
+protected_executable /bin/bash "service lifecycle shell"
+protected_executable /usr/bin/flock "service lifecycle lock helper"
+protected_executable /usr/bin/awk "service lifecycle descriptor parser"
+protected_executable /usr/bin/getent "service lifecycle group resolver"
+protected_executable /usr/bin/readlink "service lifecycle path resolver"
+protected_executable /usr/bin/stat "service lifecycle metadata inspector"
+protected_executable /usr/libexec/workagent-core-activation-admission-v1 "immutable core activation admission helper v1"
+protected_executable /usr/libexec/workagent-edge-publication-admission-v1 "immutable edge publication admission helper v1"
+protected_executable /usr/libexec/workagent-fixed-root-exec-v1 "immutable fixed-root lifecycle supervisor v1"
+protected_executable /usr/libexec/workagent-recovery-activation-admission-v1 "immutable recovery activation admission helper v1"
 protected_executable /usr/sbin/node_exporter "node_exporter"
 node_exporter_package=$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' node_exporter 2>/dev/null || true)
 if [[ $node_exporter_package == 'node_exporter-1.5.0-7.oc9.x86_64' ]]; then
@@ -339,6 +400,7 @@ unit_templates=(
   "$repository_root"/deploy/systemd/*.socket
   "$repository_root"/deploy/systemd/*.mount
   "$repository_root"/deploy/systemd/*.timer
+  "$repository_root"/deploy/systemd/*.target
 )
 if systemd-analyze --recursive-errors=no verify "${unit_templates[@]}" >/dev/null 2>&1; then
   pass "tracked systemd units pass the host parser"
@@ -377,10 +439,13 @@ fi
 
 for unit_asset in \
   'srv-workagent-users.mount:deploy/systemd/srv-workagent-users.mount' \
+	'caddy.service:deploy/systemd/caddy.service' \
   'cliproxyapi.service:deploy/systemd/cliproxyapi.service' \
   'workagent-notification.service:deploy/systemd/workagent-notification.service' \
   'workagent-chatforward.service:deploy/systemd/workagent-chatforward.service' \
   'workagent-chatforward-browser.service:deploy/systemd/workagent-chatforward-browser.service' \
+  'workagent-tenant-catalog-ready.target:deploy/systemd/workagent-tenant-catalog-ready.target' \
+  'workagent-tenant-config-reconcile.service:deploy/systemd/workagent-tenant-config-reconcile.service' \
   'workagent-portal.service:deploy/systemd/workagent-portal.service' \
   'workagent-userhost@.service:deploy/systemd/workagent-userhost@.service' \
   'workagent-userhost@.socket:deploy/systemd/workagent-userhost@.socket' \
@@ -475,8 +540,53 @@ protected_file /etc/workagent/policy.json "installed model policy" 640
 protected_service_file /etc/workagent/chatforward.env "installed ChatForward environment" workagent-chatforward 640
 protected_service_file /etc/workagent/notification.json "installed notification payload" workagent-notification 640
 protected_service_file /etc/cliproxyapi/config.yaml "installed CLIProxyAPI template" cliproxyapi 640
-protected_root_file_exact /run/workagent-backup/recovery-install.lock "blank-host recovery install lock" 600
+protected_lock_inode /run/workagent/activation.lock "tenant activation lifecycle lock" 600
+protected_lock_inode /run/workagent/release-config.lock "release configuration lifecycle lock" 600
+protected_lock_inode /run/workagent/fixed-root-exec-v1-install.lock "fixed-root supervisor v1 installer lock" 600
+protected_service_lock_inode /run/workagent/cliproxy-migration.lock "CLIProxy migration lifecycle lock" cliproxyapi 640
+protected_service_lock_inode /run/workagent/cliproxy-oauth.lock "CLIProxy OAuth writer lock" cliproxyapi 640
+protected_lock_inode /opt/workagent/control.lock "control release lifecycle lock" 600
+protected_lock_inode /opt/workagent/shared.lock "shared release lifecycle lock" 600
+protected_lock_inode /opt/workagent/aionui/current.json.lock "runtime release lifecycle lock" 600
+protected_lock_inode /run/workagent-backup/recovery-install.lock "blank-host recovery install lock" 600
+protected_canonical_root_directory /usr "immutable helper /usr ancestor"
+protected_canonical_root_directory /usr/libexec "immutable helper libexec parent"
+protected_root_file_exact /usr/libexec/workagent-core-activation-admission-v1 "immutable core activation admission helper v1" 555
+if [[ -f /usr/libexec/workagent-core-activation-admission-v1 && ! -L /usr/libexec/workagent-core-activation-admission-v1 ]] &&
+   cmp -s "$repository_root/deploy/libexec/workagent-core-activation-admission-v1" /usr/libexec/workagent-core-activation-admission-v1; then
+  pass "immutable core activation admission helper v1 matches final source-gate evidence"
+else
+  block "immutable core activation admission helper v1 differs from final source-gate evidence"
+fi
+protected_root_file_exact /usr/libexec/workagent-edge-publication-admission-v1 "immutable edge publication admission helper v1" 555
+if [[ -f /usr/libexec/workagent-edge-publication-admission-v1 && ! -L /usr/libexec/workagent-edge-publication-admission-v1 ]] &&
+   cmp -s "$repository_root/deploy/libexec/workagent-edge-publication-admission-v1" /usr/libexec/workagent-edge-publication-admission-v1; then
+  pass "immutable edge publication admission helper v1 matches final source-gate evidence"
+else
+  block "immutable edge publication admission helper v1 differs from final source-gate evidence"
+fi
+protected_root_file_exact /usr/libexec/workagent-fixed-root-exec-v1 "immutable fixed-root lifecycle supervisor v1" 555
+if [[ -f /usr/libexec/workagent-fixed-root-exec-v1 && ! -L /usr/libexec/workagent-fixed-root-exec-v1 ]] &&
+   cmp -s "$repository_root/deploy/libexec/workagent-fixed-root-exec-v1" /usr/libexec/workagent-fixed-root-exec-v1; then
+  pass "immutable fixed-root lifecycle supervisor v1 matches final source-gate evidence"
+else
+  block "immutable fixed-root lifecycle supervisor v1 differs from final source-gate evidence"
+fi
+protected_root_file_exact /usr/libexec/workagent-recovery-activation-admission-v1 "immutable recovery activation admission helper v1" 555
+if [[ -f /usr/libexec/workagent-recovery-activation-admission-v1 && ! -L /usr/libexec/workagent-recovery-activation-admission-v1 ]] &&
+   cmp -s "$repository_root/deploy/libexec/workagent-recovery-activation-admission-v1" /usr/libexec/workagent-recovery-activation-admission-v1; then
+  pass "immutable recovery activation admission helper v1 matches final source-gate evidence"
+else
+  block "immutable recovery activation admission helper v1 differs from final source-gate evidence"
+fi
+absent_path /run/workagent-backup/recovery-activation.permit "volatile blank-host recovery activation permit"
 absent_path /var/lib/workagent-backup/recovery-activation.json "unfinished blank-host recovery activation journal"
+absent_path /run/workagent-backup/quiesce.json "unfinished backup service quiescence journal"
+absent_path /run/workagent-edge/publication.permit "volatile edge publication permit"
+absent_path /var/lib/workagent-edge/publication.json "unfinished edge publication journal"
+absent_path /run/workagent-core/activation.permit "volatile core activation permit"
+absent_path /var/lib/workagent-core/activation.json "unfinished core activation journal"
+absent_path /var/lib/workagent/tenant-activation.json "unfinished tenant activation transaction journal" 755
 protected_file /etc/workagent/trust/release-signing.pub "release verification key" 644
 if [[ -f /etc/workagent/portal.json ]]; then
   check_template_contract /etc/workagent/portal.json "installed Portal" \
@@ -526,6 +636,7 @@ for unit in srv-workagent-users.mount cliproxyapi.service workagent-notification
   unit_enabled "$unit"
   unit_active "$unit"
 done
+unit_active workagent-tenant-catalog-ready.target
 
 loopback_listener 8317 "CLIProxyAPI"
 loopback_listener 25888 "local notification source"

@@ -23,6 +23,90 @@ func AcquireExclusiveExisting(path string, expectedUID uint32) (*Lock, error) {
 	return acquire(path, expectedUID, false, unix.LOCK_EX|unix.LOCK_NB)
 }
 
+// AcquireExclusiveExistingIdentity is the no-create, identity-pinned form used
+// by offline state inspection. It verifies the real parent, single-link empty
+// lock inode, exact owner/group/mode, stable pathname identity, and then takes
+// a non-blocking exclusive flock. No live service is ever waited out.
+func AcquireExclusiveExistingIdentity(path string, expectedUID, expectedGID uint32) (*Lock, error) {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || expectedUID == 0 || expectedGID == 0 {
+		return nil, errors.New("service lock path or identity is invalid")
+	}
+	parent := filepath.Dir(path)
+	base := filepath.Base(path)
+	if base == "." || base == ".." || strings.ContainsAny(base, `/\\`) {
+		return nil, errors.New("service lock name is invalid")
+	}
+	parentInfo, err := os.Lstat(parent)
+	if err != nil || parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() || parentInfo.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("service lock parent is missing or unsafe")
+	}
+	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok || parentStat.Uid != expectedUID || parentStat.Gid != expectedGID {
+		return nil, errors.New("service lock parent identity does not match")
+	}
+	parentFD, err := unix.Openat2(unix.AT_FDCWD, parent, &unix.OpenHow{
+		Flags:   uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC),
+		Resolve: unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open service lock parent: %w", err)
+	}
+	defer unix.Close(parentFD)
+	var openedParent unix.Stat_t
+	if err := unix.Fstat(parentFD, &openedParent); err != nil || openedParent.Dev != uint64(parentStat.Dev) || openedParent.Ino != parentStat.Ino ||
+		openedParent.Mode != uint32(parentStat.Mode) || openedParent.Uid != parentStat.Uid || openedParent.Gid != parentStat.Gid {
+		return nil, errors.New("service lock parent changed during validation")
+	}
+	fd, err := unix.Openat2(parentFD, base, &unix.OpenHow{
+		Flags:   uint64(unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC),
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open existing service lock: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("adopt existing service lock")
+	}
+	cleanup := func() { _ = file.Close() }
+	var before, named unix.Stat_t
+	if err := unix.Fstat(fd, &before); err != nil || !validExistingLockStat(before, expectedUID, expectedGID) {
+		cleanup()
+		return nil, errors.New("service lock inode identity is unsafe")
+	}
+	if err := unix.Fstatat(parentFD, base, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !sameLockStatIdentity(before, named) {
+		cleanup()
+		return nil, errors.New("service lock pathname changed during validation")
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		cleanup()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, errors.New("service is active; quiesce it before offline inspection")
+		}
+		return nil, fmt.Errorf("acquire exclusive service lock: %w", err)
+	}
+	var after unix.Stat_t
+	if err := unix.Fstat(fd, &after); err != nil || !sameLockStatIdentity(before, after) ||
+		unix.Fstatat(parentFD, base, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !sameLockStatIdentity(after, named) {
+		_ = unix.Flock(fd, unix.LOCK_UN)
+		cleanup()
+		return nil, errors.New("service lock identity changed after acquisition")
+	}
+	return &Lock{file: file}, nil
+}
+
+func validExistingLockStat(value unix.Stat_t, expectedUID, expectedGID uint32) bool {
+	return value.Mode&unix.S_IFMT == unix.S_IFREG && value.Mode&0o7777 == 0o600 && value.Nlink == 1 && value.Size == 0 &&
+		value.Uid == expectedUID && value.Gid == expectedGID
+}
+
+func sameLockStatIdentity(left, right unix.Stat_t) bool {
+	return left.Dev == right.Dev && left.Ino == right.Ino && left.Mode == right.Mode && left.Nlink == right.Nlink &&
+		left.Uid == right.Uid && left.Gid == right.Gid && left.Size == right.Size &&
+		left.Ctim.Sec == right.Ctim.Sec && left.Ctim.Nsec == right.Ctim.Nsec
+}
+
 // AcquireExclusive creates a missing private lock as the tenant identity or
 // opens the existing tenant-owned lock, then takes a non-blocking exclusive
 // flock. The validated parent descriptor confines creation to that real

@@ -16,6 +16,9 @@ import (
 )
 
 func TestPrepareTenantTemporaryAdoptsOnlyEmptyJournalResidue(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("tenant publication ownership adoption requires root")
+	}
 	parentPath := t.TempDir()
 	if err := os.Chmod(parentPath, 0o711); err != nil {
 		t.Fatal(err)

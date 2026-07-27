@@ -1,0 +1,50 @@
+[Unit]
+Description=WorkAgent2 tenant configuration crash reconciliation
+Before=workagent-tenant-catalog-ready.target
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
+ConditionPathExists=/run/workagent/activation.lock
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
+ExecStartPre=+/usr/libexec/workagent-recovery-activation-admission-v1
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-release
+ExecStart=/opt/workagent/control/bin/workagent-admin reconcile-tenant-files --config /etc/workagent/portal.json
+TimeoutStartSec=5min
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-tenant-config-reconcile
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/run/workagent/release-config.lock /etc/workagent /etc/systemd/system /var/lib/workagent
+
+MemoryMax=256M
+CPUQuota=100%
+TasksMax=128

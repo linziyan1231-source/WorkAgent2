@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
@@ -21,8 +22,10 @@ type VerifyMigrationPlanOptions struct {
 }
 
 type VerifyMigrationPlanResult struct {
-	Users     int `json:"users"`
-	Overrides int `json:"overrides"`
+	Users            int       `json:"users"`
+	Overrides        int       `json:"overrides"`
+	ReceiptPath      string    `json:"receipt_path"`
+	ReceiptExpiresAt time.Time `json:"receipt_expires_at"`
 }
 
 type migrationUsageSummary struct {
@@ -76,6 +79,10 @@ func VerifyMigrationPlan(ctx context.Context, options VerifyMigrationPlanOptions
 		return VerifyMigrationPlanResult{}, err
 	}
 	defer client.Close()
+	serviceGeneration, err := summarizeProductionMigrationReceiptServiceGeneration(ctx)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
 	// Windows migration deliberately completes its key/quota cutover before the
 	// replacement host's provider OAuth logins. Keep this gate on the protected
 	// core/plugin/policy/catalog contract; Portal and doctor use CheckReadiness
@@ -88,6 +95,14 @@ func VerifyMigrationPlan(ctx context.Context, options VerifyMigrationPlanOptions
 		return VerifyMigrationPlanResult{}, err
 	}
 	keys, err := readKeys(ctx, client)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	initialCatalogSHA256, err := canonicalLiveCatalogDigest(catalog)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	initialKeysSHA256, err := canonicalLiveKeysDigest(keys)
 	if err != nil {
 		return VerifyMigrationPlanResult{}, err
 	}
@@ -150,7 +165,75 @@ func VerifyMigrationPlan(ctx context.Context, options VerifyMigrationPlanOptions
 			}
 		}
 	}
-	return VerifyMigrationPlanResult{Users: len(tenants), Overrides: len(artifacts.plan.Overrides)}, nil
+	// Receipt publication is part of verification, not a later best-effort
+	// side effect. Re-read every live and protected contract while the command's
+	// A_EX -> C_SH -> control SH -> migration SH -> tenant-lock chain is held.
+	serviceGenerationBeforeFinalReadback, err := summarizeProductionMigrationReceiptServiceGeneration(ctx)
+	if err != nil || !reflect.DeepEqual(serviceGeneration, serviceGenerationBeforeFinalReadback) {
+		return VerifyMigrationPlanResult{}, errors.New("CLIProxy service generation changed before final live readback")
+	}
+	if err := checkMigrationReadinessWithClient(ctx, options.CLIProxy, options.Policy, client); err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	finalCatalog, err := readCatalog(ctx, client, options.Policy)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	finalKeys, err := readKeys(ctx, client)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	finalCatalogSHA256, err := canonicalLiveCatalogDigest(finalCatalog)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	finalKeysSHA256, err := canonicalLiveKeysDigest(finalKeys)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	if finalCatalogSHA256 != initialCatalogSHA256 || finalKeysSHA256 != initialKeysSHA256 {
+		return VerifyMigrationPlanResult{}, errors.New("CLIProxy live contract changed during migration verification")
+	}
+	serviceGenerationAfterReadback, err := summarizeProductionMigrationReceiptServiceGeneration(ctx)
+	if err != nil || !reflect.DeepEqual(serviceGeneration, serviceGenerationAfterReadback) {
+		return VerifyMigrationPlanResult{}, errors.New("CLIProxy service generation changed during final live readback")
+	}
+	finalArtifacts, err := loadMigrationArtifacts(ctx, options.ReportPath, options.PlanPath, options.PortalDatabasePath)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	initialPortal, initialPortalErr := summarizeMigrationReceiptPortal(options.PortalDatabasePath, artifacts.users)
+	finalPortal, finalPortalErr := summarizeMigrationReceiptPortal(options.PortalDatabasePath, finalArtifacts.users)
+	if initialPortalErr != nil || finalPortalErr != nil || artifacts.reportSHA256 != finalArtifacts.reportSHA256 ||
+		artifacts.planSHA256 != finalArtifacts.planSHA256 || !reflect.DeepEqual(initialPortal, finalPortal) {
+		return VerifyMigrationPlanResult{}, errors.New("protected migration inputs changed during live verification")
+	}
+	evidence, err := collectMigrationReceiptBoundEvidenceLocked(ctx, LiveVerificationReceiptValidationOptions(options), finalArtifacts, tenants)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	serviceGenerationBeforePublication, err := summarizeProductionMigrationReceiptServiceGeneration(ctx)
+	if err != nil || !reflect.DeepEqual(serviceGeneration, serviceGenerationBeforePublication) {
+		return VerifyMigrationPlanResult{}, errors.New("CLIProxy service generation changed before receipt publication")
+	}
+	evidence.LiveCatalog, evidence.LiveKeys, evidence.ServiceGeneration = finalCatalogSHA256, finalKeysSHA256, serviceGeneration
+	receipt, expires, err := buildMigrationLiveVerificationReceipt(
+		MigrationLiveVerificationReceiptPath, time.Now().UTC(), evidence,
+	)
+	if err != nil {
+		return VerifyMigrationPlanResult{}, err
+	}
+	if err := writeMigrationLiveVerificationReceiptAt(MigrationLiveVerificationReceiptPath, receipt, nil); err != nil {
+		return VerifyMigrationPlanResult{}, fmt.Errorf("publish CLIProxy live-verification receipt: %w", err)
+	}
+	serviceGenerationAfterPublication, err := summarizeProductionMigrationReceiptServiceGeneration(ctx)
+	if err != nil || !reflect.DeepEqual(serviceGeneration, serviceGenerationAfterPublication) {
+		return VerifyMigrationPlanResult{}, errors.New("CLIProxy service generation changed during receipt publication")
+	}
+	return VerifyMigrationPlanResult{
+		Users: len(tenants), Overrides: len(artifacts.plan.Overrides),
+		ReceiptPath: MigrationLiveVerificationReceiptPath, ReceiptExpiresAt: expires,
+	}, nil
 }
 
 func checkMigrationReadinessWithClient(ctx context.Context, endpoint config.CLIProxy, policy productconfig.Policy, client readinessManagementClient) error {

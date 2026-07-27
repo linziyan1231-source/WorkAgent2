@@ -19,7 +19,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const finalConfirmationPrefix = "FINAL-WINDOWS-CAPTURE:"
+const (
+	finalConfirmationPrefix      = "FINAL-WINDOWS-CAPTURE:"
+	finalDeltaConfirmationPrefix = "FINAL-WINDOWS-DELTA:"
+)
 const maxConcurrentReadOnlySources = 4
 
 type captureEngine struct {
@@ -73,6 +76,29 @@ func Capture(ctx context.Context, options CaptureOptions) (Report, error) {
 		return Report{}, errors.New("final Windows capture requires root")
 	}
 	return (&captureEngine{remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }}).capture(ctx, options)
+}
+
+// VerifyFinalDelta first performs a complete offline revalidation of the
+// immutable capture and its private inputs. Only after every local check has
+// succeeded does it contact Windows, using the same narrow read-only
+// transport as a rehearsal, and require two stable collections to match the
+// capture evidence exactly.
+func VerifyFinalDelta(ctx context.Context, options FinalDeltaOptions) (Report, error) {
+	if os.Geteuid() != 0 {
+		return Report{}, errors.New("final Windows delta verification requires root")
+	}
+	return (&captureEngine{remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }}).verifyFinalDelta(ctx, options)
+}
+
+// VerifyCompletedCapture verifies the private spec, every pinned local input,
+// the strict completion manifest and evidence documents, and the complete
+// stored tree. It is intentionally local-only and cannot contact Windows.
+func VerifyCompletedCapture(options CompletedCaptureOptions) (CompletedCaptureBinding, error) {
+	if os.Geteuid() != 0 {
+		return CompletedCaptureBinding{}, errors.New("completed Windows capture verification requires root")
+	}
+	binding, _, _, err := verifyCompletedCapture(options, 0)
+	return binding, err
 }
 
 func (engine *captureEngine) check(ctx context.Context, options CheckOptions) (Report, error) {
@@ -236,6 +262,113 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	return report, nil
 }
 
+func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options FinalDeltaOptions) (Report, error) {
+	if !validCaptureID(options.CaptureID) || options.Confirm != finalDeltaConfirmationPrefix+options.CaptureID || !options.WindowsFrozen {
+		return Report{}, errors.New("final delta verification requires a completed capture ID, the exact confirmation token, and an external Windows freeze declaration")
+	}
+	if err := validateAbsoluteFilePath(options.Destination, "capture destination"); err != nil || filepath.Base(options.Destination) != options.CaptureID {
+		return Report{}, errors.New("capture destination must be an absolute path whose basename equals the capture ID")
+	}
+
+	// Nothing before this boundary can contact Windows. Keep the full local
+	// integrity gate together so tests and later callers can prove deferral.
+	binding, loaded, manifest, err := verifyCompletedCapture(CompletedCaptureOptions{
+		SpecPath: options.SpecPath, Destination: options.Destination, CaptureID: options.CaptureID,
+	}, engine.expectedUID)
+	if err != nil {
+		return Report{}, err
+	}
+
+	first, firstExclusions, firstOAuth, err := engine.collect(ctx, loaded.value)
+	if err != nil {
+		return Report{}, err
+	}
+	second, secondExclusions, secondOAuth, err := engine.collect(ctx, loaded.value)
+	if err != nil {
+		return Report{}, err
+	}
+	if err := compareCollection(first, firstExclusions, firstOAuth, second, secondExclusions, secondOAuth); err != nil {
+		return Report{}, errors.New("Windows final-delta collections are not stable")
+	}
+	if err := compareFinalDeltaToManifest(first, firstExclusions, firstOAuth, manifest); err != nil {
+		return Report{}, err
+	}
+	aggregate, err := aggregateSummaries(first)
+	if err != nil || aggregate != manifest.Aggregate {
+		return Report{}, errors.New("Windows final-delta aggregate does not match the completed capture")
+	}
+	postBinding, _, _, err := verifyCompletedCapture(CompletedCaptureOptions{
+		SpecPath: options.SpecPath, Destination: options.Destination, CaptureID: options.CaptureID,
+	}, engine.expectedUID)
+	if err != nil || postBinding != binding {
+		return Report{}, errors.New("completed capture changed during final-delta verification")
+	}
+	captureCompletedAt := binding.CompletedAt
+	return Report{
+		SchemaVersion:         1,
+		Status:                "complete-frozen-final-delta",
+		CaptureID:             binding.CaptureID,
+		SpecSHA256:            binding.SpecSHA256,
+		CaptureManifestSHA256: binding.CaptureManifestSHA256,
+		CaptureCompletedAt:    &captureCompletedAt,
+		Sources:               len(first),
+		Summary:               aggregate,
+		OAuth:                 firstOAuth,
+		CompletedAt:           engine.now().UTC(),
+	}, nil
+}
+
+func verifyCompletedCapture(options CompletedCaptureOptions, expectedUID uint32) (CompletedCaptureBinding, loadedSpec, finalManifest, error) {
+	if !validCaptureID(options.CaptureID) {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("completed capture ID is invalid")
+	}
+	if err := validateAbsoluteFilePath(options.Destination, "capture destination"); err != nil || filepath.Base(options.Destination) != options.CaptureID {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("capture destination must be an absolute path whose basename equals the capture ID")
+	}
+	parentFD, _, err := openPrivateRoot(filepath.Dir(options.Destination), expectedUID)
+	if err != nil {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("capture destination parent must be a real private 0700 directory")
+	}
+	if err := unix.Close(parentFD); err != nil {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("close capture destination parent")
+	}
+	loaded, err := loadSpec(options.SpecPath, expectedUID)
+	if err != nil {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, err
+	}
+	if err := verifyPrivateLocalInputs(loaded.value.LocalFiles, expectedUID); err != nil {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, err
+	}
+	manifest, manifestDigest, err := readAndVerifyExistingCapture(options.Destination, options.CaptureID, loaded.digest, loaded.value, expectedUID)
+	if err != nil {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, err
+	}
+	reloaded, err := loadSpec(options.SpecPath, expectedUID)
+	if err != nil || reloaded.digest != loaded.digest {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("capture spec changed during completed-capture verification")
+	}
+	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, expectedUID); err != nil {
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("private local input changed during completed-capture verification")
+	}
+	binding := CompletedCaptureBinding{
+		SchemaVersion: 1, CaptureID: manifest.CaptureID, SpecSHA256: manifest.SpecSHA256,
+		CaptureManifestSHA256: manifestDigest, CompletedAt: manifest.CompletedAt, Aggregate: manifest.Aggregate,
+	}
+	return binding, loaded, manifest, nil
+}
+
+func compareFinalDeltaToManifest(inventories []inventory, exclusions []exclusionEvidence, oauth OAuthSummary, manifest finalManifest) error {
+	if len(inventories) != len(manifest.Before) || len(inventories) != len(manifest.After) || len(exclusions) != len(inventories) ||
+		oauth != manifest.OAuthBefore || oauth != manifest.OAuthAfter {
+		return errors.New("Windows final-delta OAuth or source cardinality does not match the completed capture")
+	}
+	current := evidenceSources(inventories, exclusions)
+	if !equalSourceEvidence(current, manifest.Before) || !equalSourceEvidence(current, manifest.After) {
+		return errors.New("Windows final-delta source or approved-exclusion evidence does not match the completed capture")
+	}
+	return nil
+}
+
 func (engine *captureEngine) collect(ctx context.Context, spec Spec) ([]inventory, []exclusionEvidence, OAuthSummary, error) {
 	inventories := make([]inventory, len(spec.Sources))
 	exclusions := make([]exclusionEvidence, len(spec.Sources))
@@ -369,26 +502,40 @@ func readExistingCapture(destination, captureID, specSHA string, spec Spec, expe
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return Report{}, false, errors.New("existing capture destination is unsafe")
 	}
-	rootFD, _, err := openPrivateRoot(destination, expectedUID)
+	manifest, _, err := readAndVerifyExistingCapture(destination, captureID, specSHA, spec, expectedUID)
 	if err != nil {
 		return Report{}, false, err
 	}
+	return Report{SchemaVersion: 1, Status: manifest.Status, CaptureID: captureID, SpecSHA256: specSHA, Sources: len(manifest.Before), Summary: manifest.Aggregate, OAuth: manifest.OAuthAfter, CompletedAt: manifest.CompletedAt}, true, nil
+}
+
+func readAndVerifyExistingCapture(destination, captureID, specSHA string, spec Spec, expectedUID uint32) (finalManifest, string, error) {
+	rootFD, _, err := openPrivateRoot(destination, expectedUID)
+	if err != nil {
+		return finalManifest{}, "", err
+	}
 	defer unix.Close(rootFD)
 	var manifest finalManifest
-	if err := readStoredStrictJSONAt(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &manifest); err != nil ||
+	manifestDigest, manifestErr := readStoredStrictJSONAtDigest(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &manifest)
+	if manifestErr != nil ||
 		manifest.SchemaVersion != 1 || manifest.Status != "complete-frozen-capture" || manifest.CaptureID != captureID || manifest.SpecSHA256 != specSHA || manifest.CompletedAt.IsZero() {
-		return Report{}, false, errors.New("existing capture does not match this immutable capture request")
+		return finalManifest{}, "", errors.New("existing capture does not match this immutable capture request")
 	}
 	if err := syncPrivateTree(rootFD, expectedUID); err != nil {
-		return Report{}, false, errors.New("existing capture tree failed private integrity validation")
+		return finalManifest{}, "", errors.New("existing capture tree failed private integrity validation")
 	}
 	if err := verifyStoredCapture(rootFD, spec, manifest, expectedUID); err != nil {
-		return Report{}, false, err
+		return finalManifest{}, "", err
+	}
+	var finalManifestRead finalManifest
+	finalDigest, err := readStoredStrictJSONAtDigest(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &finalManifestRead)
+	if err != nil || finalDigest != manifestDigest {
+		return finalManifest{}, "", errors.New("existing capture manifest changed during verification")
 	}
 	if err := syncPathDirectory(filepath.Dir(destination)); err != nil {
-		return Report{}, false, errors.New("sync existing capture destination parent")
+		return finalManifest{}, "", errors.New("sync existing capture destination parent")
 	}
-	return Report{SchemaVersion: 1, Status: manifest.Status, CaptureID: captureID, SpecSHA256: specSHA, Sources: len(manifest.Before), Summary: manifest.Aggregate, OAuth: manifest.OAuthAfter, CompletedAt: manifest.CompletedAt}, true, nil
+	return manifest, manifestDigest, nil
 }
 
 func marshalPrivateJSON(value any) ([]byte, error) {

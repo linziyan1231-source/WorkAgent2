@@ -19,6 +19,13 @@ func AcquireProductionMigrationLock() (io.Closer, error) {
 	return acquireCLIProxyMigrationLock()
 }
 
+// AcquireProductionMigrationSharedLock holds the production migration inode
+// read-only and shared. Live migration staging and verification use it to
+// exclude the offline state importer without excluding CLIProxy itself.
+func AcquireProductionMigrationSharedLock() (io.Closer, error) {
+	return acquireCLIProxyMigrationSharedLock()
+}
+
 // VerifyProductionPolicyState verifies the protected on-host policy file and
 // its dedicated runtime ownership before it is admitted to an encrypted
 // application backup. Provider OAuth material lives in a separate directory

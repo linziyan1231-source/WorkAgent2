@@ -10,19 +10,22 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
-	ReportSchemaVersion  = 2
+	ReportSchemaVersion  = 3
 	TenantDiskLimitBytes = uint64(20 * 1024 * 1024 * 1024)
 )
 
 type Options struct {
 	SnapshotRoot              string
+	CaptureSpec               string
 	StagingDir                string
 	TenantDataRoot            string
 	ExternalWorkspaceManifest string
 	DryRun                    bool
+	verifyCompletedCapture    completedCaptureVerifier
 }
 
 type PortalReport struct {
@@ -114,12 +117,16 @@ type TenantReport struct {
 type Report struct {
 	SchemaVersion                int            `json:"schema_version"`
 	Status                       string         `json:"status"`
+	CaptureID                    string         `json:"capture_id"`
+	CaptureSpecSHA256            string         `json:"capture_spec_sha256"`
+	CaptureManifestSHA256        string         `json:"capture_manifest_sha256"`
+	CaptureCompletedAt           time.Time      `json:"capture_completed_at"`
 	SourceFingerprint            string         `json:"source_fingerprint"`
 	SourcePortalSHA256           string         `json:"source_portal_sha256"`
 	SourcePortalWALSHA256        string         `json:"source_portal_wal_sha256"`
 	SourcePortalSHMSHA256        string         `json:"source_portal_shm_sha256"`
 	SourceCPAStateSHA256         string         `json:"source_cpa_state_sha256"`
-	SourceExternalManifestSHA256 string         `json:"source_external_manifest_sha256,omitempty"`
+	SourceExternalManifestSHA256 string         `json:"source_external_manifest_sha256"`
 	OutputFingerprint            string         `json:"output_fingerprint,omitempty"`
 	TenantDataRoot               string         `json:"tenant_data_root"`
 	Portal                       PortalReport   `json:"portal"`
@@ -202,6 +209,7 @@ type migrationPlan struct {
 func normalizeOptions(options Options) (Options, error) {
 	for label, value := range map[string]string{
 		"snapshot root":     options.SnapshotRoot,
+		"capture spec":      options.CaptureSpec,
 		"staging directory": options.StagingDir,
 		"tenant data root":  options.TenantDataRoot,
 	} {
@@ -218,13 +226,9 @@ func normalizeOptions(options Options) (Options, error) {
 	if options.StagingDir == options.TenantDataRoot {
 		return Options{}, errors.New("staging directory must not be the production tenant-data root")
 	}
-	if options.ExternalWorkspaceManifest != "" {
-		if !filepath.IsAbs(options.ExternalWorkspaceManifest) || filepath.Clean(options.ExternalWorkspaceManifest) != options.ExternalWorkspaceManifest {
-			return Options{}, errors.New("external workspace manifest must be an absolute, clean path")
-		}
-		if !pathWithin(options.SnapshotRoot, options.ExternalWorkspaceManifest) || options.ExternalWorkspaceManifest == options.SnapshotRoot {
-			return Options{}, errors.New("external workspace manifest must be a file inside the snapshot root")
-		}
+	expectedManifest := filepath.Join(options.SnapshotRoot, "external-workspaces.json")
+	if options.ExternalWorkspaceManifest != expectedManifest {
+		return Options{}, errors.New("external workspace manifest must be exactly <snapshot-root>/external-workspaces.json")
 	}
 	return options, nil
 }

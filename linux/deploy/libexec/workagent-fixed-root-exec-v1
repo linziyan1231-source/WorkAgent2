@@ -1,0 +1,293 @@
+#!/bin/bash
+set -u -o pipefail
+export LC_ALL=C
+export PATH=/usr/bin:/bin
+
+readonly catalog_lock=/run/workagent/release-config.lock
+readonly activation_lock=/run/workagent/activation.lock
+readonly control_lock=/opt/workagent/control.lock
+readonly shared_lock=/opt/workagent/shared.lock
+readonly cliproxy_migration_lock=/run/workagent/cliproxy-migration.lock
+readonly cliproxy_oauth_lock=/run/workagent/cliproxy-oauth.lock
+readonly catalog_name=workagent-config-lock
+readonly activation_name=workagent-activation-lock
+readonly control_name=workagent-control-release-lock
+readonly shared_name=workagent-shared-release-lock
+readonly cliproxy_migration_name=workagent-cliproxy-migration-lock
+readonly cliproxy_oauth_name=workagent-cliproxy-oauth-lock
+
+fail() {
+  printf 'workagent-fixed-root-exec-v1: %s\n' "$*" >&2
+  exit 1
+}
+
+if (( $# < 1 )); then
+  fail "usage: workagent-fixed-root-exec-v1 PROFILE"
+fi
+
+profile=$1
+shift
+hold_catalog=false
+uses_migration=false
+uses_activation=false
+uses_oauth_writer=false
+case "$profile" in
+  backup)
+    mode=control
+    hold_catalog=true
+    expected_command=(/opt/workagent/control/bin/workagent-backup create --portal-config /etc/workagent/portal.json --config /etc/workagent/backup.json --quiesce-systemd)
+    ;;
+  healthcheck)
+    mode=control
+    hold_catalog=true
+    expected_command=(/opt/workagent/control/bin/workagent-healthcheck /var/lib/node_exporter/textfile_collector/workagent_host.prom)
+    ;;
+  notification)
+    mode=control
+    expected_command=(/opt/workagent/control/bin/workagent-notification)
+    ;;
+  cliproxyapi)
+    mode=shared
+    uses_migration=true
+    expected_command=(/opt/workagent/shared/cliproxyapi/bin/cli-proxy-api --config /var/lib/cliproxyapi/config.yaml)
+    ;;
+  cliproxy-oauth-codex)
+    mode=shared
+    hold_catalog=true
+    uses_migration=true
+    uses_oauth_writer=true
+    expected_command=(/opt/workagent/shared/cliproxyapi/bin/cli-proxy-api --config /var/lib/cliproxyapi/config.yaml --codex-device-login --no-browser)
+    ;;
+  cliproxy-oauth-kimi)
+    mode=shared
+    hold_catalog=true
+    uses_migration=true
+    uses_oauth_writer=true
+    expected_command=(/opt/workagent/shared/cliproxyapi/bin/cli-proxy-api --config /var/lib/cliproxyapi/config.yaml --kimi-login --no-browser)
+    ;;
+  cliproxy-oauth-doctor)
+    mode=shared
+    hold_catalog=true
+    uses_migration=true
+    credential_directory=${CREDENTIALS_DIRECTORY:-}
+    if [[ ! $credential_directory =~ ^/run/credentials/workagent-cliproxy-oauth-doctor-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.service$ ]]; then
+      fail "doctor credentials directory does not match its unique transient unit"
+    fi
+    expected_command=(/opt/workagent/control/bin/workagent-cliproxy doctor --portal-config /etc/workagent/portal.json --credential "$credential_directory/cliproxy-management-key" --wait 30s)
+    ;;
+  chatforward)
+    mode=shared
+    expected_command=(/opt/workagent/shared/chatforward/integration/run-server.sh /run/credentials/workagent-chatforward.service/chatforward-key)
+    ;;
+  chatforward-browser)
+    mode=shared
+    expected_command=(/opt/workagent/shared/chatforward/integration/run-browser.sh)
+    ;;
+  chatforward-login)
+    mode=shared
+    hold_catalog=true
+    uses_activation=true
+    expected_command=(/opt/workagent/shared/chatforward/integration/login.sh)
+    ;;
+  chatforward-smoke)
+    mode=shared
+    expected_command=(/opt/workagent/control/admin/smoke-chatforward-browser-sandbox /opt/workagent/shared/chatforward /usr/bin/google-chrome-stable)
+    ;;
+  *)
+    fail "unknown fixed-root consumer profile"
+    ;;
+esac
+
+actual_command=("$@")
+if (( ${#actual_command[@]} != ${#expected_command[@]} )); then
+  fail "the supervised command does not match its fixed profile"
+fi
+for index in "${!expected_command[@]}"; do
+  [[ ${actual_command[$index]} == "${expected_command[$index]}" ]] || fail "the supervised command does not match its fixed profile"
+done
+
+migration_shape=
+oauth_shape=
+if [[ $uses_migration == true ]]; then
+  group_record=$(/usr/bin/getent group cliproxyapi 2>/dev/null || true)
+  [[ -n $group_record && $group_record != *$'\n'* ]] || fail "CLIProxy group identity is unavailable"
+  IFS=: read -r group_name _group_password group_gid _group_members <<< "$group_record"
+  [[ $group_name == cliproxyapi && $group_gid =~ ^[1-9][0-9]*$ ]] || fail "CLIProxy group identity is invalid"
+  migration_shape=0:$group_gid:640:1:0
+  oauth_shape=$migration_shape
+fi
+
+catalog_fd=3
+control_fd=4
+shared_fd=5
+migration_fd=6
+oauth_fd=7
+activation_fd=
+case "$mode" in
+  control)
+    expected_count=2
+    expected_names=$catalog_name:$control_name
+    expected_paths=("$catalog_lock" "$control_lock")
+    expected_shapes=(0:0:600:1:0 0:0:600:1:0)
+    ;;
+  shared)
+    if [[ $uses_activation == true ]]; then
+      activation_fd=3
+      catalog_fd=4
+      control_fd=5
+      shared_fd=6
+      expected_count=4
+      expected_names=$activation_name:$catalog_name:$control_name:$shared_name
+      expected_paths=("$activation_lock" "$catalog_lock" "$control_lock" "$shared_lock")
+      expected_shapes=(0:0:600:1:0 0:0:600:1:0 0:0:600:1:0 0:0:600:1:0)
+    elif [[ $uses_migration == true ]]; then
+      if [[ $uses_oauth_writer == true ]]; then
+        expected_count=5
+        expected_names=$catalog_name:$control_name:$shared_name:$cliproxy_migration_name:$cliproxy_oauth_name
+        expected_paths=("$catalog_lock" "$control_lock" "$shared_lock" "$cliproxy_migration_lock" "$cliproxy_oauth_lock")
+        expected_shapes=(0:0:600:1:0 0:0:600:1:0 0:0:600:1:0 "$migration_shape" "$oauth_shape")
+      else
+        expected_count=4
+        expected_names=$catalog_name:$control_name:$shared_name:$cliproxy_migration_name
+        expected_paths=("$catalog_lock" "$control_lock" "$shared_lock" "$cliproxy_migration_lock")
+        expected_shapes=(0:0:600:1:0 0:0:600:1:0 0:0:600:1:0 "$migration_shape")
+      fi
+    else
+      expected_count=3
+      expected_names=$catalog_name:$control_name:$shared_name
+      expected_paths=("$catalog_lock" "$control_lock" "$shared_lock")
+      expected_shapes=(0:0:600:1:0 0:0:600:1:0 0:0:600:1:0)
+    fi
+    ;;
+esac
+
+if [[ ${LISTEN_PID:-} != "$$" || ${LISTEN_FDS:-} != "$expected_count" || ${LISTEN_FDNAMES:-} != "$expected_names" ]]; then
+  fail "systemd did not pass the exact named lifecycle descriptors"
+fi
+for index in "${!expected_paths[@]}"; do
+  fd=$((index + 3))
+  path=${expected_paths[$index]}
+  fd_path=/proc/self/fd/$fd
+  fd_info=/proc/self/fdinfo/$fd
+  [[ -f $fd_path ]] || fail "lifecycle descriptor $fd is not a regular file"
+  [[ $(/usr/bin/readlink -- "$fd_path" 2>/dev/null || true) == "$path" ]] || fail "lifecycle descriptor $fd has the wrong path"
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "$fd_path" 2>/dev/null || true) == "${expected_shapes[$index]}" ]] ||
+    fail "lifecycle descriptor $fd has an unsafe inode shape"
+  [[ $(/usr/bin/stat -Lc '%d:%i' -- "$fd_path" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "$path" 2>/dev/null || true) ]] ||
+    fail "lifecycle descriptor $fd no longer matches its path"
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "$fd_info" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || fail "lifecycle descriptor $fd access mode is unavailable"
+  (( (8#$flags & 3) == 0 )) || fail "lifecycle descriptor $fd is not read-only"
+done
+
+# Numeric flock operands are descriptors only in the no-command form. The
+# interactive ChatForward supervisor takes A_EX before the catalog and fixed
+# channels, then retains A in the root supervisor while passing only the same
+# open-file description to its child for possession verification.
+if [[ $uses_activation == true ]]; then
+  /usr/bin/flock --exclusive "$activation_fd" || fail "acquire exclusive tenant activation lifecycle lock"
+fi
+/usr/bin/flock --shared "$catalog_fd" || fail "acquire shared catalog lifecycle lock"
+/usr/bin/flock --shared "$control_fd" || fail "acquire shared control lifecycle lock"
+if [[ $mode == shared ]]; then
+  /usr/bin/flock --shared "$shared_fd" || fail "acquire shared fixed-root lifecycle lock"
+fi
+if [[ $uses_migration == true ]]; then
+  /usr/bin/flock --shared --nonblock --conflict-exit-code 75 "$migration_fd"
+  migration_status=$?
+  if (( migration_status == 75 )); then
+    printf 'workagent-fixed-root-exec-v1: CLIProxy migration is active\n' >&2
+    exit 75
+  elif (( migration_status != 0 )); then
+    fail "acquire shared CLIProxy migration lock"
+  fi
+fi
+if [[ $uses_oauth_writer == true ]]; then
+  /usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$oauth_fd"
+  oauth_status=$?
+  if (( oauth_status == 75 )); then
+    printf 'workagent-fixed-root-exec-v1: another CLIProxy OAuth authorization flow is active\n' >&2
+    exit 75
+  elif (( oauth_status != 0 )); then
+    fail "acquire exclusive CLIProxy OAuth writer lock"
+  fi
+fi
+case "$profile" in
+  chatforward-login)
+    /opt/workagent/control/bin/workagent-release verify \
+      --root /opt/workagent/control \
+      --public-key /etc/workagent/trust/release-signing.pub \
+      --scope portal \
+      --required-executable bin/workagent-admin \
+      --required-executable bin/workagent-release || fail "verify signed control root for ChatForward login"
+    /opt/workagent/control/bin/workagent-release verify \
+      --root /opt/workagent/shared \
+      --public-key /etc/workagent/trust/release-signing.pub \
+      --scope shared \
+      --required chatforward/app/extension/manifest.json \
+      --required-executable chatforward/integration/login.sh \
+      --required-executable chatforward/integration/readiness.mjs \
+      --required-executable chatforward/node/bin/node || fail "verify signed shared root for ChatForward login"
+    ;;
+  chatforward-smoke)
+    /opt/workagent/control/bin/workagent-release verify \
+      --root /opt/workagent/control \
+      --public-key /etc/workagent/trust/release-signing.pub \
+      --scope portal \
+      --required-executable admin/smoke-chatforward-browser-sandbox \
+      --required-executable bin/workagent-release || fail "verify signed control root for ChatForward smoke"
+    /opt/workagent/control/bin/workagent-release verify \
+      --root /opt/workagent/shared \
+      --public-key /etc/workagent/trust/release-signing.pub \
+      --scope shared \
+      --required chatforward/app/extension/manifest.json \
+      --required-executable chatforward/integration/run-browser.sh \
+      --required-executable chatforward/node/bin/node || fail "verify signed shared root for ChatForward smoke"
+    ;;
+esac
+if [[ $hold_catalog == false ]]; then
+  /usr/bin/flock --unlock "$catalog_fd" || fail "release shared catalog lifecycle lock"
+  if [[ $uses_activation == true ]]; then
+    exec 4<&-
+  else
+    exec 3<&-
+  fi
+fi
+
+[[ -x $1 ]] || fail "the supervised command is not executable"
+unset LISTEN_PID LISTEN_FDS LISTEN_FDNAMES
+
+if [[ $uses_activation == true ]]; then
+  (exec 4<&- 5<&- 6<&-; exec "$@") &
+elif [[ $uses_oauth_writer == true ]]; then
+  (exec 3<&- 4<&- 5<&- 6<&- 7<&-; exec "$@") &
+elif [[ $uses_migration == true ]]; then
+  (exec 3<&- 4<&- 5<&- 6<&-; exec "$@") &
+elif [[ $mode == shared ]]; then
+  (exec 3<&- 4<&- 5<&-; exec "$@") &
+else
+  (exec 3<&- 4<&-; exec "$@") &
+fi
+child_pid=$!
+
+# The three forwarding functions are invoked indirectly by signal traps.
+# shellcheck disable=SC2329
+forward_term() { kill -TERM "$child_pid" 2>/dev/null || true; }
+# shellcheck disable=SC2329
+forward_int() { kill -INT "$child_pid" 2>/dev/null || true; }
+# shellcheck disable=SC2329
+forward_hup() { kill -HUP "$child_pid" 2>/dev/null || true; }
+trap forward_term TERM
+trap forward_int INT
+trap forward_hup HUP
+
+status=0
+while true; do
+  wait "$child_pid"
+  status=$?
+  if ! kill -0 "$child_pid" 2>/dev/null; then
+    break
+  fi
+done
+trap - TERM INT HUP
+exit "$status"

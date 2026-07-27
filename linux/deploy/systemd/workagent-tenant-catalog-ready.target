@@ -1,0 +1,7 @@
+[Unit]
+Description=WorkAgent2 verified tenant catalog readiness
+Requires=workagent-tenant-config-reconcile.service
+After=workagent-tenant-config-reconcile.service
+ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionPathExists=/run/workagent/activation.lock
