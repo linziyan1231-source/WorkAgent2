@@ -30,6 +30,27 @@ func repositoryFile(t *testing.T, relative string) string {
 	return string(payload)
 }
 
+func requireRepositoryExecutable(t *testing.T, relative string) {
+	t.Helper()
+	path := filepath.Join(repositoryRoot(t), relative)
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("repository executable %s is not a regular file", relative)
+	}
+	// Git records only whether a regular file is executable, not its complete
+	// POSIX permission mask. The source gate deliberately materializes 100755
+	// entries as 0700 beneath a private umask, while a normal checkout commonly
+	// materializes the same entry as 0755. The owner's execute bit is the stable
+	// property that proves the committed entry is executable in both contexts.
+	permissions := info.Mode().Perm()
+	if permissions&0o100 == 0 || permissions&0o022 != 0 {
+		t.Fatalf("repository executable %s has unsafe mode %o (owner execute is required; group/other write is forbidden)", relative, permissions)
+	}
+}
+
 func requireContains(t *testing.T, payload string, values ...string) {
 	t.Helper()
 	for _, value := range values {

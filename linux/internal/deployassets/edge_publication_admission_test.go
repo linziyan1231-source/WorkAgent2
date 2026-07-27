@@ -1,7 +1,6 @@
 package deployassets
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -12,14 +11,7 @@ const (
 )
 
 func TestEdgePublicationAdmissionHelperIsIndependentPinnedAndFailClosed(t *testing.T) {
-	helperPath := repositoryRoot(t) + "/deploy/libexec/workagent-edge-publication-admission-v1"
-	info, err := os.Stat(helperPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("tracked edge admission helper mode = %o, want 0755", info.Mode().Perm())
-	}
+	requireRepositoryExecutable(t, "deploy/libexec/workagent-edge-publication-admission-v1")
 	helper := repositoryFile(t, "deploy/libexec/workagent-edge-publication-admission-v1")
 	requireContains(t, helper,
 		"#!/bin/bash\n",
@@ -131,14 +123,7 @@ func TestEdgePublicationDirectoriesAndEvidenceAbsenceAreProvisioned(t *testing.T
 }
 
 func TestEdgePublicationAdmissionHelperIsPackagedAndNoReplaceInstalled(t *testing.T) {
-	installerPath := repositoryRoot(t) + "/scripts/install-edge-publication-admission-v1.sh"
-	info, err := os.Stat(installerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("tracked edge admission installer mode = %o, want 0755", info.Mode().Perm())
-	}
+	requireRepositoryExecutable(t, "scripts/install-edge-publication-admission-v1.sh")
 	installer := repositoryFile(t, "scripts/install-edge-publication-admission-v1.sh")
 	requireContains(t, installer,
 		"readonly destination=/usr/libexec/workagent-edge-publication-admission-v1",

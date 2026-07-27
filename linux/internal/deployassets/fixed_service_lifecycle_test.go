@@ -1,7 +1,6 @@
 package deployassets
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -116,14 +115,7 @@ func TestFixedRootServiceConsumersUseVersionedLifecycleSupervisor(t *testing.T) 
 }
 
 func TestFixedRootLifecycleSupervisorV1IsClosedAndRetaining(t *testing.T) {
-	helperPath := repositoryRoot(t) + "/deploy/libexec/workagent-fixed-root-exec-v1"
-	info, err := os.Stat(helperPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("tracked v1 helper mode = %o, want 0755", info.Mode().Perm())
-	}
+	requireRepositoryExecutable(t, "deploy/libexec/workagent-fixed-root-exec-v1")
 	helper := repositoryFile(t, "deploy/libexec/workagent-fixed-root-exec-v1")
 	requireContains(t, helper,
 		"#!/bin/bash\n",
