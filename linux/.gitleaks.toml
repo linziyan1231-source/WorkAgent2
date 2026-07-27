@@ -17,7 +17,7 @@ regexes = ['''^per_key_models_patch_sha256":\s*"[0-9a-f]{64}"$''']
 description = "Public SHA-256 pin for the audited Google Linux signing-key file"
 condition = "AND"
 regexTarget = "match"
-paths = ['''(?:^|/)scripts/verify-host-rpms\.sh$''']
+paths = ['''(?:^|/)(?:scripts/verify-host-rpms\.sh|admin/verify-host-rpms)$''']
 regexes = ['''^expected_google_key_sha256=54dea5f6c2a26091578cf52a999cebc6b64df478d37ad4dce96376b711e3b27c$''']
 
   [[rules.allowlists]]

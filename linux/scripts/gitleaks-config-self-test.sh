@@ -19,6 +19,7 @@ repo_root=$(git rev-parse --show-toplevel)
 configuration=$repo_root/.gitleaks.toml
 candidate=third_party/cliproxyapi/windows-candidate-manifest.json
 google_pin=scripts/verify-host-rpms.sh
+google_release_pin=admin/verify-host-rpms
 websocket_patch=components/aionui/aionui-webhost-workagent-runtime-auth.patch
 for required in "$configuration" "$repo_root/$candidate" "$repo_root/$google_pin" "$repo_root/$websocket_patch"; do
   if [[ ! -f $required || -L $required ]]; then
@@ -75,11 +76,29 @@ fi
 # The two additional exceptions bind an exact public value to an exact line and
 # path. First prove those originals are accepted from an absolute snapshot path.
 allowlist_fixture_root=$temporary/allowlisted
-mkdir -p "$allowlist_fixture_root/scripts" "$allowlist_fixture_root/components/aionui"
+mkdir -p "$allowlist_fixture_root/scripts" "$allowlist_fixture_root/admin" "$allowlist_fixture_root/components/aionui"
 cp -- "$repo_root/$google_pin" "$allowlist_fixture_root/$google_pin"
+cp -- "$repo_root/$google_pin" "$allowlist_fixture_root/$google_release_pin"
 cp -- "$repo_root/$websocket_patch" "$allowlist_fixture_root/$websocket_patch"
 "$gitleaks_binary" dir --config "$configuration" --ignore-gitleaks-allow \
   --no-banner --redact --exit-code 1 "$allowlist_fixture_root" >/dev/null
+
+# The same exact public pin must still be detected at every other path.
+wrong_path_root=$temporary/wrong-path
+mkdir -p "$wrong_path_root/other"
+cp -- "$repo_root/$google_pin" "$wrong_path_root/other/verify-host-rpms"
+report=$temporary/wrong-path-report.json
+set +e
+"$gitleaks_binary" dir --config "$configuration" --ignore-gitleaks-allow \
+  --no-banner --redact --exit-code 7 --report-format json --report-path "$report" "$wrong_path_root" >/dev/null
+status=$?
+set -e
+if (( status != 7 )) || \
+  ! grep -Fq '"RuleID": "generic-api-key"' "$report" || \
+  ! grep -Fq 'other/verify-host-rpms"' "$report"; then
+  echo "Gitleaks public signing-key pin allow-list accepted an unapproved path" >&2
+  exit 1
+fi
 
 # Then change one value on each otherwise identical allow-listed line. Assemble
 # the inert fixtures from short pieces so this test source contains no complete
@@ -91,6 +110,9 @@ mutated_google_hash+=10084a8a593d2796
 sed -i \
   "s/^readonly expected_google_key_sha256=.*/readonly expected_google_key_sha256=$mutated_google_hash/" \
   "$allowlist_fixture_root/$google_pin"
+sed -i \
+  "s/^readonly expected_google_key_sha256=.*/readonly expected_google_key_sha256=$mutated_google_hash/" \
+  "$allowlist_fixture_root/$google_release_pin"
 unset mutated_google_hash
 mutated_websocket_nonce=dGhlIHNhbXBsZSBu
 mutated_websocket_nonce+=b25jZQ0=
@@ -108,6 +130,7 @@ set -e
 if (( status != 7 )) || \
   ! grep -Fq '"RuleID": "generic-api-key"' "$report" || \
   ! grep -Fq 'scripts/verify-host-rpms.sh"' "$report" || \
+  ! grep -Fq 'admin/verify-host-rpms"' "$report" || \
   ! grep -Fq 'components/aionui/aionui-webhost-workagent-runtime-auth.patch"' "$report"; then
   echo "Gitleaks exact-line allow-lists accepted a changed public value" >&2
   exit 1
