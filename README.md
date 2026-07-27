@@ -50,6 +50,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component responsibilities,
 | `internal/store` | SQLite persistence for users, sessions, bindings, policies, and usage |
 | `internal/cliproxy` | Provider provisioning, catalog convergence, and management transport |
 | `scripts` | Build and release-contract scripts |
+| `patches` | Reproducible source patches for independently maintained agent runtimes |
 
 ## Build and test
 
@@ -75,6 +76,15 @@ go build ./cmd/portal
 ```
 
 Windows service identity, ACL inheritance, filesystem quotas, TLS, OAuth callbacks, provider connectivity, firewall policy, process races, upgrades, and rollback should also be verified in the target environment before production use.
+
+## Runtime extensions
+
+The platform keeps third-party runtimes independently upgradeable. Source-level extensions are published as reviewable patches instead of copied source trees or binaries:
+
+- AionCore `v0.1.42`: conversation fork and steering, channel commands, WeChat media and completion delivery, idle routing, project classification, persistence, and tests.
+- Kimi Code `v0.29.1`: authenticated ACP session fork and active-turn steering support.
+
+Application and license details are documented in [patches/README.md](patches/README.md).
 
 ## Security model
 
