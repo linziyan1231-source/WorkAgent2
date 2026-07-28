@@ -25,6 +25,7 @@ import (
 	"unicode"
 
 	"golang.org/x/sys/unix"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
 )
 
@@ -114,7 +115,7 @@ func (h *Host) oauthStart(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body oauthStartRequest
-	if err := decodeJSON(request, &body, 32*1024); err != nil {
+	if err := httpjson.Decode(request, &body, 32*1024); err != nil {
 		http.Error(writer, "invalid OAuth request", http.StatusBadRequest)
 		return
 	}
@@ -133,7 +134,7 @@ func (h *Host) oauthComplete(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	var body oauthCompleteRequest
-	if err := decodeJSON(request, &body, 32*1024); err != nil {
+	if err := httpjson.Decode(request, &body, 32*1024); err != nil {
 		http.Error(writer, "invalid OAuth request", http.StatusBadRequest)
 		return
 	}
@@ -151,7 +152,7 @@ func (h *Host) oauthCancel(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body oauthCancelRequest
-	if err := decodeJSON(request, &body, 16*1024); err != nil || h.oauth.cancel(body) != nil {
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil || h.oauth.cancel(body) != nil {
 		http.Error(writer, "invalid OAuth cancellation", http.StatusBadRequest)
 		return
 	}

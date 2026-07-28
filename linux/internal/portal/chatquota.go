@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/chatgptproxy"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 )
 
@@ -45,7 +46,7 @@ func (s *Server) chatGPTProEvents(writer http.ResponseWriter, request *http.Requ
 		var body struct {
 			IDs []int64 `json:"ids"`
 		}
-		if err := decodeJSON(request, &body, 8*1024); err != nil {
+		if err := httpjson.Decode(request, &body, 8*1024); err != nil {
 			writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid event acknowledgement"})
 			return
 		}

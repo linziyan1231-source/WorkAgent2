@@ -1,7 +1,6 @@
 package userhost
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/ipc"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/modelbootstrap"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
@@ -800,7 +800,7 @@ func (h *Host) createProject(writer http.ResponseWriter, request *http.Request) 
 	var body struct {
 		Name string `json:"name"`
 	}
-	if err := decodeJSON(request, &body, 16*1024); err != nil || !projectfs.ValidProjectName(body.Name) {
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil || !projectfs.ValidProjectName(body.Name) {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "code": "INVALID_PROJECT_NAME"})
 		return
 	}
@@ -830,7 +830,7 @@ func (h *Host) renameProject(writer http.ResponseWriter, request *http.Request) 
 		Force      bool   `json:"force,omitempty"`
 		LegacyRoot bool   `json:"legacy_root,omitempty"`
 	}
-	if err := decodeJSON(request, &body, 16*1024); err != nil {
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "code": "INVALID_PROJECT_NAME"})
 		return
 	}
@@ -953,28 +953,6 @@ func minDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
-}
-
-func decodeJSON(request *http.Request, destination any, maximum int64) error {
-	payload, err := io.ReadAll(io.LimitReader(request.Body, maximum+1))
-	if err != nil {
-		return err
-	}
-	if int64(len(payload)) > maximum {
-		clear(payload)
-		return errors.New("request body is too large")
-	}
-	defer clear(payload)
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("request must contain one JSON value")
-	}
-	return nil
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

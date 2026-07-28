@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/auth"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 )
 
@@ -34,7 +35,7 @@ func (s *Server) mcpOAuthStart(writer http.ResponseWriter, request *http.Request
 	var body struct {
 		ServerURL string `json:"server_url"`
 	}
-	if err := decodeJSON(request, &body, 16*1024); err != nil {
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid OAuth login request"})
 		return
 	}
@@ -153,7 +154,7 @@ func (s *Server) mcpOAuthCancel(writer http.ResponseWriter, request *http.Reques
 	var body struct {
 		State string `json:"state"`
 	}
-	if err := decodeJSON(request, &body, 4096); err != nil || !validPortalOAuthToken(body.State, 32) {
+	if err := httpjson.Decode(request, &body, 4096); err != nil || !validPortalOAuthToken(body.State, 32) {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid OAuth cancellation"})
 		return
 	}

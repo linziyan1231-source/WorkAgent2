@@ -14,6 +14,7 @@ import (
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/cliproxy"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/ipc"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/modelbootstrap"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
@@ -207,7 +208,7 @@ func (s *Server) createProject(writer http.ResponseWriter, request *http.Request
 	var body struct {
 		Name string `json:"name"`
 	}
-	if err := decodeJSON(request, &body, 4*1024); err != nil || !projectfs.ValidProjectName(body.Name) {
+	if err := httpjson.Decode(request, &body, 4*1024); err != nil || !projectfs.ValidProjectName(body.Name) {
 		writeProjectError(writer, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project name is invalid")
 		return
 	}
@@ -233,7 +234,7 @@ func (s *Server) renameProject(writer http.ResponseWriter, request *http.Request
 		OldName string `json:"old_name"`
 		NewName string `json:"new_name"`
 	}
-	if err := decodeJSON(request, &body, 4*1024); err != nil || !projectfs.ValidProjectName(body.OldName) || !projectfs.ValidProjectName(body.NewName) || body.OldName == body.NewName {
+	if err := httpjson.Decode(request, &body, 4*1024); err != nil || !projectfs.ValidProjectName(body.OldName) || !projectfs.ValidProjectName(body.NewName) || body.OldName == body.NewName {
 		writeProjectError(writer, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project rename request is invalid")
 		return
 	}
@@ -260,7 +261,7 @@ func (s *Server) renameProjectCompatibility(writer http.ResponseWriter, request 
 		Name  string `json:"name"`
 		Force bool   `json:"force"`
 	}
-	if err := decodeJSON(request, &body, 4*1024); err != nil || !projectfs.ValidProjectName(body.Name) {
+	if err := httpjson.Decode(request, &body, 4*1024); err != nil || !projectfs.ValidProjectName(body.Name) {
 		writeProjectError(writer, http.StatusBadRequest, "INVALID_PROJECT_NAME", "Project rename request is invalid")
 		return
 	}

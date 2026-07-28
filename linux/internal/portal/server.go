@@ -1,7 +1,6 @@
 package portal
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -28,6 +27,7 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/auth"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/cliproxy"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/ipc"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/portalusage"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/productconfig"
@@ -388,7 +388,7 @@ func (s *Server) brandAsset(writer http.ResponseWriter, request *http.Request) {
 
 func (s *Server) login(writer http.ResponseWriter, request *http.Request) {
 	var body loginRequest
-	if err := decodeJSON(request, &body, 4096); err != nil {
+	if err := httpjson.Decode(request, &body, 4096); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid login request"})
 		return
 	}
@@ -525,7 +525,7 @@ func (s *Server) loginFailure(writer http.ResponseWriter, request *http.Request,
 
 func (s *Server) changePassword(writer http.ResponseWriter, request *http.Request) {
 	var body passwordChangeRequest
-	if err := decodeJSON(request, &body, 16*1024); err != nil {
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "code": "INVALID_REQUEST", "message": "密码修改请求无效"})
 		return
 	}
@@ -987,26 +987,6 @@ func isWebSocketUpgrade(request *http.Request) bool {
 		}
 	}
 	return false
-}
-
-func decodeJSON(request *http.Request, destination any, maximum int64) error {
-	payload, err := io.ReadAll(io.LimitReader(request.Body, maximum+1))
-	if err != nil {
-		return err
-	}
-	if int64(len(payload)) > maximum {
-		return errors.New("request body is too large")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("request must contain one JSON value")
-	}
-	return nil
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

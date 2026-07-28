@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/httpjson"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/modelbootstrap"
 )
 
@@ -82,7 +83,7 @@ func (h *Host) modelBootstrapApply(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	var bundle modelbootstrap.Bundle
-	if err := decodeJSON(request, &bundle, 256*1024); err != nil || bundle.ValidateManagedForTenant(h.cfg.TenantID) != nil {
+	if err := httpjson.Decode(request, &bundle, 256*1024); err != nil || bundle.ValidateManagedForTenant(h.cfg.TenantID) != nil {
 		bundle.Zero()
 		http.Error(writer, "invalid model configuration", http.StatusBadRequest)
 		return
