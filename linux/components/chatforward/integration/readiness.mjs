@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import http from "node:http";
 import { pathToFileURL } from "node:url";
 
 const maximumHealthBytes = 64 * 1024;
@@ -9,27 +10,27 @@ function nonNegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
-async function readBoundedBody(response) {
-  if (!response.body) throw new Error("health response body is missing");
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maximumHealthBytes) {
-        await reader.cancel();
-        throw new Error("health response size is invalid");
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (size === 0) throw new Error("health response size is invalid");
-  return Buffer.concat(chunks, size).toString("utf8");
+function httpGetHealth(target, timeoutMilliseconds) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(target, { headers: { accept: "application/json" } }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > maximumHealthBytes) {
+          request.destroy(new Error("health response size is invalid"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () =>
+        resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }),
+      );
+      response.on("error", reject);
+    });
+    request.setTimeout(timeoutMilliseconds, () => request.destroy(new Error("health request timed out")));
+    request.on("error", reject);
+  });
 }
 
 export function validateHealthURL(rawURL) {
@@ -96,7 +97,7 @@ export async function waitForReadiness({
   healthURL = defaultHealthURL,
   timeoutMilliseconds = 15_000,
   requireController = false,
-  fetchImplementation = fetch,
+  requestImplementation = httpGetHealth,
 } = {}) {
   const target = validateHealthURL(healthURL);
   if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 100 || timeoutMilliseconds > 120_000) {
@@ -105,33 +106,22 @@ export async function waitForReadiness({
   const deadline = Date.now() + timeoutMilliseconds;
   let lastError = null;
   do {
-    const controller = new AbortController();
     const remaining = Math.max(1, deadline - Date.now());
-    const timer = setTimeout(() => controller.abort(), Math.min(2_000, remaining));
     try {
-      const response = await fetchImplementation(target, {
-        method: "GET",
-        headers: { accept: "application/json" },
-        redirect: "error",
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (!response.ok || response.status !== 200) throw new Error(`health returned HTTP ${response.status}`);
-      const contentType = response.headers.get("content-type") || "";
-      const contentLength = response.headers.get("content-length");
+      const response = await requestImplementation(target, Math.min(2_000, remaining));
+      if (response.status !== 200) throw new Error(`health returned HTTP ${response.status}`);
+      const contentType = String(response.headers["content-type"] || "");
+      const contentLength = response.headers["content-length"] !== undefined ? String(response.headers["content-length"]) : null;
       if (
         !contentType.toLowerCase().startsWith("application/json") ||
         (contentLength !== null && (!/^[0-9]+$/.test(contentLength) || Number(contentLength) > maximumHealthBytes))
       ) {
         throw new Error("health response metadata is invalid");
       }
-      const body = await readBoundedBody(response);
-      return validateHealth(JSON.parse(body), { requireController });
+      if (response.body.length === 0) throw new Error("health response size is invalid");
+      return validateHealth(JSON.parse(response.body), { requireController });
     } catch (error) {
-      const candidate = error instanceof Error ? error : new Error(String(error));
-      if (!lastError || candidate.name !== "AbortError") lastError = candidate;
-    } finally {
-      clearTimeout(timer);
+      lastError = error instanceof Error ? error : new Error(String(error));
     }
     if (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, Math.min(200, deadline - Date.now())));

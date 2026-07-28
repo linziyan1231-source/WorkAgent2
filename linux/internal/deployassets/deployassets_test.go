@@ -397,7 +397,7 @@ func TestArtifactAssemblersRequireExternallyPinnedCompleteTrees(t *testing.T) {
 		"components/aioncore/LINUX-ARTIFACT-TREE.sha256":        "08b05b39a9629a0eaf1f16f69e8b1c8b469e72e630213e50905526198493f2e4  canonical-tree\n",
 		"components/aionui/LINUX-ARTIFACT-MANIFEST.sha256":      "5cd5b6bcc746a6345770638c3c799c44978c1f4c08f2089591bca8a74baafdae  share/workagent-components/aionui/SHA256SUMS\n",
 		"components/aionui/LINUX-ARTIFACT-TREE.sha256":          "103f45055521ecca5b0f402b112b929454cb878aff635e095c6b0d7d35ff7e5d  canonical-tree\n",
-		"components/chatforward/LINUX-ARTIFACT.sha256":          "dc78028b3d8934dbf9ca0b05f2e66c35c25b1a1b03bd1e8c0018f40253e4c0c4  workagent-chatforward-zombie-reap-20260725-2329-linux-x64.tar.gz\n",
+		"components/chatforward/LINUX-ARTIFACT.sha256":          "d6b49da4bbe5450253c259731d7148116dae5ca51217d4e203fce3c4a5ee89e0  workagent-chatforward-zombie-reap-20260725-2329-linux-x64.tar.gz\n",
 		"components/cliproxyapi/LINUX-ARTIFACT-MANIFEST.sha256": "1d5039df7ed55aa78f5c870e42547092cd8c1b2b6a6088552f78861c6b2c7f8a  share/workagent-components/cliproxyapi/SHA256SUMS\n",
 		"components/cliproxyapi/LINUX-ARTIFACT-TREE.sha256":     "88345b11939cad9c20d37c48c5555852ce3ade87e385db8bc436621b946ecd9f  canonical-tree\n",
 		"components/cliproxyapi/LINUX-ARTIFACTS.sha256":         "53fb04859c69507be8b78965b4b54534d81c0216ef5f9cd2d460e2d6a460fa8c  bin/cli-proxy-api\n8c7026db39e717a4ee481843e451465f84d1e2bc2ba7f7b43e241b85a6cd5702  plugins/cpa-key-policy-v0.4.5.so\n",
