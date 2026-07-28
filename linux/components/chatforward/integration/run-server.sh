@@ -23,7 +23,9 @@ if [[ -L "$secret_file" || ! -f "$secret_file" ]]; then
 fi
 secret_size=$(stat -Lc '%s' -- "$secret_file")
 secret_mode=$(stat -Lc '%a' -- "$secret_file")
-if (( secret_size < 32 || secret_size > 4096 || (8#$secret_mode & 077) != 0 )); then
+# systemd exposes LoadCredentialEncrypted files as root:root 0440 with a
+# service-identity ACL grant; world access remains forbidden.
+if (( secret_size < 32 || secret_size > 4096 || (8#$secret_mode & 007) != 0 )); then
   echo "ChatForward credential size or permissions are unsafe" >&2
   exit 1
 fi
