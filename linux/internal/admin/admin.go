@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/hostcheck"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/posixacl"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
@@ -200,6 +201,5 @@ func parseUID(value string) (uint32, error) {
 }
 
 func pathWithin(root, candidate string) bool {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return fsutil.PathWithin(root, candidate)
 }

@@ -9,8 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 )
 
 const (
@@ -238,8 +239,7 @@ func pathsOverlap(first, second string) bool {
 }
 
 func pathWithin(root, candidate string) bool {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return fsutil.PathWithin(root, candidate)
 }
 
 func Plan(ctx context.Context, options Options) (Report, error) {

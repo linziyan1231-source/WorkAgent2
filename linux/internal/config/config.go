@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 )
 
 const (
@@ -836,8 +837,7 @@ func cleanRelativePath(name, value string) error {
 }
 
 func pathWithin(root, candidate string) bool {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return fsutil.PathWithin(root, candidate)
 }
 
 func originIsLoopback(value *url.URL) bool {

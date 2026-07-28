@@ -7,10 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	workconfig "github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 )
 
 const ConfigSchemaVersion = 2
@@ -109,9 +109,10 @@ func cleanAbsolute(path string) bool {
 	return path != "" && filepath.IsAbs(path) && filepath.Clean(path) == path && path != string(filepath.Separator)
 }
 
+// pathWithin requires strict containment: candidate must lie inside root and
+// must not be root itself.
 func pathWithin(root, candidate string) bool {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	return err == nil && relative != ".." && relative != "." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return fsutil.PathWithin(root, candidate) && filepath.Clean(root) != filepath.Clean(candidate)
 }
 
 func pathsOverlap(first, second string) bool {
