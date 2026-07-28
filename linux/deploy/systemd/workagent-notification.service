@@ -26,7 +26,7 @@ ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/wo
 # verifier) and therefore proves the payload's complete DAC traversal/read path.
 ExecStartPre=/usr/bin/test -r /etc/workagent/notification.json
 ExecStart=/usr/libexec/workagent-fixed-root-exec-v1 notification /opt/workagent/control/bin/workagent-notification
-ExecStartPost=/usr/bin/curl --noproxy * --fail --silent --show-error --max-time 3 http://127.0.0.1:25888/readyz
+ExecStartPost=/usr/bin/curl --noproxy * --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused --max-time 15 http://127.0.0.1:25888/readyz
 LoadCredentialEncrypted=notifications-key:/etc/credstore.encrypted/workagent/notifications-key.cred
 Restart=on-failure
 RestartSec=3s

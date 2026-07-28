@@ -268,7 +268,7 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 			contract("/usr/bin/test", "/usr/bin/test -r /etc/workagent/notification.json", false),
 		}
 		post = []systemdExecContract{
-			contract("/usr/bin/curl", "/usr/bin/curl --noproxy * --fail --silent --show-error --max-time 3 http://127.0.0.1:25888/readyz", false),
+			contract("/usr/bin/curl", "/usr/bin/curl --noproxy * --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused --max-time 15 http://127.0.0.1:25888/readyz", false),
 		}
 	case "workagent-chatforward.service":
 		pre = []systemdExecContract{

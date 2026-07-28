@@ -24,7 +24,7 @@ func TestCoreManagerExecVectorsRejectTransientEffectiveCommandTampering(t *testi
 	recovery := "/usr/libexec/workagent-recovery-activation-admission-v1"
 	verify := "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release"
 	testRead := "/usr/bin/test -r /etc/workagent/notification.json"
-	ready := "/usr/bin/curl --noproxy * --fail --silent --show-error --max-time 3 http://127.0.0.1:25888/readyz"
+	ready := "/usr/bin/curl --noproxy * --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused --max-time 15 http://127.0.0.1:25888/readyz"
 	properties := map[string]string{
 		"ExecStartPre":    join(plainRecord(core, core), plainRecord(recovery, recovery), plainRecord("/usr/bin/flock", verify), plainRecord("/usr/bin/test", testRead)),
 		"ExecStartPreEx":  join(extendedRecord(core, core, true), extendedRecord(recovery, recovery, true), extendedRecord("/usr/bin/flock", verify, true), extendedRecord("/usr/bin/test", testRead, false)),
