@@ -1062,11 +1062,6 @@ func verifyRecoveryReferenceStable(reference recoveryProtectedReference) error {
 	return nil
 }
 
-func verifyRecoverySourceDigest(path, expected string, mode os.FileMode, namespaceRoot string, requireProductionAncestors bool) error {
-	_, err := captureRecoverySourceDigest(path, expected, mode, namespaceRoot, requireProductionAncestors)
-	return err
-}
-
 func captureRecoverySourceDigest(path, expected string, mode os.FileMode, namespaceRoot string, requireProductionAncestors bool) (recoveryContractSourceSnapshot, error) {
 	if !cleanAbsolute(path) || !cleanAbsolute(namespaceRoot) || !recoveryPathWithinRoot(path, namespaceRoot) || expected == "" || (mode != 0o644 && mode != 0o555) {
 		return recoveryContractSourceSnapshot{}, errors.New("installed recovery unit source expectation is invalid")

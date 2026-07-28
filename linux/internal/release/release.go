@@ -46,14 +46,6 @@ const (
 	TreeModeProfileRootOnly = "root-only"
 )
 
-func ProductionRuntimeComponents() map[string]string {
-	return componentVersions(ProductionRuntimeComponentEvidence())
-}
-
-func ProductionSharedComponents() map[string]string {
-	return componentVersions(ProductionSharedComponentEvidence())
-}
-
 func ProductionRuntimeComponentEvidence() map[string]Component {
 	return map[string]Component{
 		"aioncore":     {Name: "aioncore", Version: "v0.1.42-editfork.10", SourceRevision: "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"},
@@ -74,31 +66,6 @@ func ProductionSharedComponentEvidence() map[string]Component {
 		"cpa-key-policy":        {Name: "cpa-key-policy", Version: "0.4.5", SourceRevision: "bc0081c77764312a604add1013d9cb642f628978d967a46ca3f8159c63fa1a8f"},
 		"node":                  {Name: "node", Version: "24.15.0", SourceRevision: "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6"},
 		"ws":                    {Name: "ws", Version: "8.21.1", SourceRevision: "bb0f7e58ba1f64746672734d36175fe185f226491e336abc0743e2a8f4472ec1"},
-	}
-}
-
-func componentVersions(evidence map[string]Component) map[string]string {
-	versions := make(map[string]string, len(evidence))
-	for name, component := range evidence {
-		versions[name] = component.Version
-	}
-	return versions
-}
-
-func RequiredComponentsForScope(scope string) map[string]string {
-	switch scope {
-	case ScopeRuntime:
-		return ProductionRuntimeComponents()
-	case ScopeShared:
-		return ProductionSharedComponents()
-	case ScopeCombined:
-		components := ProductionRuntimeComponents()
-		for name, version := range ProductionSharedComponents() {
-			components[name] = version
-		}
-		return components
-	default:
-		return nil
 	}
 }
 
@@ -1069,10 +1036,6 @@ func decodeKey(payload []byte, size int) ([]byte, error) {
 		return nil, errors.New("encoded key has the wrong size")
 	}
 	return decoded, nil
-}
-
-func Activate(pointerPath, nextRelease string, now time.Time) error {
-	return ActivateScoped(pointerPath, nextRelease, ScopeCombined, now)
 }
 
 func ActivateScoped(pointerPath, nextRelease, scope string, now time.Time) error {

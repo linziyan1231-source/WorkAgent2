@@ -277,7 +277,7 @@ func TestRecoveryDynamicDropInSourceAuthenticationRejectsDrift(t *testing.T) {
 			path := filepath.Join(root, name)
 			writeRecoveryContractFixture(t, path, payload, 0o644)
 			digest := recoveryPayloadSHA256(payload)
-			if err := verifyRecoverySourceDigest(path, digest, 0o644, root, false); err != nil {
+			if _, err := captureRecoverySourceDigest(path, digest, 0o644, root, false); err != nil {
 				t.Fatalf("exact dynamic drop-in was rejected: %v", err)
 			}
 			binding := recoveryDropInBinding{filename: name, exactPath: path, expectedDigest: digest}
@@ -287,7 +287,7 @@ func TestRecoveryDynamicDropInSourceAuthenticationRejectsDrift(t *testing.T) {
 			}
 			drifted := append(append([]byte(nil), payload...), []byte("ExecStart=/tmp/foreign\n")...)
 			writeRecoveryContractFixture(t, path, drifted, 0o644)
-			if err := verifyRecoverySourceDigest(path, digest, 0o644, root, false); err == nil {
+			if _, err := captureRecoverySourceDigest(path, digest, 0o644, root, false); err == nil {
 				t.Fatal("drifted dynamic drop-in was accepted")
 			}
 		})

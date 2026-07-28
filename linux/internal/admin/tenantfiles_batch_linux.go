@@ -367,10 +367,6 @@ func reconcileTenantFileBatchWithHook(ctx context.Context, portal config.Portal,
 	return nil
 }
 
-func ensureTenantFileBatchMemberIntent(plan tenantFileSetPlan, entries []tenantFileJournalEntry) error {
-	return ensureTenantFileBatchMemberIntentWithHook(plan, entries, nil)
-}
-
 func ensureTenantFileBatchMemberIntentWithHook(plan tenantFileSetPlan, entries []tenantFileJournalEntry, hook tenantFileFaultHook) error {
 	local := tenantFileJournal{SchemaVersion: tenantFileJournalSchema, TenantID: plan.TenantID, Entries: entries}
 	if err := validateTenantFileJournal(local, plan); err != nil {

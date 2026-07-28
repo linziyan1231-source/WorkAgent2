@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -533,17 +532,6 @@ func floatEqual(left, right float64) bool {
 	difference := math.Abs(left - right)
 	scale := math.Max(1, math.Max(math.Abs(left), math.Abs(right)))
 	return difference <= 1e-12*scale
-}
-
-func sortedMigrationOverrides(plan migrationQuotaPlan) []migrationQuotaOverride {
-	result := append([]migrationQuotaOverride(nil), plan.Overrides...)
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].TenantID != result[j].TenantID {
-			return result[i].TenantID < result[j].TenantID
-		}
-		return result[i].Provider < result[j].Provider
-	})
-	return result
 }
 
 func parsePositiveUint32(value string) (uint32, error) {

@@ -69,11 +69,6 @@ func (h *Host) usageSnapshotHandler(writer http.ResponseWriter, request *http.Re
 	writeJSON(writer, http.StatusOK, map[string]any{"success": true})
 }
 
-func measureStorageUsage(ctx context.Context, root string, capacity config.TenantCapacity) (portalusage.StorageUsage, error) {
-	usage, _, err := measureStorageUsageWith(ctx, root, capacity, hostcheck.VerifyTenantQuota, storageusage.MeasureTree, time.Now)
-	return usage, err
-}
-
 func measureStorageUsageWith(ctx context.Context, root string, capacity config.TenantCapacity, verify quotaVerifier, measure treeMeasurer, now func() time.Time) (portalusage.StorageUsage, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return portalusage.StorageUsage{}, false, err

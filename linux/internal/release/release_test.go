@@ -552,10 +552,10 @@ func TestActivateTracksPreviousRelease(t *testing.T) {
 	root := t.TempDir()
 	pointerPath := filepath.Join(root, "current.json")
 	now := time.Unix(1_800_000_000, 0).UTC()
-	if err := Activate(pointerPath, "release-one", now); err != nil {
+	if err := ActivateScoped(pointerPath, "release-one", ScopeCombined, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := Activate(pointerPath, "release-two", now.Add(time.Minute)); err != nil {
+	if err := ActivateScoped(pointerPath, "release-two", ScopeCombined, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	pointer, err := LoadPointer(pointerPath)
@@ -573,7 +573,7 @@ func TestActivateRefusesToOverwriteCorruptPointer(t *testing.T) {
 	if err := os.WriteFile(pointerPath, []byte(`{"schema_version":1,"current":"broken"} trailing`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Activate(pointerPath, "release-two", time.Now().UTC()); err == nil {
+	if err := ActivateScoped(pointerPath, "release-two", ScopeCombined, time.Now().UTC()); err == nil {
 		t.Fatal("corrupt current pointer was silently overwritten")
 	}
 	payload, err := os.ReadFile(pointerPath)
@@ -765,16 +765,16 @@ func TestRollbackRejectsHistoricalReleaseThatCannotReadActiveData(t *testing.T) 
 }
 
 func TestRequiredProductionComponentsAreScoped(t *testing.T) {
-	runtimeComponents := RequiredComponentsForScope(ScopeRuntime)
-	if runtimeComponents["aionui"] != "2.1.0-beta.editfork.21" || runtimeComponents["aioncore"] != "v0.1.42-editfork.10" || runtimeComponents["noble-hashes"] != "2.2.0" || runtimeComponents["codex"] != "0.144.4" || runtimeComponents["kimi-code"] != "0.29.1-fork-steer.1" || runtimeComponents["python"] != "3.13.13" || runtimeComponents["cliproxyapi"] != "" {
+	runtimeComponents := ProductionRuntimeComponentEvidence()
+	if runtimeComponents["aionui"].Version != "2.1.0-beta.editfork.21" || runtimeComponents["aioncore"].Version != "v0.1.42-editfork.10" || runtimeComponents["noble-hashes"].Version != "2.2.0" || runtimeComponents["codex"].Version != "0.144.4" || runtimeComponents["kimi-code"].Version != "0.29.1-fork-steer.1" || runtimeComponents["python"].Version != "3.13.13" || runtimeComponents["cliproxyapi"].Version != "" {
 		t.Fatalf("runtime scope is not isolated: %#v", runtimeComponents)
 	}
-	sharedComponents := RequiredComponentsForScope(ScopeShared)
-	if sharedComponents["cliproxyapi"] != "7.2.81" || sharedComponents["cliproxyapi-patch"] != "per-key-models.4" || sharedComponents["cpa-key-policy"] != "0.4.5" || sharedComponents["chatforward"] != "zombie-reap-20260725-2329" || sharedComponents["chatforward-extension"] != "0.16.0" || sharedComponents["node"] != "24.15.0" || sharedComponents["ws"] != "8.21.1" || sharedComponents["aionui"] != "" {
+	sharedComponents := ProductionSharedComponentEvidence()
+	if sharedComponents["cliproxyapi"].Version != "7.2.81" || sharedComponents["cliproxyapi-patch"].Version != "per-key-models.4" || sharedComponents["cpa-key-policy"].Version != "0.4.5" || sharedComponents["chatforward"].Version != "zombie-reap-20260725-2329" || sharedComponents["chatforward-extension"].Version != "0.16.0" || sharedComponents["node"].Version != "24.15.0" || sharedComponents["ws"].Version != "8.21.1" || sharedComponents["aionui"].Version != "" {
 		t.Fatalf("shared scope is not isolated: %#v", sharedComponents)
 	}
-	combined := RequiredComponentsForScope(ScopeCombined)
-	if combined["aionui"] == "" || combined["cliproxyapi"] == "" {
+	combined := RequiredComponentEvidenceForScope(ScopeCombined, "")
+	if combined["aionui"].Version == "" || combined["cliproxyapi"].Version == "" {
 		t.Fatalf("combined scope is incomplete: %#v", combined)
 	}
 }

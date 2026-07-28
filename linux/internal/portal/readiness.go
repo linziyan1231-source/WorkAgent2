@@ -148,15 +148,6 @@ func (s *Server) checkTenantReadiness(ctx context.Context) error {
 	return nil
 }
 
-func checkOptionalService(service config.OptionalService) error {
-	if !service.Enabled || strings.TrimSpace(service.Endpoint) == "" {
-		return errors.New("service is not configured")
-	}
-	credential, err := readProtectedCredential(service.CredentialFile)
-	clear(credential)
-	return err
-}
-
 func readProtectedCredential(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 16 || info.Size() > 4096 {

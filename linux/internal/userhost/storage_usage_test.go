@@ -54,7 +54,9 @@ func TestStorageUsageFallsBackWithoutChangingConfiguredLimit(t *testing.T) {
 func TestStorageUsageStopsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := measureStorageUsage(ctx, t.TempDir(), config.TenantCapacity{}); !errors.Is(err, context.Canceled) {
+	if _, _, err := measureStorageUsageWith(ctx, t.TempDir(), config.TenantCapacity{},
+		func(string, uint32, uint64) (hostcheck.ProjectQuotaStatus, error) { return hostcheck.ProjectQuotaStatus{}, nil },
+		func(context.Context, string) (uint64, error) { return 0, nil }, time.Now); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v, want cancellation", err)
 	}
 }

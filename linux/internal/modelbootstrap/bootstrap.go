@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -240,12 +239,6 @@ func validateModels(label string, models []string, defaultModel string) error {
 		return fmt.Errorf("%s default model is outside the catalog", label)
 	}
 	return nil
-}
-
-func SortedModels(models []string) []string {
-	result := append([]string(nil), models...)
-	sort.Strings(result)
-	return result
 }
 
 func sameModelSet(left, right []string) bool {
