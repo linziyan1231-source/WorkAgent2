@@ -611,7 +611,7 @@ func TestHostPreparationAndPreflightRetainExplicitBlockers(t *testing.T) {
 	}
 }
 
-func TestSourceGatePackagesTheRootOnlyStagePublisher(t *testing.T) {
+func TestSourceGatePackagesTheControlPlaneCommands(t *testing.T) {
 	sourceGate := repositoryFile(t, "scripts/source-gate.sh")
 	arrayFields := func(name string) []string {
 		startMarker := name + "=(\n"
@@ -627,7 +627,7 @@ func TestSourceGatePackagesTheRootOnlyStagePublisher(t *testing.T) {
 		return strings.Fields(sourceGate[start : start+end])
 	}
 	wantControlCommands := []string{
-		"workagent-admin", "workagent-backup", "workagent-cliproxy", "workagent-import-stage", "workagent-notification",
+		"workagent-admin", "workagent-backup", "workagent-cliproxy", "workagent-notification",
 		"workagent-portal", "workagent-provision", "workagent-release", "workagent-secret", "workagent-userhost",
 	}
 	if got := arrayFields("go_control_commands"); !slices.Equal(got, wantControlCommands) {
@@ -638,20 +638,6 @@ func TestSourceGatePackagesTheRootOnlyStagePublisher(t *testing.T) {
 		`-o "$binary_directory/$command" "./cmd/$command"`,
 		"for command in \"${go_control_commands[@]}\"; do\n  verify_go_build_identity \"$binary_directory/$command\" \"$command\"",
 	)
-	for _, unit := range []string{
-		"deploy/systemd/workagent-portal.service",
-		"deploy/systemd/workagent-userhost@.service",
-		"deploy/systemd/workagent-notification.service",
-		"deploy/systemd/workagent-backup.service",
-		"deploy/systemd/workagent-healthcheck.service",
-		"deploy/systemd/cliproxyapi.service",
-		"deploy/systemd/workagent-chatforward.service",
-		"deploy/systemd/workagent-chatforward-browser.service",
-	} {
-		if strings.Contains(repositoryFile(t, unit), "workagent-import-stage") {
-			t.Fatalf("%s incorrectly runs the root-only stage publisher as a service", unit)
-		}
-	}
 }
 
 func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testing.T) {
@@ -701,35 +687,6 @@ func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testi
 }
 
 func TestProductionRunbooksUseServiceScopedCLIProxyCredentials(t *testing.T) {
-	migration := repositoryFile(t, "docs/WINDOWS_DATA_MIGRATION.md")
-	requireContains(t, migration,
-		"systemd-run --quiet --wait --pipe --collect --service-type=exec",
-		"/absolute/path/to/migration-tools/bin/workagent-migrate-windows",
-		"--capture-spec /private/workagent/final-capture/capture-spec.json",
-		"capture_spec_sha256",
-		"capture_manifest_sha256",
-		"capture_completed_at",
-		"<snapshot-root>/external-workspaces.json",
-		"--unit=workagent-cliproxy-migration-stage.service",
-		"--unit=workagent-cliproxy-migration-verify.service",
-		"--property=ProtectSystem=strict",
-		"--property='ReadWritePaths=/srv/workagent/users'",
-		"--property='ReadWritePaths=/srv/workagent/users /var/lib/workagent/migration/cutover'",
-		"--property=LoadCredentialEncrypted=cliproxy-management-key:/etc/credstore.encrypted/workagent/cliproxy-management-key.cred",
-		"--credential %d/cliproxy-management-key",
-		"/opt/workagent/control/bin/workagent-cliproxy stage-migration-bundles",
-		"/opt/workagent/control/bin/workagent-cliproxy apply-migration-plan",
-		"/opt/workagent/control/bin/workagent-cliproxy verify-migration-plan",
-	)
-	if strings.Count(migration, "--service-type=exec") != 2 || strings.Contains(migration, "--property=Type=exec") {
-		t.Fatal("migration transient service type contract is ambiguous or incomplete")
-	}
-	for _, pathDependent := range []string{"\nworkagent-", "\nsystemctl ", "\nsystemd-run "} {
-		if strings.Contains(migration, pathDependent) {
-			t.Fatalf("migration runbook invokes a command through PATH: %q", pathDependent)
-		}
-	}
-
 	oauth := repositoryFile(t, "docs/CLIPROXY_OAUTH_LINUX.md")
 	requireContains(t, oauth,
 		"systemd-run --quiet --wait --pty --collect --service-type=exec",

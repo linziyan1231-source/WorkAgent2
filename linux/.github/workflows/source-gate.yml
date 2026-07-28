@@ -144,8 +144,6 @@ jobs:
           sudo chown -R 0:0 -- "$sealed_parent"
           sealed=$sealed_parent/evidence
           test "$(sudo stat -c %d:%i "$isolated_root/artifacts/control-plane/bin/workagent-release")" != "$(sudo stat -c %d:%i "$sealed/control-plane/bin/workagent-release")"
-          test "$(sudo stat -c %d:%i "$isolated_root/artifacts/migration-tools/bin/workagent-capture-windows")" != "$(sudo stat -c %d:%i "$sealed/migration-tools/bin/workagent-capture-windows")"
-          test "$(sudo stat -c %d:%i "$isolated_root/artifacts/migration-tools/bin/workagent-migrate-windows")" != "$(sudo stat -c %d:%i "$sealed/migration-tools/bin/workagent-migrate-windows")"
 
           verify_content_inventory() {
             local root=$1 manifest=$2 actual
@@ -182,8 +180,6 @@ jobs:
               sha256sum \
                 control-plane/SHA256SUMS \
                 control-plane.tree-modes.tsv \
-                migration-tools/SHA256SUMS \
-                migration-tools.tree-modes.tsv \
                 source-gate.json
             ' sh "$root" | sudo tee "$actual" >/dev/null
             sudo cmp -- "$root/EVIDENCE.sha256" "$actual"
@@ -204,8 +200,7 @@ jobs:
               '  "shellcheck_version": "0.11.0",' \
               '  "content_manifest_version": 1,' \
               '  "tree_mode_manifest_version": 1,' \
-              '  "control_plane_mode_profile": "public",' \
-              '  "migration_tools_mode_profile": "root-only"' \
+              '  "control_plane_mode_profile": "public"' \
               '}' | sudo tee "$expected" >/dev/null
             sudo cmp -- "$root/source-gate.json" "$expected"
             sudo rm -f -- "$expected"
@@ -223,7 +218,6 @@ jobs:
 
           expected_top_level=$(printf '%s\n' \
             EVIDENCE.sha256 control-plane control-plane.tree-modes.tsv \
-            migration-tools migration-tools.tree-modes.tsv \
             source-gate.json | sort)
           actual_top_level=$(sudo find "$sealed" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
           test "$actual_top_level" = "$expected_top_level"
@@ -233,25 +227,19 @@ jobs:
           verify_no_xattrs "$sealed"
           test -z "$(sudo find "$sealed/control-plane" -type d ! -perm 0555 -print -quit)"
           test -z "$(sudo find "$sealed/control-plane" -type f ! \( -perm 0444 -o -perm 0555 \) -print -quit)"
-          test -z "$(sudo find "$sealed/migration-tools" -type d ! -perm 0500 -print -quit)"
-          test -z "$(sudo find "$sealed/migration-tools" -type f ! \( -perm 0400 -o -perm 0500 \) -print -quit)"
           test "$(sudo stat -c %a "$sealed")" = 700
           test "$(sudo stat -c %a "$sealed/control-plane")" = 555
-          test "$(sudo stat -c %a "$sealed/migration-tools")" = 500
           for path in source-gate.json EVIDENCE.sha256; do
             test "$(sudo stat -c %a "$sealed/$path")" = 600
           done
-          for path in control-plane.tree-modes.tsv migration-tools.tree-modes.tsv; do
+          for path in control-plane.tree-modes.tsv; do
             test "$(sudo stat -c %a "$sealed/$path")" = 400
           done
           verify_source_gate_metadata "$sealed"
           verify_outer_evidence "$sealed"
           sudo sh -c 'cd "$1/control-plane" && sha256sum --strict --check SHA256SUMS >/dev/null' sh "$sealed"
-          sudo sh -c 'cd "$1/migration-tools" && sha256sum --strict --check SHA256SUMS >/dev/null' sh "$sealed"
           verify_content_inventory "$sealed/control-plane" "$sealed/control-plane/SHA256SUMS"
-          verify_content_inventory "$sealed/migration-tools" "$sealed/migration-tools/SHA256SUMS"
           verify_mode_manifest public "$sealed/control-plane" "$sealed/control-plane.tree-modes.tsv"
-          verify_mode_manifest root-only "$sealed/migration-tools" "$sealed/migration-tools.tree-modes.tsv"
 
           upload_root=/opt/workagent-source-gate-upload
           test ! -e "$upload_root"
@@ -265,7 +253,6 @@ jobs:
             --directory="$sealed" \
             EVIDENCE.sha256 \
             control-plane control-plane.tree-modes.tsv \
-            migration-tools migration-tools.tree-modes.tsv \
             source-gate.json
           extracted=$sealed_parent/extracted
           sudo mkdir -m 0700 "$extracted"
@@ -280,7 +267,6 @@ jobs:
             --directory="$extracted" \
             EVIDENCE.sha256 \
             control-plane control-plane.tree-modes.tsv \
-            migration-tools migration-tools.tree-modes.tsv \
             source-gate.json
           sudo cmp -- "$archive" "$roundtrip"
           test -z "$(sudo find "$extracted" -mindepth 1 \( -type l -o \( ! -type d ! -type f \) \) -print -quit)"
@@ -290,11 +276,8 @@ jobs:
           verify_source_gate_metadata "$extracted"
           verify_outer_evidence "$extracted"
           sudo sh -c 'cd "$1/control-plane" && sha256sum --strict --check SHA256SUMS >/dev/null' sh "$extracted"
-          sudo sh -c 'cd "$1/migration-tools" && sha256sum --strict --check SHA256SUMS >/dev/null' sh "$extracted"
           verify_content_inventory "$extracted/control-plane" "$extracted/control-plane/SHA256SUMS"
-          verify_content_inventory "$extracted/migration-tools" "$extracted/migration-tools/SHA256SUMS"
           verify_mode_manifest public "$extracted/control-plane" "$extracted/control-plane.tree-modes.tsv"
-          verify_mode_manifest root-only "$extracted/migration-tools" "$extracted/migration-tools.tree-modes.tsv"
           sudo sh -c 'cd "$1" && sha256sum workagent-source-gate.tar' sh "$upload_root" | sudo tee "$checksum" >/dev/null
           sudo chmod 0444 "$archive" "$checksum"
           sudo chown 0:0 "$archive" "$checksum"

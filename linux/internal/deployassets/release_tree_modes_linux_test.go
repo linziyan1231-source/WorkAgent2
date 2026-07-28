@@ -504,18 +504,12 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		`"content_manifest_version": 1`,
 		`"tree_mode_manifest_version": 1`,
 		`"$mode_freeze_helper" freeze public "$artifact_directory/control-plane"`,
-		`"$mode_freeze_helper" freeze root-only "$artifact_directory/migration-tools"`,
 		`"$mode_freeze_helper" verify public "$artifact_directory/control-plane"`,
-		`"$mode_freeze_helper" verify root-only "$artifact_directory/migration-tools"`,
 		`"$binary_directory/workagent-release" validate-layout`,
 		`--root "$artifact_directory/control-plane" --profile public`,
-		`--root "$artifact_directory/migration-tools" --profile root-only`,
 		"control-plane.tree-modes.tsv",
-		"migration-tools.tree-modes.tsv",
 		`"$content_manifest_helper" write "$artifact_directory/control-plane"`,
-		`"$content_manifest_helper" write "$artifact_directory/migration-tools"`,
 		`"$content_manifest_helper" verify "$artifact_directory/control-plane"`,
-		`"$content_manifest_helper" verify "$artifact_directory/migration-tools"`,
 		`$package != github.com/linziyan1231-source/WorkAgent2/linux/internal/release`,
 		`$go_binary test -count=1 "${nonroot_packages[@]}"`,
 		`$go_binary test -count=1 -race "${nonroot_packages[@]}"`,
@@ -591,7 +585,7 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 	}
 	wantControl := []string{
 		"admin/install-core-activation-admission-v1", "admin/install-edge-publication-admission-v1", "admin/install-fixed-root-exec-v1", "admin/install-recovery-activation-admission-v1", "admin/production-host-prepare", "admin/production-preflight", "admin/smoke-chatforward-browser-sandbox", "admin/verify-host-rpms",
-		"bin/workagent-admin", "bin/workagent-backup", "bin/workagent-cliproxy", "bin/workagent-healthcheck", "bin/workagent-import-stage",
+		"bin/workagent-admin", "bin/workagent-backup", "bin/workagent-cliproxy", "bin/workagent-healthcheck",
 		"bin/workagent-notification", "bin/workagent-portal", "bin/workagent-provision", "bin/workagent-release", "bin/workagent-secret", "bin/workagent-userhost",
 		"share/deploy/libexec/workagent-core-activation-admission-v1", "share/deploy/libexec/workagent-edge-publication-admission-v1", "share/deploy/libexec/workagent-fixed-root-exec-v1",
 		"share/deploy/libexec/workagent-recovery-activation-admission-v1",
@@ -600,21 +594,16 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		t.Fatalf("control executable allowlist drifted:\ngot  %q\nwant %q", got, wantControl)
 	}
 	wantGoControl := []string{
-		"workagent-admin", "workagent-backup", "workagent-cliproxy", "workagent-import-stage", "workagent-notification",
+		"workagent-admin", "workagent-backup", "workagent-cliproxy", "workagent-notification",
 		"workagent-portal", "workagent-provision", "workagent-release", "workagent-secret", "workagent-userhost",
 	}
 	if got := bashArray(t, source, "go_control_commands"); !reflect.DeepEqual(got, wantGoControl) {
 		t.Fatalf("Go control build-info set drifted: got %q want %q", got, wantGoControl)
 	}
-	wantGoMigration := []string{"workagent-capture-windows", "workagent-migrate-windows"}
-	if got := bashArray(t, source, "go_migration_commands"); !reflect.DeepEqual(got, wantGoMigration) {
-		t.Fatalf("Go migration build-info set drifted: got %q want %q", got, wantGoMigration)
-	}
 	for _, required := range []string{
 		`verify_go_build_identity() {`,
 		`$go_binary version -m "$binary_path"`,
 		`verify_go_build_identity "$binary_directory/$command" "$command"`,
-		`verify_go_build_identity "$migration_directory/$command" "$command"`,
 		`local expected_main_path=github.com/linziyan1231-source/WorkAgent2/linux/cmd/$evidence_label`,
 		`$2 == "path" { path_keys++; if ($3 == expected_path) path_matches++ }`,
 		`index($3, "vcs=") == 1`,
@@ -632,8 +621,7 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		}
 	}
 	for invocation, label := range map[string]string{
-		`verify_go_build_identity "$binary_directory/$command" "$command"`:    "control",
-		`verify_go_build_identity "$migration_directory/$command" "$command"`: "migration",
+		`verify_go_build_identity "$binary_directory/$command" "$command"`: "control",
 	} {
 		if strings.Count(source, invocation) != 2 {
 			t.Fatalf("source gate must check %s Go build identities once before scanners and once before final evidence", label)
@@ -643,19 +631,6 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 	offlineBoundary := strings.Index(source, `export GOPROXY=off`)
 	if moduleDownload < 0 || offlineBoundary < 0 || moduleDownload >= offlineBoundary {
 		t.Fatal("source gate does not populate and verify its private module cache before going offline")
-	}
-	wantMigration := []string{"bin/workagent-capture-windows", "bin/workagent-migrate-windows"}
-	if got := bashArray(t, source, "migration_executables"); !reflect.DeepEqual(got, wantMigration) {
-		t.Fatalf("migration executable allowlist drifted: got %q want %q", got, wantMigration)
-	}
-	migrationBuild := strings.Index(source, `for command in "${go_migration_commands[@]}"; do`)
-	if migrationBuild < 0 {
-		t.Fatal("migration Go build loop is missing")
-	}
-	migrationIdentity := strings.Index(source[migrationBuild:], `verify_go_build_identity "$migration_directory/$command" "$command"`)
-	migrationInventory := strings.Index(source[migrationBuild:], `"$content_manifest_helper" write "$artifact_directory/migration-tools"`)
-	if migrationIdentity < 0 || migrationInventory < 0 || migrationIdentity >= migrationInventory {
-		t.Fatal("migration Go binaries are not identity-verified before their content inventory is sealed")
 	}
 	lockedRevision := strings.Index(source, `source_revision=$(git -C "$repo_root" rev-parse --verify 'HEAD^{commit}')`)
 	rootTests := strings.Index(source, `run_go_tests_as_production_owner -count=1 ./...`)
@@ -678,31 +653,23 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 	}
 	controlFreeze := strings.Index(source, `"$mode_freeze_helper" freeze public`)
 	controlGitleaks := indexAfter(`$gitleaks_binary dir`, controlFreeze)
-	migrationFreeze := strings.Index(source, `"$mode_freeze_helper" freeze root-only`)
-	migrationGitleaks := indexAfter(`$gitleaks_binary dir`, migrationFreeze)
-	if controlFreeze < 0 || controlGitleaks < 0 || controlFreeze >= controlGitleaks ||
-		migrationFreeze < 0 || migrationGitleaks < 0 || migrationFreeze >= migrationGitleaks {
-		t.Fatal("source gate does not freeze each payload before its final secret scan phase")
+	if controlFreeze < 0 || controlGitleaks < 0 || controlFreeze >= controlGitleaks {
+		t.Fatal("source gate does not freeze the payload before its final secret scan phase")
 	}
 	controlFinalModes := strings.LastIndex(source, `"$mode_freeze_helper" verify public`)
 	controlFinalLayout := strings.LastIndex(source, `--root "$artifact_directory/control-plane" --profile public`)
 	controlFinalContent := strings.LastIndex(source, `"$content_manifest_helper" verify "$artifact_directory/control-plane"`)
-	migrationFinalModes := strings.LastIndex(source, `"$mode_freeze_helper" verify root-only`)
-	migrationFinalLayout := strings.LastIndex(source, `--root "$artifact_directory/migration-tools" --profile root-only`)
-	migrationFinalContent := strings.LastIndex(source, `"$content_manifest_helper" verify "$artifact_directory/migration-tools"`)
 	controlFinalIdentity := strings.LastIndex(source, `verify_go_build_identity "$binary_directory/$command" "$command"`)
-	migrationFinalIdentity := strings.LastIndex(source, `verify_go_build_identity "$migration_directory/$command" "$command"`)
 	evidenceStart := strings.LastIndex(source, "  sha256sum \\\n")
 	evidenceEnd := strings.LastIndex(source, " > EVIDENCE.sha256")
 	if evidenceStart < 0 || evidenceEnd <= evidenceStart {
 		t.Fatal("source gate evidence hash block is missing")
 	}
-	if !(controlGitleaks < controlFinalModes && controlFinalModes < controlFinalLayout && controlFinalLayout < controlFinalContent && controlFinalContent < controlFinalIdentity && controlFinalIdentity < evidenceStart &&
-		migrationGitleaks < migrationFinalModes && migrationFinalModes < migrationFinalLayout && migrationFinalLayout < migrationFinalContent && migrationFinalContent < migrationFinalIdentity && migrationFinalIdentity < evidenceStart) {
+	if !(controlGitleaks < controlFinalModes && controlFinalModes < controlFinalLayout && controlFinalLayout < controlFinalContent && controlFinalContent < controlFinalIdentity && controlFinalIdentity < evidenceStart) {
 		t.Fatal("source gate does not repeat complete layout and content verification after both scanner phases and before evidence publication")
 	}
 	evidenceBlock := source[evidenceStart:evidenceEnd]
-	for _, manifest := range []string{"control-plane.tree-modes.tsv", "migration-tools.tree-modes.tsv"} {
+	for _, manifest := range []string{"control-plane.tree-modes.tsv"} {
 		if !strings.Contains(evidenceBlock, manifest) {
 			t.Fatalf("EVIDENCE.sha256 does not bind %s", manifest)
 		}
@@ -1205,7 +1172,6 @@ func TestCIUploadsOnlyAModePreservingSourceGateArchive(t *testing.T) {
 		`--no-acls --no-xattrs`,
 		`EVIDENCE.sha256`,
 		`control-plane control-plane.tree-modes.tsv`,
-		`migration-tools migration-tools.tree-modes.tsv`,
 		`sudo sh -c 'cd "$1" && sha256sum workagent-source-gate.tar' sh "$upload_root"`,
 		`archive=$upload_root/workagent-source-gate.tar`,
 		`checksum=$upload_root/workagent-source-gate.tar.sha256`,
@@ -1241,9 +1207,7 @@ func TestCIUploadsOnlyAModePreservingSourceGateArchive(t *testing.T) {
 		`sudo pkill -KILL -u "$builder"`,
 		`sudo cp -a --reflink=never -- "$isolated_root/artifacts/."`,
 		`verify_content_inventory "$sealed/control-plane"`,
-		`verify_content_inventory "$sealed/migration-tools"`,
 		`verify_mode_manifest public`,
-		`verify_mode_manifest root-only`,
 		`verify_source_gate_metadata "$sealed"`,
 		`verify_outer_evidence "$sealed"`,
 		`verify_outer_evidence "$extracted"`,
@@ -1280,8 +1244,6 @@ func createSourceGateTransportFixture(t *testing.T, parent string, timestamp tim
 		root,
 		filepath.Join(root, "control-plane"),
 		filepath.Join(root, "control-plane", "bin"),
-		filepath.Join(root, "migration-tools"),
-		filepath.Join(root, "migration-tools", "bin"),
 	} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			t.Fatal(err)
@@ -1296,9 +1258,6 @@ func createSourceGateTransportFixture(t *testing.T, parent string, timestamp tim
 		"control-plane/README":                     {0o444, "control data\n"},
 		"control-plane/bin/app":                    {0o555, "control executable\n"},
 		"control-plane.tree-modes.tsv":             {0o400, "control modes\n"},
-		"migration-tools/README":                   {0o400, "migration data\n"},
-		"migration-tools/bin/capture":              {0o500, "migration executable\n"},
-		"migration-tools.tree-modes.tsv":           {0o400, "migration modes\n"},
 		"source-gate.json":                         {0o600, "source gate\n"},
 		"not-authorized-for-transport.extra-proof": {0o600, "must be omitted\n"},
 	}
@@ -1315,11 +1274,9 @@ func createSourceGateTransportFixture(t *testing.T, parent string, timestamp tim
 		}
 	}
 	for path, mode := range map[string]os.FileMode{
-		filepath.Join(root, "control-plane", "bin"):   0o555,
-		filepath.Join(root, "control-plane"):          0o555,
-		filepath.Join(root, "migration-tools", "bin"): 0o500,
-		filepath.Join(root, "migration-tools"):        0o500,
-		root:                                          0o700,
+		filepath.Join(root, "control-plane", "bin"): 0o555,
+		filepath.Join(root, "control-plane"):        0o555,
+		root:                                        0o700,
 	} {
 		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
@@ -1339,7 +1296,6 @@ func sourceGateTransportArguments(root, archivePath string) []string {
 		"--no-acls", "--no-xattrs", "--directory=" + root,
 		"EVIDENCE.sha256",
 		"control-plane", "control-plane.tree-modes.tsv",
-		"migration-tools", "migration-tools.tree-modes.tsv",
 		"source-gate.json",
 	}
 
@@ -1382,18 +1338,13 @@ func TestSourceGateTransportArchiveRoundTripsExactModesAndOwners(t *testing.T) {
 	}
 
 	expectedModes := map[string]int64{
-		"EVIDENCE.sha256":                0o600,
-		"control-plane/":                 0o555,
-		"control-plane/README":           0o444,
-		"control-plane/bin/":             0o555,
-		"control-plane/bin/app":          0o555,
-		"control-plane.tree-modes.tsv":   0o400,
-		"migration-tools/":               0o500,
-		"migration-tools/README":         0o400,
-		"migration-tools/bin/":           0o500,
-		"migration-tools/bin/capture":    0o500,
-		"migration-tools.tree-modes.tsv": 0o400,
-		"source-gate.json":               0o600,
+		"EVIDENCE.sha256":              0o600,
+		"control-plane/":               0o555,
+		"control-plane/README":         0o444,
+		"control-plane/bin/":           0o555,
+		"control-plane/bin/app":        0o555,
+		"control-plane.tree-modes.tsv": 0o400,
+		"source-gate.json":             0o600,
 	}
 	reader := tar.NewReader(bytes.NewReader(first))
 	observed := make(map[string]bool, len(expectedModes))

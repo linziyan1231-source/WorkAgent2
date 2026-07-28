@@ -581,8 +581,6 @@ verify_artifact_envelope() {
   local -A expected_specs=(
     [control-plane]='d 555'
     [control-plane.tree-modes.tsv]='f 400'
-    [migration-tools]='d 500'
-    [migration-tools.tree-modes.tsv]='f 400'
     [source-gate.json]='f 600'
   )
   root_mode=$(stat -c '%a' -- "$artifact_directory")
@@ -779,8 +777,7 @@ printf '%s\n' \
   '  "shellcheck_version": "0.11.0",' \
   '  "content_manifest_version": 1,' \
   '  "tree_mode_manifest_version": 1,' \
-  '  "control_plane_mode_profile": "public",' \
-  '  "migration_tools_mode_profile": "root-only"' \
+  '  "control_plane_mode_profile": "public"' \
   '}' > "$artifact_directory/source-gate.json"
 
 verify_go_build_identity() {
@@ -820,7 +817,6 @@ go_control_commands=(
   workagent-admin
   workagent-backup
   workagent-cliproxy
-  workagent-import-stage
   workagent-notification
   workagent-portal
   workagent-provision
@@ -871,7 +867,6 @@ control_executables=(
   bin/workagent-backup
   bin/workagent-cliproxy
   bin/workagent-healthcheck
-  bin/workagent-import-stage
   bin/workagent-notification
   bin/workagent-portal
   bin/workagent-provision
@@ -891,49 +886,15 @@ control_executables=(
 $gitleaks_binary dir --config "$build_snapshot/.gitleaks.toml" --ignore-gitleaks-allow \
   --no-banner --redact --exit-code 1 "$artifact_directory/control-plane"
 
-# The Windows capture and migration commands are intentionally a separate,
-# root-only offline package:
-# it is source-gated but cannot be mistaken for an online production service.
-migration_directory=$artifact_directory/migration-tools/bin
-mkdir -p "$migration_directory"
-go_migration_commands=(
-  workagent-capture-windows
-  workagent-migrate-windows
-)
-for command in "${go_migration_commands[@]}"; do
-  CGO_ENABLED=0 $go_binary build -trimpath -buildvcs=true -ldflags=-buildid= \
-    -o "$migration_directory/$command" "./cmd/$command"
-done
-for command in "${go_migration_commands[@]}"; do
-  verify_go_build_identity "$migration_directory/$command" "$command"
-done
-"$content_manifest_helper" write "$artifact_directory/migration-tools" >/dev/null
-migration_executables=(
-  bin/workagent-capture-windows
-  bin/workagent-migrate-windows
-)
-"$mode_freeze_helper" freeze root-only "$artifact_directory/migration-tools" \
-  "$artifact_directory/migration-tools.tree-modes.tsv" "${migration_executables[@]}"
-"$binary_directory/workagent-release" validate-layout \
-  --root "$artifact_directory/migration-tools" --profile root-only >/dev/null
-"$content_manifest_helper" verify "$artifact_directory/migration-tools" >/dev/null
-$gitleaks_binary dir --config "$build_snapshot/.gitleaks.toml" --ignore-gitleaks-allow \
-  --no-banner --redact --exit-code 1 "$artifact_directory/migration-tools"
-
 # Scanners are not trusted to preserve metadata. Revalidate the exact executable
 # allow-lists, complete type/mode/path manifests, link counts, xattr policy and
-# content inventories for both payloads immediately before outer evidence is
+# content inventories for the payload immediately before outer evidence is
 # published.
 "$mode_freeze_helper" verify public "$artifact_directory/control-plane" \
   "$artifact_directory/control-plane.tree-modes.tsv" "${control_executables[@]}"
 "$binary_directory/workagent-release" validate-layout \
   --root "$artifact_directory/control-plane" --profile public >/dev/null
 "$content_manifest_helper" verify "$artifact_directory/control-plane" >/dev/null
-"$mode_freeze_helper" verify root-only "$artifact_directory/migration-tools" \
-  "$artifact_directory/migration-tools.tree-modes.tsv" "${migration_executables[@]}"
-"$binary_directory/workagent-release" validate-layout \
-  --root "$artifact_directory/migration-tools" --profile root-only >/dev/null
-"$content_manifest_helper" verify "$artifact_directory/migration-tools" >/dev/null
 # Repeat embedded package/VCS identity admission after scanners and the final
 # content checks. This independently catches accidental cross-command binary
 # substitution even if a local content manifest was regenerated before the
@@ -941,9 +902,6 @@ $gitleaks_binary dir --config "$build_snapshot/.gitleaks.toml" --ignore-gitleaks
 # for non-Go payloads such as the healthcheck script.
 for command in "${go_control_commands[@]}"; do
   verify_go_build_identity "$binary_directory/$command" "$command"
-done
-for command in "${go_migration_commands[@]}"; do
-  verify_go_build_identity "$migration_directory/$command" "$command"
 done
 require_clean_source
 verify_build_snapshot
@@ -955,8 +913,6 @@ verify_artifact_envelope false
   sha256sum \
     control-plane/SHA256SUMS \
     control-plane.tree-modes.tsv \
-    migration-tools/SHA256SUMS \
-    migration-tools.tree-modes.tsv \
     source-gate.json > EVIDENCE.sha256
 )
 chmod 0600 -- "$artifact_directory/EVIDENCE.sha256"

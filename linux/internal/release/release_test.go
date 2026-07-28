@@ -359,7 +359,7 @@ func TestSignReadyTreeRejectsExternalHardlink(t *testing.T) {
 }
 
 func TestRootOnlyFrozenTreeProfile(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "migration-tools")
+	root := filepath.Join(t.TempDir(), "offline-tools")
 	t.Cleanup(func() { thawReleaseFixture(root) })
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o700); err != nil {
 		t.Fatal(err)

@@ -329,7 +329,6 @@ func productionFixedRootSpec(destination string) (fixedRootSpec, error) {
 			"bin/workagent-backup",
 			"bin/workagent-cliproxy",
 			"bin/workagent-healthcheck",
-			"bin/workagent-import-stage",
 			"bin/workagent-notification",
 			"bin/workagent-portal",
 			"bin/workagent-provision",
