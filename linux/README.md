@@ -1,10 +1,10 @@
 # WorkAgent2
 
-WorkAgent2 是 Linux AI 工作空间平台。生产迁移数据只能进入 Git 忽略、权限受控的本机迁移区；客户数据、项目、凭据、OAuth 状态、会话、日志、缓存和备份不得进入仓库。
+WorkAgent2 是 Linux AI 工作空间平台。生产数据只能进入 Git 忽略、权限受控的本机区域；客户数据、项目、凭据、OAuth 状态、会话、日志、缓存和备份不得进入仓库。
 
 ## 当前状态
 
-Linux 控制面、离线 Windows 数据迁移、运行时/共享组件组装和生产门禁已实现：租户账号/ACL/XFS 配额、systemd socket 激活、AionCore 监督、登录与可选管理员代登录、受控出站代理、长流代理、OAuth、项目事务、CLIProxy 逐 key 策略、ChatForward、日志脱敏、哈希校验发布、兼容回滚、强制异机加密备份和空白主机恢复均已落到代码与测试。同步锁定的生产组件为 AionUi `2.1.0-beta.editfork.21`（静态资源与内置助手逐字节绑定只读 Windows `.20` 参考，Linux host 增加 fd3 possession-channel 边界）、AionCore `v0.1.42-editfork.10`、Codex `0.144.4`、Kimi Code `0.29.1-fork-steer.1`、Python `3.13.13`、CLIProxyAPI `7.2.81 / per-key-models.4`、`cpa-key-policy 0.4.5`，以及 ChatForward `zombie-reap-20260725-2329` / 扩展 `0.16.0`。Portal 配置、tenant 配置均为 schema v5；Portal SQLite 数据库为 schema v4。
+Linux 控制面、运行时/共享组件组装和生产门禁已实现：租户账号/ACL/XFS 配额、systemd socket 激活、AionCore 监督、登录与可选管理员代登录、受控出站代理、长流代理、OAuth、项目事务、CLIProxy 逐 key 策略、ChatForward、日志脱敏、哈希校验发布、兼容回滚、强制异机加密备份和空白主机恢复均已落到代码与测试。同步锁定的生产组件为 AionUi `2.1.0-beta.editfork.21`（静态资源与内置助手逐字节绑定只读 Windows `.20` 参考，Linux host 增加 fd3 possession-channel 边界）、AionCore `v0.1.42-editfork.10`、Codex `0.144.4`、Kimi Code `0.29.1-fork-steer.1`、Python `3.13.13`、CLIProxyAPI `7.2.81 / per-key-models.4`、`cpa-key-policy 0.4.5`，以及 ChatForward `zombie-reap-20260725-2329` / 扩展 `0.16.0`。Portal 配置、tenant 配置均为 schema v5；Portal SQLite 数据库为 schema v4。
 
 当前仍不能宣称已经生产启用。代码无法代替有权负责人完成品牌审批，也不能自行开放公网 443、提供正式 TLS/OAuth 注册、启用生产 XFS `prjquota`、接入异机备份与告警、提供真实 Provider 账号或完成双租户浏览器和空白主机恢复验收。AionCore 的两次干净 Linux 构建已经逐字节及完整树一致并由外部 pin 固定；这只是构建资格证据，仍须纳入源码干净、哈希清单验证的正式 release，不能以版本字符串代替该发布链。完成这些外部门禁后，日常用户开通才可收敛为：在本机安装对应 Codex/Kimi/Python CLI，完成 CLIProxyAPI OAuth，并对聊天模式做一次账号登录。完整边界见 [生产交接输入](docs/PRODUCTION_HANDOFF.md)、[发布证据](docs/RELEASE_EVIDENCE.md)和[生产一致性合同](docs/PRODUCTION_PARITY.md)。
 
@@ -23,7 +23,7 @@ Linux 控制面、离线 Windows 数据迁移、运行时/共享组件组装和�
 
 - Windows 参考服务器始终只读；任何修改、构建和部署只发生在这台 Linux 主机。
 - 参考快照、内部审批、连接信息和扫描隔离区位于 Git 忽略目录，不进入产品仓库。
-- 新配置只使用 `tenant_id` UUID、`runtime_user` 和 `data_root`。只读迁移器保留经过校验的旧 Windows 字段解析，以便离线导入；在线服务不信任这些字段。
+- 新配置只使用 `tenant_id` UUID、`runtime_user` 和 `data_root`。
 - 不提交密钥、数据库、租户数据、日志、备份、构建工具或二进制。
 
 ## 主要目录
@@ -48,4 +48,4 @@ go vet ./...
 scripts/audit-tree.sh
 ```
 
-`scripts/source-gate.sh` 默认运行 `quality` 模式，固定执行 ShellCheck 0.11.0、Gitleaks 8.28.0 和 govulncheck 1.6.0，但不生成可发布 payload。只有 CI 中在同一 revision 的 quality job 通过后、从全新主机执行的最终 `verify` artifact job，才会生成十个在线控制面二进制（包含受验证根管控、仅由 root 显式运行的 `workagent-import-stage`）、健康检查 helper、独立离线迁移工具和校验记录。本地 artifact 模式产物只能用于演练，不是生产授权。真实发布随后必须通过 `workagent-release` 的哈希清单验证、数据 schema 兼容性、预检和备份门禁；具体流程见 [发布证据](docs/RELEASE_EVIDENCE.md)。
+`scripts/source-gate.sh` 默认运行 `quality` 模式，固定执行 ShellCheck 0.11.0、Gitleaks 8.28.0 和 govulncheck 1.6.0，但不生成可发布 payload。只有 CI 中在同一 revision 的 quality job 通过后、从全新主机执行的最终 `verify` artifact job，才会生成九个在线控制面二进制、健康检查 helper 和校验记录。本地 artifact 模式产物只能用于演练，不是生产授权。真实发布随后必须通过 `workagent-release` 的哈希清单验证、数据 schema 兼容性、预检和备份门禁；具体流程见 [发布证据](docs/RELEASE_EVIDENCE.md)。

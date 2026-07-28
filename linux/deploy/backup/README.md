@@ -29,8 +29,8 @@ CLIProxy policy file
 `/var/lib/cliproxyapi/policy/cpa-key-policy-state.json`. That file contains the
 new tenant key hashes, quota limits and usage windows needed for a usable
 blank-host restore; it does not contain provider OAuth tokens. Backup stops
-CLIProxy and holds the same exclusive migration lock used by the offline quota
-importer until the archive is complete. `/var/lib/cliproxyapi/auth` and every
+CLIProxy and holds the exclusive CLIProxy policy-state lock until the archive
+is complete. `/var/lib/cliproxyapi/auth` and every
 parent or child source that could include it are rejected. Recovery restores
 the policy file to the package-created `cliproxyapi` identity before starting
 CLIProxy; provider OAuth is intentionally performed again on the new host.

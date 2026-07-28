@@ -1,7 +1,7 @@
 # CLIProxyAPI Linux provider OAuth runbook
 
 CLIProxyAPI provider credentials are host-local authentication material. They
-are intentionally excluded from Windows migration and blank-host recovery, so
+are intentionally excluded from blank-host recovery, so
 the approved Codex and Kimi accounts must each be authorized once on the new
 Linux host. This is an activation step, not a data-copy step.
 

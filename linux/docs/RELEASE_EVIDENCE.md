@@ -26,11 +26,8 @@ ShellCheck executables. Its default `quality` mode performs tests and analysis
 but deliberately publishes no payload. Production evidence comes only from the
 fresh, cache-free `verify` CI job, which invokes the separate `artifact` mode
 after the quality job passed the identical revision. That artifact records the
-exact source revision, tool versions, scans, checksums, ten online
-control-plane binaries (including the root-only `workagent-import-stage`
-publisher), the health helper, and the separately packaged offline
-`workagent-capture-windows` and `workagent-migrate-windows` commands. Neither
-offline command is ever installed as an online service. A loose local
+exact source revision, tool versions, scans, checksums, nine online
+control-plane binaries and the health helper. A loose local
 artifact-mode directory is rehearsal output, not production authorization.
 
 The gate locks one commit and tree in a sanitized object repository, rejects a
@@ -40,21 +37,20 @@ directly from the locked Git blobs. Binaries are built with `CGO_ENABLED=0`,
 `vcs.revision` matching the locked commit, so an identical toolchain and source
 revision reproduce identical bytes. Before the final Gitleaks scans, the
 control payload is frozen to mode `0555` for its root, directories and exact
-executable allow-list and `0444` for every other regular file; the offline
-migration-tools payload is root-only (`0500`/`0400`). A symlink, special or
+executable allow-list and `0444` for every other regular file. A symlink, special or
 multiply-linked file, any setuid/setgid/sticky bit, non-canonical path or
 unlisted executable fails the gate. `workagent-release validate-layout` then
 independently rejects extended/default POSIX ACLs, Linux file capabilities and
 every unbound extended attribute except the host-managed `security.selinux`
 label.
 
-`control-plane.tree-modes.tsv` and `migration-tools.tree-modes.tsv` record the
-deterministic entry type, mode and relative path; they deliberately omit
+`control-plane.tree-modes.tsv` records the
+deterministic entry type, mode and relative path; it deliberately omits
 builder UID/GID, while the installed release still requires production
-`root:root` ownership. Each payload's inner `SHA256SUMS` must exactly equal the
+`root:root` ownership. The payload's inner `SHA256SUMS` must exactly equal the
 complete regular-file inventory; it is regenerated and compared after freezing
-and again after the final scan phase. The outer `EVIDENCE.sha256` binds both
-inner inventories, both mode manifests and `source-gate.json`. Verify all
+and again after the final scan phase. The outer `EVIDENCE.sha256` binds the
+inner inventory, the mode manifest and `source-gate.json`. Verify all
 layers after any root-only, mode-preserving cross-host transfer; never upload
 or copy the evidence tree with a tool that normalizes modes — CI publishes only
 the mode-preserving `workagent-source-gate.tar` plus its SHA-256 sidecar, which
@@ -140,8 +136,8 @@ compare-and-swap only while the affected consumers are drained.
 
 ## 4. Evidence required for authorization
 
-Retain the clean source-gate output, its `EVIDENCE.sha256` and both tree-mode
-manifests, build logs, independent-build comparison, component input hashes,
+Retain the clean source-gate output, its `EVIDENCE.sha256` and the tree-mode
+manifest, build logs, independent-build comparison, component input hashes,
 each `manifest.json`, the preflight report, a verified backup receipt and the
 activation/rollback rehearsal. Production traffic additionally requires the
 host, external TLS/WebSocket, two-tenant browser/provider, OAuth, ChatForward
