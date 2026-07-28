@@ -28,9 +28,11 @@ const (
 const maxConcurrentReadOnlySources = 4
 
 type captureEngine struct {
-	remote      remoteTransport
-	expectedUID uint32
-	now         func() time.Time
+	remote          remoteTransport
+	expectedUID     uint32
+	now             func() time.Time
+	identity        identityProvider
+	checkRunTimeout time.Duration
 }
 
 type sourceEvidence struct {
@@ -53,31 +55,36 @@ type capturedSourceEvidence struct {
 }
 
 type finalManifest struct {
-	SchemaVersion int                      `json:"schema_version"`
-	Status        string                   `json:"status"`
-	CaptureID     string                   `json:"capture_id"`
-	SpecSHA256    string                   `json:"spec_sha256"`
-	Before        []sourceEvidence         `json:"before"`
-	Captured      []capturedSourceEvidence `json:"captured"`
-	After         []sourceEvidence         `json:"after"`
-	OAuthBefore   OAuthSummary             `json:"oauth_before"`
-	OAuthAfter    OAuthSummary             `json:"oauth_after"`
-	Aggregate     Summary                  `json:"aggregate"`
-	CompletedAt   time.Time                `json:"completed_at"`
+	SchemaVersion       int                      `json:"schema_version"`
+	Status              string                   `json:"status"`
+	CaptureID           string                   `json:"capture_id"`
+	SpecSHA256          string                   `json:"spec_sha256"`
+	RehearsalGateSHA256 string                   `json:"rehearsal_gate_sha256"`
+	Before              []sourceEvidence         `json:"before"`
+	Captured            []capturedSourceEvidence `json:"captured"`
+	After               []sourceEvidence         `json:"after"`
+	OAuthBefore         OAuthSummary             `json:"oauth_before"`
+	OAuthAfter          OAuthSummary             `json:"oauth_after"`
+	Aggregate           Summary                  `json:"aggregate"`
+	CompletedAt         time.Time                `json:"completed_at"`
 }
 
 func Check(ctx context.Context, options CheckOptions) (Report, error) {
 	if os.Geteuid() != 0 {
 		return Report{}, errors.New("Windows capture checks require root")
 	}
-	return (&captureEngine{remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }}).check(ctx, options)
+	return (&captureEngine{
+		remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
+	}).check(ctx, options)
 }
 
 func Capture(ctx context.Context, options CaptureOptions) (Report, error) {
 	if os.Geteuid() != 0 {
 		return Report{}, errors.New("final Windows capture requires root")
 	}
-	return (&captureEngine{remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }}).capture(ctx, options)
+	return (&captureEngine{
+		remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
+	}).capture(ctx, options)
 }
 
 // VerifyFinalDelta first performs a complete offline revalidation of the
@@ -89,7 +96,9 @@ func VerifyFinalDelta(ctx context.Context, options FinalDeltaOptions) (Report, e
 	if os.Geteuid() != 0 {
 		return Report{}, errors.New("final Windows delta verification requires root")
 	}
-	return (&captureEngine{remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }}).verifyFinalDelta(ctx, options)
+	return (&captureEngine{
+		remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
+	}).verifyFinalDelta(ctx, options)
 }
 
 // VerifyCompletedCapture verifies the private spec, every pinned local input,
@@ -99,49 +108,8 @@ func VerifyCompletedCapture(options CompletedCaptureOptions) (CompletedCaptureBi
 	if os.Geteuid() != 0 {
 		return CompletedCaptureBinding{}, errors.New("completed Windows capture verification requires root")
 	}
-	binding, _, _, err := verifyCompletedCapture(options, 0)
+	binding, _, _, _, err := verifyCompletedCapture(options, 0)
 	return binding, err
-}
-
-func (engine *captureEngine) check(ctx context.Context, options CheckOptions) (Report, error) {
-	loaded, err := loadSpec(options.SpecPath, engine.expectedUID)
-	if err != nil {
-		return Report{}, err
-	}
-	if err := verifyPrivateLocalInputs(loaded.value.LocalFiles, engine.expectedUID); err != nil {
-		return Report{}, err
-	}
-	before, exclusionsBefore, oauthBefore, err := engine.collect(ctx, loaded.value)
-	if err != nil {
-		return Report{}, err
-	}
-	after, exclusionsAfter, oauthAfter, err := engine.collect(ctx, loaded.value)
-	if err != nil {
-		return Report{}, err
-	}
-	if err := compareCollection(before, exclusionsBefore, oauthBefore, after, exclusionsAfter, oauthAfter); err != nil {
-		return Report{}, err
-	}
-	aggregate, err := aggregateSummaries(before)
-	if err != nil || aggregate.Files > loaded.value.Limits.MaxTotalFiles || aggregate.Bytes > loaded.value.Limits.MaxTotalBytes {
-		return Report{}, errors.New("read-only rehearsal exceeds aggregate capture limits")
-	}
-	reloaded, err := loadSpec(options.SpecPath, engine.expectedUID)
-	if err != nil || reloaded.digest != loaded.digest {
-		return Report{}, errors.New("private capture spec drifted during the read-only rehearsal")
-	}
-	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, engine.expectedUID); err != nil {
-		return Report{}, errors.New("private local capture input drifted during the read-only rehearsal")
-	}
-	return Report{
-		SchemaVersion: 1,
-		Status:        "rehearsal-only-not-frozen",
-		SpecSHA256:    loaded.digest,
-		Sources:       len(before),
-		Summary:       aggregate,
-		OAuth:         oauthBefore,
-		CompletedAt:   engine.now().UTC(),
-	}, nil
 }
 
 func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions) (report Report, returnedErr error) {
@@ -151,6 +119,10 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	if err := validateAbsoluteFilePath(options.Destination, "capture destination"); err != nil || filepath.Base(options.Destination) != options.CaptureID {
 		return Report{}, errors.New("capture destination must be an absolute path whose basename equals the capture ID")
 	}
+	identity, err := engine.readExecutableIdentity()
+	if err != nil {
+		return Report{}, err
+	}
 	loaded, err := loadSpec(options.SpecPath, engine.expectedUID)
 	if err != nil {
 		return Report{}, err
@@ -158,9 +130,22 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	if err := verifyPrivateLocalInputs(loaded.value.LocalFiles, engine.expectedUID); err != nil {
 		return Report{}, err
 	}
-	if existing, ok, err := readExistingCapture(options.Destination, options.CaptureID, loaded.digest, loaded.value, engine.expectedUID); err != nil {
+	gate, err := readVerifiedRehearsalGate(options.RehearsalGate, engine.expectedUID)
+	if err != nil {
+		return Report{}, err
+	}
+	defer clear(gate.payload)
+	if gate.value.SpecSHA256 != loaded.digest || gate.value.SourceCount != len(loaded.value.Sources) || gate.value.Executable != identity ||
+		validateRehearsalGateAgainstSpec(gate.value, loaded.value) != nil {
+		return Report{}, errors.New("rehearsal gate does not match the current spec and executable identity")
+	}
+	if existing, ok, err := readExistingCapture(options.Destination, options.CaptureID, loaded.digest, gate.digest, loaded.value, engine.expectedUID); err != nil {
 		return Report{}, err
 	} else if ok {
+		replayedIdentity, identityErr := engine.readExecutableIdentity()
+		if identityErr != nil || replayedIdentity != identity {
+			return Report{}, errors.New("executable identity drifted during completed-capture replay")
+		}
 		return existing, nil
 	}
 	parent := filepath.Dir(options.Destination)
@@ -193,14 +178,17 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	failed := true
 	defer func() {
 		if failed {
-			_ = writeFailureEvidence(partialFD, options.CaptureID, loaded.digest)
+			_ = writeFailureEvidence(partialFD, options.CaptureID, loaded.digest, gate.digest)
 			_ = unix.Fsync(partialFD)
 			_ = syncPathDirectory(parent)
 		}
 	}()
 	if err := writePrivateJSONAt(partialFD, "journal-start.json", map[string]any{
-		"schema_version": 1, "status": "in-progress", "capture_id": options.CaptureID, "spec_sha256": loaded.digest,
+		"schema_version": 2, "status": "in-progress", "capture_id": options.CaptureID, "spec_sha256": loaded.digest, "rehearsal_gate_sha256": gate.digest,
 	}); err != nil {
+		return Report{}, err
+	}
+	if err := writePrivatePayloadAt(partialFD, "rehearsal-gate.json", gate.payload); err != nil {
 		return Report{}, err
 	}
 	before, exclusionsBefore, oauthBefore, err := engine.collect(ctx, loaded.value)
@@ -250,9 +238,20 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	if err != nil {
 		return Report{}, err
 	}
+	reloaded, err := loadSpec(options.SpecPath, engine.expectedUID)
+	if err != nil || reloaded.digest != loaded.digest {
+		return Report{}, errors.New("private capture spec drifted during final capture")
+	}
+	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, engine.expectedUID); err != nil {
+		return Report{}, errors.New("private local capture input drifted during final capture")
+	}
+	endingIdentity, err := engine.readExecutableIdentity()
+	if err != nil || endingIdentity != identity {
+		return Report{}, errors.New("executable identity drifted during final capture")
+	}
 	completed := engine.now().UTC()
 	manifest := finalManifest{
-		SchemaVersion: 1, Status: "complete-frozen-capture", CaptureID: options.CaptureID, SpecSHA256: loaded.digest,
+		SchemaVersion: 2, Status: "complete-frozen-capture", CaptureID: options.CaptureID, SpecSHA256: loaded.digest, RehearsalGateSHA256: gate.digest,
 		Before: evidenceSources(before, exclusionsBefore), Captured: capturedSources(captured), After: evidenceSources(after, exclusionsAfter),
 		OAuthBefore: oauthBefore, OAuthAfter: oauthAfter, Aggregate: aggregate, CompletedAt: completed,
 	}
@@ -275,7 +274,7 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	if err := syncPathDirectory(parent); err != nil {
 		return Report{}, errors.New("final capture was renamed but its parent directory sync failed; verify the immutable manifest before retrying")
 	}
-	report = Report{SchemaVersion: 1, Status: manifest.Status, CaptureID: options.CaptureID, SpecSHA256: loaded.digest, Sources: len(before), Summary: aggregate, OAuth: oauthAfter, CompletedAt: completed}
+	report = Report{SchemaVersion: 1, Status: manifest.Status, CaptureID: options.CaptureID, SpecSHA256: loaded.digest, RehearsalGateSHA256: gate.digest, Sources: len(before), Summary: aggregate, OAuth: oauthAfter, CompletedAt: completed}
 	return report, nil
 }
 
@@ -289,11 +288,19 @@ func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options Final
 
 	// Nothing before this boundary can contact Windows. Keep the full local
 	// integrity gate together so tests and later callers can prove deferral.
-	binding, loaded, manifest, err := verifyCompletedCapture(CompletedCaptureOptions{
+	binding, loaded, manifest, gate, err := verifyCompletedCapture(CompletedCaptureOptions{
 		SpecPath: options.SpecPath, Destination: options.Destination, CaptureID: options.CaptureID,
 	}, engine.expectedUID)
 	if err != nil {
 		return Report{}, err
+	}
+	identity, err := engine.readExecutableIdentity()
+	if err != nil || identity != gate.Executable {
+		return Report{}, errors.New("final-delta executable identity does not match the captured rehearsal gate")
+	}
+	preRemoteIdentity, err := engine.readExecutableIdentity()
+	if err != nil || preRemoteIdentity != identity {
+		return Report{}, errors.New("executable identity drifted before final-delta remote access")
 	}
 
 	first, firstExclusions, firstOAuth, err := engine.collect(ctx, loaded.value)
@@ -314,11 +321,15 @@ func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options Final
 	if err != nil || aggregate != manifest.Aggregate {
 		return Report{}, errors.New("Windows final-delta aggregate does not match the completed capture")
 	}
-	postBinding, _, _, err := verifyCompletedCapture(CompletedCaptureOptions{
+	postBinding, _, _, postGate, err := verifyCompletedCapture(CompletedCaptureOptions{
 		SpecPath: options.SpecPath, Destination: options.Destination, CaptureID: options.CaptureID,
 	}, engine.expectedUID)
-	if err != nil || postBinding != binding {
+	if err != nil || postBinding != binding || postGate.Executable != identity {
 		return Report{}, errors.New("completed capture changed during final-delta verification")
+	}
+	endingIdentity, err := engine.readExecutableIdentity()
+	if err != nil || endingIdentity != identity {
+		return Report{}, errors.New("executable identity drifted during final-delta verification")
 	}
 	captureCompletedAt := binding.CompletedAt
 	return Report{
@@ -326,6 +337,7 @@ func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options Final
 		Status:                "complete-frozen-final-delta",
 		CaptureID:             binding.CaptureID,
 		SpecSHA256:            binding.SpecSHA256,
+		RehearsalGateSHA256:   manifest.RehearsalGateSHA256,
 		CaptureManifestSHA256: binding.CaptureManifestSHA256,
 		CaptureCompletedAt:    &captureCompletedAt,
 		Sources:               len(first),
@@ -335,43 +347,43 @@ func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options Final
 	}, nil
 }
 
-func verifyCompletedCapture(options CompletedCaptureOptions, expectedUID uint32) (CompletedCaptureBinding, loadedSpec, finalManifest, error) {
+func verifyCompletedCapture(options CompletedCaptureOptions, expectedUID uint32) (CompletedCaptureBinding, loadedSpec, finalManifest, rehearsalGate, error) {
 	if !validCaptureID(options.CaptureID) {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("completed capture ID is invalid")
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, errors.New("completed capture ID is invalid")
 	}
 	if err := validateAbsoluteFilePath(options.Destination, "capture destination"); err != nil || filepath.Base(options.Destination) != options.CaptureID {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("capture destination must be an absolute path whose basename equals the capture ID")
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, errors.New("capture destination must be an absolute path whose basename equals the capture ID")
 	}
 	parentFD, _, err := openPrivateRoot(filepath.Dir(options.Destination), expectedUID)
 	if err != nil {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("capture destination parent must be a real private 0700 directory")
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, errors.New("capture destination parent must be a real private 0700 directory")
 	}
 	if err := unix.Close(parentFD); err != nil {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("close capture destination parent")
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, errors.New("close capture destination parent")
 	}
 	loaded, err := loadSpec(options.SpecPath, expectedUID)
 	if err != nil {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, err
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, err
 	}
 	if err := verifyPrivateLocalInputs(loaded.value.LocalFiles, expectedUID); err != nil {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, err
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, err
 	}
-	manifest, manifestDigest, err := readAndVerifyExistingCapture(options.Destination, options.CaptureID, loaded.digest, loaded.value, expectedUID)
+	manifest, gate, manifestDigest, err := readAndVerifyExistingCapture(options.Destination, options.CaptureID, loaded.digest, loaded.value, expectedUID)
 	if err != nil {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, err
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, err
 	}
 	reloaded, err := loadSpec(options.SpecPath, expectedUID)
 	if err != nil || reloaded.digest != loaded.digest {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("capture spec changed during completed-capture verification")
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, errors.New("capture spec changed during completed-capture verification")
 	}
 	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, expectedUID); err != nil {
-		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, errors.New("private local input changed during completed-capture verification")
+		return CompletedCaptureBinding{}, loadedSpec{}, finalManifest{}, rehearsalGate{}, errors.New("private local input changed during completed-capture verification")
 	}
 	binding := CompletedCaptureBinding{
 		SchemaVersion: 1, CaptureID: manifest.CaptureID, SpecSHA256: manifest.SpecSHA256,
 		CaptureManifestSHA256: manifestDigest, CompletedAt: manifest.CompletedAt, Aggregate: manifest.Aggregate,
 	}
-	return binding, loaded, manifest, nil
+	return binding, loaded, manifest, gate, nil
 }
 
 func compareFinalDeltaToManifest(inventories []inventory, exclusions []exclusionEvidence, oauth OAuthSummary, manifest finalManifest) error {
@@ -530,13 +542,13 @@ func capturedSources(inventories []inventory) []capturedSourceEvidence {
 	return result
 }
 
-func writeFailureEvidence(rootFD int, captureID, specSHA string) error {
+func writeFailureEvidence(rootFD int, captureID, specSHA, gateSHA string) error {
 	return writePrivateJSONAt(rootFD, "failure.json", map[string]any{
-		"schema_version": 1, "status": "failed-unpublished-partial", "capture_id": captureID, "spec_sha256": specSHA,
+		"schema_version": 2, "status": "failed-unpublished-partial", "capture_id": captureID, "spec_sha256": specSHA, "rehearsal_gate_sha256": gateSHA,
 	})
 }
 
-func readExistingCapture(destination, captureID, specSHA string, spec Spec, expectedUID uint32) (Report, bool, error) {
+func readExistingCapture(destination, captureID, specSHA, gateSHA string, spec Spec, expectedUID uint32) (Report, bool, error) {
 	info, err := os.Lstat(destination)
 	if errors.Is(err, os.ErrNotExist) {
 		return Report{}, false, nil
@@ -544,40 +556,49 @@ func readExistingCapture(destination, captureID, specSHA string, spec Spec, expe
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return Report{}, false, errors.New("existing capture destination is unsafe")
 	}
-	manifest, _, err := readAndVerifyExistingCapture(destination, captureID, specSHA, spec, expectedUID)
+	manifest, _, _, err := readAndVerifyExistingCapture(destination, captureID, specSHA, spec, expectedUID)
 	if err != nil {
 		return Report{}, false, err
 	}
-	return Report{SchemaVersion: 1, Status: manifest.Status, CaptureID: captureID, SpecSHA256: specSHA, Sources: len(manifest.Before), Summary: manifest.Aggregate, OAuth: manifest.OAuthAfter, CompletedAt: manifest.CompletedAt}, true, nil
+	if manifest.RehearsalGateSHA256 != gateSHA {
+		return Report{}, false, errors.New("existing capture is bound to a different rehearsal gate")
+	}
+	return Report{SchemaVersion: 1, Status: manifest.Status, CaptureID: captureID, SpecSHA256: specSHA, RehearsalGateSHA256: gateSHA, Sources: len(manifest.Before), Summary: manifest.Aggregate, OAuth: manifest.OAuthAfter, CompletedAt: manifest.CompletedAt}, true, nil
 }
 
-func readAndVerifyExistingCapture(destination, captureID, specSHA string, spec Spec, expectedUID uint32) (finalManifest, string, error) {
+func readAndVerifyExistingCapture(destination, captureID, specSHA string, spec Spec, expectedUID uint32) (finalManifest, rehearsalGate, string, error) {
 	rootFD, _, err := openPrivateRoot(destination, expectedUID)
 	if err != nil {
-		return finalManifest{}, "", err
+		return finalManifest{}, rehearsalGate{}, "", err
 	}
 	defer unix.Close(rootFD)
 	var manifest finalManifest
-	manifestDigest, manifestErr := readStoredStrictJSONAtDigest(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &manifest)
+	manifestDigest, manifestErr := readStoredCanonicalJSONAtDigest(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &manifest)
 	if manifestErr != nil ||
-		manifest.SchemaVersion != 1 || manifest.Status != "complete-frozen-capture" || manifest.CaptureID != captureID || manifest.SpecSHA256 != specSHA || manifest.CompletedAt.IsZero() {
-		return finalManifest{}, "", errors.New("existing capture does not match this immutable capture request")
+		manifest.SchemaVersion != 2 || manifest.Status != "complete-frozen-capture" || manifest.CaptureID != captureID || manifest.SpecSHA256 != specSHA ||
+		!sha256Pattern.MatchString(manifest.RehearsalGateSHA256) || manifest.CompletedAt.IsZero() {
+		return finalManifest{}, rehearsalGate{}, "", errors.New("existing capture does not match this immutable capture request")
 	}
 	if err := syncPrivateTree(rootFD, expectedUID); err != nil {
-		return finalManifest{}, "", errors.New("existing capture tree failed private integrity validation")
+		return finalManifest{}, rehearsalGate{}, "", errors.New("existing capture tree failed private integrity validation")
 	}
 	if err := verifyStoredCapture(rootFD, spec, manifest, expectedUID); err != nil {
-		return finalManifest{}, "", err
+		return finalManifest{}, rehearsalGate{}, "", err
 	}
 	var finalManifestRead finalManifest
-	finalDigest, err := readStoredStrictJSONAtDigest(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &finalManifestRead)
+	finalDigest, err := readStoredCanonicalJSONAtDigest(rootFD, "capture-manifest.json", 8*1024*1024, expectedUID, &finalManifestRead)
 	if err != nil || finalDigest != manifestDigest {
-		return finalManifest{}, "", errors.New("existing capture manifest changed during verification")
+		return finalManifest{}, rehearsalGate{}, "", errors.New("existing capture manifest changed during verification")
+	}
+	var finalGateRead rehearsalGate
+	finalGateDigest, err := readStoredCanonicalJSONAtDigest(rootFD, "rehearsal-gate.json", maxRehearsalMetadataBytes, expectedUID, &finalGateRead)
+	if err != nil || finalGateDigest != manifest.RehearsalGateSHA256 || validateRehearsalGate(finalGateRead) != nil {
+		return finalManifest{}, rehearsalGate{}, "", errors.New("existing capture rehearsal gate changed during verification")
 	}
 	if err := syncPathDirectory(filepath.Dir(destination)); err != nil {
-		return finalManifest{}, "", errors.New("sync existing capture destination parent")
+		return finalManifest{}, rehearsalGate{}, "", errors.New("sync existing capture destination parent")
 	}
-	return manifest, manifestDigest, nil
+	return manifest, finalGateRead, manifestDigest, nil
 }
 
 func marshalPrivateJSON(value any) ([]byte, error) {

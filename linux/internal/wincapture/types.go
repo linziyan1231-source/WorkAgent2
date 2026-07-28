@@ -110,28 +110,44 @@ type OAuthSummary struct {
 // Report is safe for stdout and operational logs. It contains neither source
 // paths, destination leaves, tenant identifiers, nor OAuth filenames.
 type Report struct {
-	SchemaVersion         int          `json:"schema_version"`
-	Status                string       `json:"status"`
-	CaptureID             string       `json:"capture_id,omitempty"`
-	SpecSHA256            string       `json:"spec_sha256"`
-	CaptureManifestSHA256 string       `json:"capture_manifest_sha256,omitempty"`
-	CaptureCompletedAt    *time.Time   `json:"capture_completed_at,omitempty"`
-	Sources               int          `json:"sources"`
-	Summary               Summary      `json:"summary"`
-	OAuth                 OAuthSummary `json:"oauth_evidence"`
-	CompletedAt           time.Time    `json:"completed_at,omitempty"`
+	SchemaVersion          int          `json:"schema_version"`
+	Status                 string       `json:"status"`
+	CaptureID              string       `json:"capture_id,omitempty"`
+	SpecSHA256             string       `json:"spec_sha256"`
+	RehearsalReceiptSHA256 string       `json:"rehearsal_receipt_sha256,omitempty"`
+	RehearsalGateSHA256    string       `json:"rehearsal_gate_sha256,omitempty"`
+	CaptureManifestSHA256  string       `json:"capture_manifest_sha256,omitempty"`
+	CaptureCompletedAt     *time.Time   `json:"capture_completed_at,omitempty"`
+	Sources                int          `json:"sources"`
+	Summary                Summary      `json:"summary"`
+	OAuth                  OAuthSummary `json:"oauth_evidence"`
+	CompletedAt            time.Time    `json:"completed_at,omitempty"`
 }
 
 type CheckOptions struct {
-	SpecPath string
+	SpecPath        string
+	RehearsalID     string
+	ReceiptOutput   string
+	Confirm         string
+	WritersQuiesced bool
 }
 
 type CaptureOptions struct {
 	SpecPath      string
+	RehearsalGate string
 	Destination   string
 	CaptureID     string
 	Confirm       string
 	WindowsFrozen bool
+}
+
+// SealRehearsalGateOptions identifies exactly three immutable rehearsal
+// receipts and one new private gate output. Sealing is strictly local and has
+// no remote transport dependency.
+type SealRehearsalGateOptions struct {
+	SpecPath     string
+	ReceiptPaths []string
+	GateOutput   string
 }
 
 // FinalDeltaOptions binds a separate, read-only final-delta verification to

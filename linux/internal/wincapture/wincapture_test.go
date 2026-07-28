@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -559,7 +560,7 @@ func TestCompareInventoriesDetectsContentAndIdentityDrift(t *testing.T) {
 func TestCollectionUsesBoundedReadOnlyConcurrency(t *testing.T) {
 	spec := validSpec(t)
 	transport := &concurrencyFixtureTransport{spec: spec}
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 	inventories, exclusions, _, err := engine.collect(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
@@ -577,10 +578,11 @@ func TestCapturePublishesPrivatelyAndIsIdempotent(t *testing.T) {
 	parent := privateTemp(t)
 	specPath := writeSpec(t, parent, spec)
 	transport := newFixtureTransport(t, spec)
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }, identity: fixtureIdentityProvider}
 	id := "frozen-capture-0001"
 	destination := filepath.Join(parent, id)
-	report, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
+	gate := writeTestRehearsalGate(t, specPath)
+	report, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: gate, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +591,7 @@ func TestCapturePublishesPrivatelyAndIsIdempotent(t *testing.T) {
 	}
 	assertPrivateTree(t, destination)
 	calls := transport.callCount()
-	second, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
+	second, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: gate, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
 	if err != nil || second != report || transport.callCount() != calls {
 		t.Fatalf("idempotent replay failed: %#v %v", second, err)
 	}
@@ -600,10 +602,11 @@ func TestExistingCaptureRevalidatesStoredContent(t *testing.T) {
 	parent := privateTemp(t)
 	specPath := writeSpec(t, parent, spec)
 	transport := newFixtureTransport(t, spec)
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }, identity: fixtureIdentityProvider}
 	id := "frozen-capture-tamper"
 	destination := filepath.Join(parent, id)
-	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err != nil {
+	gate := writeTestRehearsalGate(t, specPath)
+	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: gate, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err != nil {
 		t.Fatal(err)
 	}
 	firstSource := spec.Sources[0].Destination
@@ -611,7 +614,7 @@ func TestExistingCaptureRevalidatesStoredContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := transport.callCount()
-	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err == nil || !strings.Contains(err.Error(), "altered") {
+	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: gate, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err == nil || !strings.Contains(err.Error(), "altered") {
 		t.Fatalf("damaged existing capture was accepted: %v", err)
 	}
 	if transport.callCount() != calls {
@@ -624,17 +627,18 @@ func TestExistingCaptureRevalidatesEvidenceFiles(t *testing.T) {
 	parent := privateTemp(t)
 	specPath := writeSpec(t, parent, spec)
 	transport := newFixtureTransport(t, spec)
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }, identity: fixtureIdentityProvider}
 	id := "frozen-capture-evidence"
 	destination := filepath.Join(parent, id)
-	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err != nil {
+	gate := writeTestRehearsalGate(t, specPath)
+	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: gate, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(destination, "evidence-before.json"), []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	calls := transport.callCount()
-	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err == nil || !strings.Contains(err.Error(), "before evidence") {
+	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: gate, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err == nil || !strings.Contains(err.Error(), "before evidence") {
 		t.Fatalf("damaged capture evidence was accepted: %v", err)
 	}
 	if transport.callCount() != calls {
@@ -648,10 +652,10 @@ func TestCaptureDriftLeavesUnpublishedPartialEvidence(t *testing.T) {
 	specPath := writeSpec(t, parent, spec)
 	transport := newFixtureTransport(t, spec)
 	transport.driftAfterTar = true
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 	id := "frozen-capture-drift"
 	destination := filepath.Join(parent, id)
-	_, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
+	_, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: writeTestRehearsalGate(t, specPath), Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
 	if err == nil || !strings.Contains(err.Error(), "drift") {
 		t.Fatalf("expected drift failure, got %v", err)
 	}
@@ -671,16 +675,16 @@ func TestCaptureRequiresFreezeAndFreeSpace(t *testing.T) {
 	spec := validSpec(t)
 	parent := privateTemp(t)
 	specPath := writeSpec(t, parent, spec)
-	engine := &captureEngine{remote: newFixtureTransport(t, spec), expectedUID: uint32(os.Geteuid()), now: time.Now}
+	engine := &captureEngine{remote: newFixtureTransport(t, spec), expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 	id := "frozen-capture-gates"
-	_, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: filepath.Join(parent, id), CaptureID: id, Confirm: finalConfirmationPrefix + id})
+	_, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: writeTestRehearsalGate(t, specPath), Destination: filepath.Join(parent, id), CaptureID: id, Confirm: finalConfirmationPrefix + id})
 	if err == nil {
 		t.Fatal("capture accepted without external freeze declaration")
 	}
 	spec.Limits.MaxCaptureBytes = 2 << 40
 	spec.Limits.MinFreeBytes = 1 << 40
 	specPath = writeSpecNamed(t, parent, "large-spec.json", spec)
-	_, err = engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: filepath.Join(parent, id), CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
+	_, err = engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: writeTestRehearsalGate(t, specPath), Destination: filepath.Join(parent, id), CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
 	if err == nil || !strings.Contains(err.Error(), "free-space") {
 		t.Fatalf("free-space gate failed: %v", err)
 	}
@@ -694,8 +698,8 @@ func TestCheckRejectsChangedPrivateLocalInputBeforeWindowsContact(t *testing.T) 
 		t.Fatal(err)
 	}
 	transport := newFixtureTransport(t, spec)
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
-	if _, err := engine.check(context.Background(), CheckOptions{SpecPath: specPath}); err == nil || !strings.Contains(err.Error(), "local input") {
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
+	if _, err := engine.check(context.Background(), testCheckOptions(t, parent, specPath, "fixture-rehearsal-local-input")); err == nil || !strings.Contains(err.Error(), "local input") {
 		t.Fatalf("changed private local input was accepted: %v", err)
 	}
 	if transport.callCount() != 0 {
@@ -709,9 +713,9 @@ func TestFailedTarRetainsPartialAndRedactsTransportDetails(t *testing.T) {
 	specPath := writeSpec(t, parent, spec)
 	transport := newFixtureTransport(t, spec)
 	transport.tarError = errors.New("secret password=should-never-appear")
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 	id := "frozen-capture-error"
-	_, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: filepath.Join(parent, id), CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
+	_, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: writeTestRehearsalGate(t, specPath), Destination: filepath.Join(parent, id), CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true})
 	if err == nil || strings.Contains(err.Error(), "should-never-appear") {
 		t.Fatalf("transport error was not redacted: %v", err)
 	}
@@ -727,10 +731,10 @@ func TestENOSPCFailureKeepsUnpublishedPartial(t *testing.T) {
 	specPath := writeSpec(t, parent, spec)
 	transport := newFixtureTransport(t, spec)
 	transport.tarError = unix.ENOSPC
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 	id := "frozen-capture-enospc"
 	destination := filepath.Join(parent, id)
-	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err == nil {
+	if _, err := engine.capture(context.Background(), CaptureOptions{SpecPath: specPath, RehearsalGate: writeTestRehearsalGate(t, specPath), Destination: destination, CaptureID: id, Confirm: finalConfirmationPrefix + id, WindowsFrozen: true}); err == nil {
 		t.Fatal("ENOSPC capture failure was accepted")
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
@@ -815,6 +819,86 @@ func runScript(t *testing.T, action string, arguments ...string) ([]byte, error)
 	command.Stderr = io.Discard
 	err := command.Run()
 	return output.Bytes(), err
+}
+
+var fixtureExecutableIdentity = executableIdentity{
+	VCSRevision: strings.Repeat("a", 40),
+	SHA256:      strings.Repeat("b", 64),
+}
+
+func fixtureIdentityProvider() (executableIdentity, error) {
+	return fixtureExecutableIdentity, nil
+}
+
+func testCheckOptions(t *testing.T, parent, specPath, rehearsalID string) CheckOptions {
+	t.Helper()
+	return CheckOptions{
+		SpecPath: specPath, RehearsalID: rehearsalID,
+		ReceiptOutput:   filepath.Join(parent, rehearsalID+".receipt.json"),
+		WritersQuiesced: true, Confirm: "REHEARSAL-WRITERS-QUIESCED:" + rehearsalID,
+	}
+}
+
+func writeTestRehearsalGate(t *testing.T, specPath string) string {
+	t.Helper()
+	loaded, err := loadSpec(specPath, uint32(os.Geteuid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(1_700_000_000, 0).UTC()
+	transport := newFixtureTransport(t, loaded.value)
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+	inventories, exclusions, oauth, err := engine.collect(context.Background(), loaded.value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate, err := aggregateSummaries(inventories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := makeRehearsalCollectionRecord(makeRehearsalCollection(inventories, exclusions, oauth, aggregate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := make([]rehearsalReceiptBinding, rehearsalGateReceiptCount)
+	for index := range bindings {
+		receipt := rehearsalReceipt{
+			SchemaVersion: rehearsalReceiptSchemaVersion, Status: "complete-read-only-rehearsal",
+			RehearsalID: "fixture-rehearsal-000" + strconv.Itoa(index+1), WritersQuiesced: true,
+			ConfirmationClass: "REHEARSAL-WRITERS-QUIESCED", SpecSHA256: loaded.digest,
+			Executable: fixtureExecutableIdentity, SourceCount: len(loaded.value.Sources), CollectionCount: rehearsalCollectionCount,
+			StartedAt: base.Add(time.Duration(index*2) * time.Minute), CompletedAt: base.Add(time.Duration(index*2+1) * time.Minute),
+			Collections: []rehearsalCollectionRecord{record, record},
+		}
+		receiptPayload, err := marshalPrivateJSON(receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bindings[index] = rehearsalReceiptBinding{Receipt: receipt, ReceiptSHA256: sha256Bytes(receiptPayload)}
+	}
+	gate := rehearsalGate{
+		SchemaVersion: rehearsalGateSchemaVersion, Status: "sealed-three-rehearsal-gate",
+		SpecSHA256: loaded.digest, Executable: fixtureExecutableIdentity, SourceCount: len(loaded.value.Sources),
+		ReceiptCount: rehearsalGateReceiptCount, CollectionCount: rehearsalCollectionCount,
+		CrossRunState: "identical", Receipts: bindings, SealedAt: base.Add(10 * time.Minute),
+	}
+	if err := validateRehearsalGate(gate); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := marshalPrivateJSON(gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(filepath.Dir(specPath), "fixture-gate-"+loaded.digest[:16]+".json")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func validSpec(t *testing.T) Spec {

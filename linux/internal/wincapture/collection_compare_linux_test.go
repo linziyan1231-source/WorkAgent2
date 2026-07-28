@@ -113,12 +113,20 @@ func TestCheckReportHasRealCompletionTime(t *testing.T) {
 	parent := privateTemp(t)
 	specPath := writeSpec(t, parent, spec)
 	completed := time.Unix(1_900_000_123, 0).UTC()
+	nowCalls := 0
 	engine := &captureEngine{
 		remote:      newFixtureTransport(t, spec),
 		expectedUID: uint32(os.Geteuid()),
-		now:         func() time.Time { return completed },
+		now: func() time.Time {
+			nowCalls++
+			if nowCalls == 1 {
+				return completed.Add(-time.Minute)
+			}
+			return completed
+		},
+		identity: fixtureIdentityProvider,
 	}
-	report, err := engine.check(context.Background(), CheckOptions{SpecPath: specPath})
+	report, err := engine.check(context.Background(), testCheckOptions(t, parent, specPath, "fixture-rehearsal-completion"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +153,8 @@ func TestCheckRejectsSpecDriftAfterRemoteCollections(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
-	if _, err := engine.check(context.Background(), CheckOptions{SpecPath: specPath}); err == nil || !strings.Contains(err.Error(), "spec drifted") {
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
+	if _, err := engine.check(context.Background(), testCheckOptions(t, parent, specPath, "fixture-rehearsal-spec-drift")); err == nil || !strings.Contains(err.Error(), "spec drifted") {
 		t.Fatalf("post-collection spec drift was accepted: %v", err)
 	}
 }

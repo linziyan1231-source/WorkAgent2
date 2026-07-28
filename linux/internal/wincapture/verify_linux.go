@@ -18,10 +18,11 @@ import (
 )
 
 type captureJournal struct {
-	SchemaVersion int    `json:"schema_version"`
-	Status        string `json:"status"`
-	CaptureID     string `json:"capture_id"`
-	SpecSHA256    string `json:"spec_sha256"`
+	SchemaVersion       int    `json:"schema_version"`
+	Status              string `json:"status"`
+	CaptureID           string `json:"capture_id"`
+	SpecSHA256          string `json:"spec_sha256"`
+	RehearsalGateSHA256 string `json:"rehearsal_gate_sha256"`
 }
 
 func verifyStoredCapture(rootFD int, spec Spec, manifest finalManifest, expectedUID uint32) error {
@@ -34,8 +35,15 @@ func verifyStoredCapture(rootFD int, spec Spec, manifest finalManifest, expected
 	}
 	var journal captureJournal
 	if err := readStoredStrictJSONAt(rootFD, "journal-start.json", 1024*1024, expectedUID, &journal); err != nil ||
-		journal.SchemaVersion != 1 || journal.Status != "in-progress" || journal.CaptureID != manifest.CaptureID || journal.SpecSHA256 != manifest.SpecSHA256 {
+		journal.SchemaVersion != 2 || journal.Status != "in-progress" || journal.CaptureID != manifest.CaptureID || journal.SpecSHA256 != manifest.SpecSHA256 ||
+		journal.RehearsalGateSHA256 != manifest.RehearsalGateSHA256 {
 		return errors.New("existing capture start journal is invalid")
+	}
+	var gate rehearsalGate
+	gateDigest, err := readStoredCanonicalJSONAtDigest(rootFD, "rehearsal-gate.json", maxRehearsalMetadataBytes, expectedUID, &gate)
+	if err != nil || gateDigest != manifest.RehearsalGateSHA256 || validateRehearsalGate(gate) != nil ||
+		gate.SpecSHA256 != manifest.SpecSHA256 || gate.SourceCount != len(spec.Sources) || validateRehearsalGateAgainstSpec(gate, spec) != nil {
+		return errors.New("existing capture rehearsal gate is invalid")
 	}
 	var beforeEvidence, afterEvidence evidenceFile
 	if err := readStoredStrictJSONAt(rootFD, "evidence-before.json", 8*1024*1024, expectedUID, &beforeEvidence); err != nil ||
@@ -47,7 +55,7 @@ func verifyStoredCapture(rootFD int, spec Spec, manifest finalManifest, expected
 		return errors.New("existing capture after evidence is invalid")
 	}
 	stored := make([]inventory, len(spec.Sources))
-	allowedRoots := []string{"journal-start.json", "evidence-before.json", "evidence-after.json", "capture-manifest.json"}
+	allowedRoots := []string{"journal-start.json", "rehearsal-gate.json", "evidence-before.json", "evidence-after.json", "capture-manifest.json"}
 	for index, source := range spec.Sources {
 		if manifest.Before[index].Summary != manifest.Captured[index].Summary || manifest.After[index].Summary != manifest.Captured[index].Summary ||
 			manifest.Before[index].ArchiveSHA256 != manifest.Captured[index].ArchiveSHA256 || manifest.After[index].ArchiveSHA256 != manifest.Captured[index].ArchiveSHA256 ||
@@ -129,6 +137,22 @@ func readStoredStrictJSONAtDigest(rootFD int, relative string, maximum int64, ex
 	}
 	digest := sha256.Sum256(payload)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func readStoredCanonicalJSONAtDigest(rootFD int, relative string, maximum int64, expectedUID uint32, destination any) (string, error) {
+	digest, err := readStoredStrictJSONAtDigest(rootFD, relative, maximum, expectedUID, destination)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := marshalPrivateJSON(destination)
+	if err != nil {
+		return "", errors.New("stored capture metadata cannot be canonically encoded")
+	}
+	defer clear(canonical)
+	if sha256Bytes(canonical) != digest {
+		return "", errors.New("stored capture metadata is not canonical JSON")
+	}
+	return digest, nil
 }
 
 func inventoryStoredSource(rootFD int, source Source, expectedUID uint32) (inventory, error) {

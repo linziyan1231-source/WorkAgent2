@@ -107,7 +107,7 @@ func validateSpec(spec Spec) error {
 	}
 	roles := make(map[string]int)
 	ids := make(map[string]bool)
-	destinations := []string{"journal-start.json", "evidence-before.json", "evidence-after.json", "capture-manifest.json", "failure.json"}
+	destinations := []string{"journal-start.json", "rehearsal-gate.json", "evidence-before.json", "evidence-after.json", "capture-manifest.json", "failure.json"}
 	sourcePaths := make([]string, 0, len(spec.Sources))
 	var declaredFiles, declaredBytes int64
 	for index := range spec.Sources {

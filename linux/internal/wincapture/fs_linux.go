@@ -202,6 +202,13 @@ func writePrivateJSONAt(rootFD int, relative string, value any) error {
 		return err
 	}
 	defer clear(payload)
+	return writePrivatePayloadAt(rootFD, relative, payload)
+}
+
+func writePrivatePayloadAt(rootFD int, relative string, payload []byte) error {
+	if len(payload) < 1 || len(payload) > maxRehearsalMetadataBytes {
+		return errors.New("private capture metadata payload is invalid")
+	}
 	file, err := createFileAt(rootFD, relative)
 	if err != nil {
 		return err

@@ -100,41 +100,104 @@ and the inventory protocol are NUL-delimited.
 
 ## Read-only rehearsal
 
-Run from the Linux migration host as root:
+Every rehearsal requires an operator-established temporary quiescence window
+covering the complete invocation. The tool cannot establish or verify that
+window; `--writers-quiesced` plus the exact confirmation token is an explicit
+operator declaration that the external action has already happened. It is not
+the final continuous cutover freeze and must not be replaced with
+`--windows-frozen`.
+
+Run from the Linux migration host as root, using a fresh ID and an absent
+receipt path below a real root-owned `0700` directory:
+
+```bash
+rehearsal_id=rehearsal-20260727t090000z-01
+/opt/workagent/migration-tools/bin/workagent-capture-windows \
+  --spec /root/private/workagent-final-capture.json \
+  --check \
+  --rehearsal-id "$rehearsal_id" \
+  --receipt-output "/root/private/windows-rehearsals/$rehearsal_id.json" \
+  --writers-quiesced \
+  --confirm "REHEARSAL-WRITERS-QUIESCED:$rehearsal_id"
+```
+
+The output parent is opened once and its exact directory descriptor is held
+with a nonblocking exclusive advisory lock for the complete attempt. Temporary
+file creation, no-replace rename, and directory sync all use that same
+descriptor. Immediately before and after publication, the original path must
+still resolve to the same private directory device/inode; namespace rotation
+or replacement fails closed. The invocation has a conservative 24-hour
+run-level timeout; this is in addition to each remote command's 12-hour
+deadline and applies only
+to `--check`, not to final capture. Missing declaration, a wrong token, an
+unsafe or colliding output, private-input failure, or executable-identity
+failure is rejected before the first SSH call.
+
+Success atomically publishes one strict canonical, root-owned, single-link
+`0600` receipt. A partial file is synced, the parent is synced, publication
+uses `RENAME_NOREPLACE`, and the parent is synced again. Existing output always
+fails closed—even when its bytes match—so every counted attempt is fresh. The
+receipt, rather than the anonymous stdout convenience report, is the durable
+success boundary. A later stdout encoding or broken-pipe failure does not
+invalidate an already published receipt; gate sealing consumes receipts only.
+If a command reports an error after the no-replace rename because a durability
+sync could not be confirmed, do not count stdout and do not reuse that path.
+The sealer's later canonical, descriptor-stable read plus file-and-parent sync
+is the only recovery path that can establish whether the named receipt is
+durable and admissible.
+
+The receipt binds the fresh rehearsal ID, the external-quiescence declaration
+class (not an unverifiable window name), private-spec digest, source count,
+and actual UTC remote-window start/end (the start is sampled immediately before
+the first collection after all local preflight checks). It also binds exactly
+two complete anonymous collection-evidence
+objects and their recomputed digests, and an executable identity. That identity
+requires clean Go VCS metadata (`vcs.modified=false`), its exact Git revision,
+the exact capture-command Go main path, and a stable SHA-256/build-info read
+through one `/proc/self/exe` descriptor. The executable must be the root-owned,
+single-link `0500` release file and is checked before and after the remote
+work. Each collection includes every anonymous source slot's content,
+archive, inventory-identity and approved-exclusion evidence, plus anonymous
+OAuth evidence and a recomputed aggregate. The receipt is written only after
+the two collections match and the spec, pinned local inputs, and executable
+identity pass their ending revalidation.
+
+Run exactly three separate successful attempts with distinct IDs and
+nonoverlapping intervals, restoring writers only outside each operator-managed
+temporary quiescence as appropriate. Evidence may legitimately change between
+attempts. Seal the three receipts locally; sealing never constructs a Windows
+transport and its output path must also be new:
 
 ```bash
 /opt/workagent/migration-tools/bin/workagent-capture-windows \
+  --seal-rehearsal-gate \
   --spec /root/private/workagent-final-capture.json \
-  --check
+  --rehearsal-receipt /root/private/windows-rehearsals/rehearsal-20260727t090000z-01.json \
+  --rehearsal-receipt /root/private/windows-rehearsals/rehearsal-20260727t110000z-02.json \
+  --rehearsal-receipt /root/private/windows-rehearsals/rehearsal-20260727t130000z-03.json \
+  --gate-output /root/private/windows-rehearsals/three-of-three.gate.json
 ```
 
-Although this mode cannot declare or produce a final frozen capture, a useful
-rehearsal still needs an operator-established temporary quiescence window. Stop
-or otherwise fence every WorkAgent writer outside this tool, including
-CLIProxyAPI OAuth refreshes, for the complete invocation. Do not pass
-`--windows-frozen`: temporary rehearsal quiescence is not the final continuous
-cutover freeze and the tool remains strictly read-only.
+The sealer strictly and canonically rereads all three private `0600` receipts,
+the current private spec and its pinned local inputs, and the current
+root-owned `0500` capture executable. It recomputes collection digests and
+aggregates, and requires unique receipt paths, IDs and file digests;
+nonoverlapping intervals; and one binary SHA, clean VCS revision, current spec
+digest, and source count. It does not require mutable Windows evidence to be
+equal across attempts. The gate embeds all three complete canonical receipts
+and their file digests, so it remains independently revalidatable without the
+external receipt files. It records the factual `cross_run_state` value
+`identical` or `varied`; validation recomputes that fact from the embedded
+evidence. Receipt and gate errors and stdout reports remain anonymous.
+The gate output parent is likewise held by one directory descriptor from
+preflight through publication and must retain the same path device/inode.
 
-Run at least three separate successful rehearsals before establishing the
-final external freeze. Each successful invocation independently proves that
-its own before/after source, approved-exclusion, and anonymous OAuth evidence
-converged. If production writers resume between separate rehearsal windows,
-the anonymous aggregate and OAuth summaries may legitimately differ across
-their reports; do not reject those successes merely because the reports are
-not byte-identical. If all three invocations run inside one continuous
-quiescence window, their summaries must remain identical. Preserve each JSON
-report together with its UTC start/end, exit status, source revision, and the
-binary and private-spec SHA-256 values in a root-only evidence directory. The
-report's `completed_at` is the tool-recorded successful completion time.
-
-Any nonzero invocation is a failed attempt and does not count toward the three
-successes. One failure reports every detected anonymous drift class: OAuth
-file-count, aggregate-byte, and digest changes plus source and
-approved-exclusion slot numbers. It never emits a Windows path, tenant leaf,
-OAuth filename, digest value, or content. Do not immediately repeat a drift
-failure while known writers remain active. All three successes must bind the
-same binary, private-spec digest, and source count. A rehearsal still is not a
-snapshot and must never be substituted for the frozen final capture.
+A failed or drifted attempt produces no receipt and cannot count. One failure
+reports every detected anonymous drift class: OAuth file-count,
+aggregate-byte, and digest changes plus source and approved-exclusion slot
+numbers. It never emits a Windows path, tenant leaf, OAuth filename, digest
+value, or content. A rehearsal and its 3/3 gate are still not a snapshot and
+must never be substituted for the frozen final capture.
 
 The command invokes only the fixed SSH target and a static `bash -s` program.
 All data arguments are lowercase hex, SSH is batch-only with TTY and forwarding
@@ -143,7 +206,8 @@ disabled, and the remote external programs are fixed to
 `/usr/bin/tar`.
 Remote stderr and stdout are hard bounded. Stderr text is never returned or
 stored. Every remote read-only command has a 12-hour wall-clock deadline and a
-bounded post-cancellation wait. Inventory and OAuth walks enforce their entry
+bounded post-cancellation wait; the complete rehearsal has the separate
+24-hour ceiling described above. Inventory and OAuth walks enforce their entry
 and byte ceilings incrementally, before hashing the next admitted file, and
 the Linux parser independently rechecks the same limits. Inventory collection
 uses at most four concurrent read-only SSH
@@ -165,6 +229,7 @@ that ID and an existing completed capture is never overwritten:
 capture_id=cutover-20260727t120000z
 /opt/workagent/migration-tools/bin/workagent-capture-windows \
   --spec /root/private/workagent-final-capture.json \
+  --rehearsal-gate /root/private/windows-rehearsals/three-of-three.gate.json \
   --capture \
   --capture-id "$capture_id" \
   --destination "/root/private/windows-captures/$capture_id" \
@@ -175,6 +240,13 @@ capture_id=cutover-20260727t120000z
 `--windows-frozen` is a declaration of an already-established external freeze;
 it does not perform one. Keep the freeze in place until the command reports
 `complete-frozen-capture`.
+
+Before opening SSH or creating a destination partial, capture strictly verifies
+the canonical gate and requires its spec digest, source count, executable
+SHA-256, and clean Git revision to match the current capture invocation. The
+exact gate bytes are copied into the partial. Their SHA-256 is bound by the
+schema-v2 start journal and schema-v2 completion manifest. A completed-capture
+replay must supply that same gate; a different gate fails before remote access.
 
 Files are streamed directly to a sibling private `.partial-*` directory.
 Archive traversal, duplicate names, unapproved symlinks, hardlinks, devices,
@@ -196,8 +268,9 @@ reopened and rehashed before publication, and publication uses
 Replaying the same completed request does not contact Windows. It reopens the
 private spec, traverses every captured destination without following links,
 rehashes all files and pinned local inputs, validates the start journal and
-both evidence documents against the completion manifest, rejects unexpected
-entries, and matches the complete manifest before returning success.
+both evidence documents and the preserved canonical rehearsal gate against the
+completion manifest, rejects unexpected entries, and matches the complete
+manifest before returning success.
 
 ## Separate final-delta check
 
@@ -224,10 +297,13 @@ substitute for the external freeze. Before opening any SSH channel, it:
    root-owned private directories;
 3. strictly decodes and stably hashes the exact `capture-manifest.json` bytes;
 4. revalidates the start journal, before/after evidence, every captured file,
-   directory and admitted symbolic link, the complete stored layout, and the
-   aggregate; and
+   directory and admitted symbolic link, the preserved canonical rehearsal
+   gate, the complete stored layout, and the aggregate; and
 5. rereads the spec, local inputs, and manifest so a change during local
-   verification fails before Windows is contacted.
+   verification fails before Windows is contacted; and
+6. requires the current root-owned `0500` executable SHA-256 and clean Git
+   revision to match the executable embedded in that preserved gate, then
+   rereads the executable identity immediately before the first SSH call.
 
 Only after all local checks pass does it collect two new Windows inventories
 and anonymous OAuth evidence sets through the fixed read-only SSH protocol.
@@ -236,8 +312,10 @@ capture's before and after evidence, including source identity/content/archive
 projections, each approved-exclusion digest, OAuth count/bytes/digest, source
 cardinality, and aggregate. It then repeats the complete local capture gate and
 requires the exact same binding before reporting success, so local capture or
-input drift during the remote window also fails closed. The mode never streams
-tar data and has no Windows mutation capability.
+input drift during the remote window also fails closed. It then rereads the
+current executable identity; any binary drift during the final-delta window
+suppresses success. The mode never streams tar data and has no Windows mutation
+capability.
 
 Success is the anonymous `complete-frozen-final-delta` JSON report. It binds
 the capture ID, private spec digest, exact completion-manifest digest, original
@@ -252,6 +330,11 @@ The local-only Go API
 exposes the verified capture ID, spec digest, exact manifest digest, original
 completion time, and aggregate for later private migration evidence. It
 performs the same complete local integrity gate and cannot contact Windows.
+Its binding schema remains version 1: the exact schema-v2 manifest digest is
+the transitive binding to the preserved rehearsal-gate digest and bytes.
+This deliberately local-only verifier validates the stored gate but does not
+require the original capture executable to remain installed; only operations
+that can contact Windows enforce the live executable identity.
 
 Do not activate Linux production or describe the cutover as final until the
 offline migration gates and this separate final-delta check pass while the

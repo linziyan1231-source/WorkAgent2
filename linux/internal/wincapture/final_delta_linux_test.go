@@ -18,7 +18,7 @@ func TestFinalDeltaRevalidatesThenMatchesAndReplays(t *testing.T) {
 	spec, specPath, destination, id := completedCaptureFixture(t)
 	transport := newFixtureTransport(t, spec)
 	verifiedAt := time.Unix(1_900_000_000, 0).UTC()
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return verifiedAt }}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: func() time.Time { return verifiedAt }, identity: fixtureIdentityProvider}
 	options := FinalDeltaOptions{
 		SpecPath: specPath, Destination: destination, CaptureID: id,
 		Confirm: finalDeltaConfirmationPrefix + id, WindowsFrozen: true,
@@ -47,7 +47,7 @@ func TestFinalDeltaRevalidatesThenMatchesAndReplays(t *testing.T) {
 			t.Fatalf("redacted final-delta report exposed private input %q", secret)
 		}
 	}
-	for _, required := range []string{"\"schema_version\":1", "\"capture_manifest_sha256\"", "\"capture_completed_at\"", "\"oauth_evidence\""} {
+	for _, required := range []string{"\"schema_version\":1", "\"rehearsal_gate_sha256\"", "\"capture_manifest_sha256\"", "\"capture_completed_at\"", "\"oauth_evidence\""} {
 		if !strings.Contains(string(firstJSON), required) {
 			t.Fatalf("final-delta report schema omitted %s: %s", required, firstJSON)
 		}
@@ -56,7 +56,7 @@ func TestFinalDeltaRevalidatesThenMatchesAndReplays(t *testing.T) {
 	if err := json.Unmarshal(firstJSON, &schema); err != nil {
 		t.Fatal(err)
 	}
-	wantFields := []string{"schema_version", "status", "capture_id", "spec_sha256", "capture_manifest_sha256", "capture_completed_at", "sources", "summary", "oauth_evidence", "completed_at"}
+	wantFields := []string{"schema_version", "status", "capture_id", "spec_sha256", "rehearsal_gate_sha256", "capture_manifest_sha256", "capture_completed_at", "sources", "summary", "oauth_evidence", "completed_at"}
 	if len(schema) != len(wantFields) {
 		t.Fatalf("final-delta report field count = %d: %s", len(schema), firstJSON)
 	}
@@ -127,6 +127,71 @@ func TestFinalDeltaLocalIntegrityFailuresNeverContactWindows(t *testing.T) {
 	})
 }
 
+func TestFinalDeltaBindsExactExecutableBeforeAndAfterRemoteAccess(t *testing.T) {
+	newRun := func(t *testing.T, identity identityProvider) (*fixtureTransport, int, error) {
+		t.Helper()
+		spec, specPath, destination, id := completedCaptureFixture(t)
+		transport := newFixtureTransport(t, spec)
+		engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: identity}
+		_, err := engine.verifyFinalDelta(context.Background(), FinalDeltaOptions{
+			SpecPath: specPath, Destination: destination, CaptureID: id,
+			Confirm: finalDeltaConfirmationPrefix + id, WindowsFrozen: true,
+		})
+		return transport, 2 * (2*len(spec.Sources) + 1), err
+	}
+
+	t.Run("identity-unavailable", func(t *testing.T) {
+		transport, _, err := newRun(t, nil)
+		if err == nil || transport.callCount() != 0 {
+			t.Fatalf("missing executable identity reached Windows: %v / %d", err, transport.callCount())
+		}
+	})
+
+	t.Run("gate-mismatch", func(t *testing.T) {
+		mismatch := func() (executableIdentity, error) {
+			identity := fixtureExecutableIdentity
+			identity.SHA256 = strings.Repeat("f", 64)
+			return identity, nil
+		}
+		transport, _, err := newRun(t, mismatch)
+		if err == nil || !strings.Contains(err.Error(), "does not match") || transport.callCount() != 0 {
+			t.Fatalf("mismatched executable identity reached Windows: %v / %d", err, transport.callCount())
+		}
+	})
+
+	t.Run("pre-remote-drift", func(t *testing.T) {
+		calls := 0
+		drift := func() (executableIdentity, error) {
+			calls++
+			identity := fixtureExecutableIdentity
+			if calls == 2 {
+				identity.SHA256 = strings.Repeat("f", 64)
+			}
+			return identity, nil
+		}
+		transport, _, err := newRun(t, drift)
+		if err == nil || !strings.Contains(err.Error(), "before final-delta remote access") || transport.callCount() != 0 {
+			t.Fatalf("pre-remote executable drift reached Windows: %v / %d", err, transport.callCount())
+		}
+	})
+
+	t.Run("post-remote-drift", func(t *testing.T) {
+		calls := 0
+		drift := func() (executableIdentity, error) {
+			calls++
+			identity := fixtureExecutableIdentity
+			if calls == 3 {
+				identity.SHA256 = strings.Repeat("f", 64)
+			}
+			return identity, nil
+		}
+		transport, wantCalls, err := newRun(t, drift)
+		if err == nil || !strings.Contains(err.Error(), "drifted during") || transport.callCount() != wantCalls {
+			t.Fatalf("post-remote executable drift was accepted: %v / %d", err, transport.callCount())
+		}
+	})
+}
+
 func TestFinalDeltaFailsClosedOnStableMismatchAndInterPassDrift(t *testing.T) {
 	for _, test := range []struct {
 		name                 string
@@ -142,7 +207,7 @@ func TestFinalDeltaFailsClosedOnStableMismatchAndInterPassDrift(t *testing.T) {
 			transport := newFixtureTransport(t, spec)
 			transport.inventoryMismatch = test.stableMismatch
 			transport.driftAfterCollection = test.driftAfterCollection
-			engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+			engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 			_, err := engine.verifyFinalDelta(context.Background(), FinalDeltaOptions{
 				SpecPath: specPath, Destination: destination, CaptureID: id,
 				Confirm: finalDeltaConfirmationPrefix + id, WindowsFrozen: true,
@@ -200,7 +265,7 @@ func TestVerifyCompletedCaptureReturnsExactStableManifestBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantDigest := sha256.Sum256(payload)
-	binding, _, manifest, err := verifyCompletedCapture(CompletedCaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id}, uint32(os.Geteuid()))
+	binding, _, manifest, _, err := verifyCompletedCapture(CompletedCaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id}, uint32(os.Geteuid()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +273,7 @@ func TestVerifyCompletedCaptureReturnsExactStableManifestBinding(t *testing.T) {
 		binding.CaptureManifestSHA256 != hex.EncodeToString(wantDigest[:]) || binding.CompletedAt != manifest.CompletedAt || binding.Aggregate != manifest.Aggregate {
 		t.Fatalf("completed capture binding is incomplete: %#v", binding)
 	}
-	replayed, _, _, err := verifyCompletedCapture(CompletedCaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id}, uint32(os.Geteuid()))
+	replayed, _, _, _, err := verifyCompletedCapture(CompletedCaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id}, uint32(os.Geteuid()))
 	if err != nil || replayed != binding {
 		t.Fatalf("completed capture local replay changed its binding: %#v / %#v / %v", binding, replayed, err)
 	}
@@ -245,9 +310,9 @@ func completedCaptureFixture(t *testing.T) (Spec, string, string, string) {
 	spec = loaded.value
 	id := "frozen-final-delta-0001"
 	destination := filepath.Join(parent, id)
-	engine := &captureEngine{remote: newFixtureTransport(t, spec), expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }}
+	engine := &captureEngine{remote: newFixtureTransport(t, spec), expectedUID: uint32(os.Geteuid()), now: func() time.Time { return time.Unix(1_800_000_000, 0).UTC() }, identity: fixtureIdentityProvider}
 	if _, err := engine.capture(context.Background(), CaptureOptions{
-		SpecPath: specPath, Destination: destination, CaptureID: id,
+		SpecPath: specPath, RehearsalGate: writeTestRehearsalGate(t, specPath), Destination: destination, CaptureID: id,
 		Confirm: finalConfirmationPrefix + id, WindowsFrozen: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -258,7 +323,7 @@ func completedCaptureFixture(t *testing.T) (Spec, string, string, string) {
 func assertFinalDeltaFailsBeforeTransport(t *testing.T, spec Spec, specPath, destination, id string) {
 	t.Helper()
 	transport := newFixtureTransport(t, spec)
-	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now}
+	engine := &captureEngine{remote: transport, expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider}
 	_, err := engine.verifyFinalDelta(context.Background(), FinalDeltaOptions{
 		SpecPath: specPath, Destination: destination, CaptureID: id,
 		Confirm: finalDeltaConfirmationPrefix + id, WindowsFrozen: true,
