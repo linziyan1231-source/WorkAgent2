@@ -51,8 +51,8 @@ type PreflightEvidence struct {
 	TargetManifest ProtectedFileEvidence            `json:"target_manifest"`
 	PortalConfig   ProtectedFileEvidence            `json:"portal_config"`
 	TenantConfigs  map[string]ProtectedFileEvidence `json:"tenant_configs"`
-	BackupConfig   ProtectedFileEvidence            `json:"backup_config"`
-	BackupKey      ProtectedFileEvidence            `json:"backup_key"`
+	BackupConfig   *ProtectedFileEvidence           `json:"backup_config,omitempty"`
+	BackupKey      *ProtectedFileEvidence           `json:"backup_key,omitempty"`
 	BrandID        string                           `json:"brand_id"`
 	BrandConfig    ProtectedFileEvidence            `json:"brand_config"`
 	BrandAssets    map[string]ProtectedFileEvidence `json:"brand_assets"`
@@ -85,12 +85,19 @@ func (i PreflightInputs) Validate() error {
 	for label, path := range map[string]string{
 		"target manifest": i.TargetManifestPath,
 		"Portal config": i.PortalConfigPath,
-		"backup config": i.BackupConfigPath, "backup key": i.BackupKeyPath,
 		"brand config": i.BrandConfigPath, "policy config": i.PolicyConfigPath,
 	} {
 		if !cleanAbsolute(path) {
 			return fmt.Errorf("preflight %s path is invalid", label)
 		}
+	}
+	// Backup evidence is a matched pair: both paths empty means backup is
+	// deferred; exactly one is a contract violation.
+	if (i.BackupConfigPath == "") != (i.BackupKeyPath == "") {
+		return errors.New("preflight backup config and key must be both present or both deferred")
+	}
+	if i.BackupConfigPath != "" && (!cleanAbsolute(i.BackupConfigPath) || !cleanAbsolute(i.BackupKeyPath)) {
+		return errors.New("preflight backup config or key path is invalid")
 	}
 	if filepath.Base(i.TargetManifestPath) != "manifest.json" {
 		return errors.New("preflight target manifest path is not canonical")
@@ -130,11 +137,17 @@ func (e PreflightEvidence) Validate() error {
 	}
 	for _, file := range []ProtectedFileEvidence{
 		e.TargetManifest, e.PortalConfig,
-		e.BackupConfig, e.BackupKey, e.BrandConfig, e.PolicyConfig,
+		e.BrandConfig, e.PolicyConfig,
 	} {
 		if err := file.Validate(); err != nil {
 			return err
 		}
+	}
+	if (e.BackupConfig == nil) != (e.BackupKey == nil) {
+		return errors.New("release preflight backup evidence must be both present or both deferred")
+	}
+	if e.BackupConfig != nil && (e.BackupConfig.Validate() != nil || e.BackupKey.Validate() != nil) {
+		return errors.New("release preflight backup evidence is invalid")
 	}
 	if len(e.TenantConfigs) == 0 || len(e.TenantConfigs) > 10000 {
 		return errors.New("release preflight tenant evidence is missing or too large")
@@ -171,17 +184,22 @@ func capturePreflightEvidence(inputs PreflightInputs, requireRootOwner bool) (Pr
 		TenantConfigs: make(map[string]ProtectedFileEvidence, len(inputs.TenantConfigPaths)),
 		BrandAssets:   make(map[string]ProtectedFileEvidence, len(inputs.BrandAssetPaths)),
 	}
-	files := []struct {
+	type fileBinding struct {
 		label string
 		path  string
 		set   func(ProtectedFileEvidence)
-	}{
+	}
+	files := []fileBinding{
 		{"target manifest", inputs.TargetManifestPath, func(value ProtectedFileEvidence) { evidence.TargetManifest = value }},
 		{"Portal config", inputs.PortalConfigPath, func(value ProtectedFileEvidence) { evidence.PortalConfig = value }},
-		{"backup config", inputs.BackupConfigPath, func(value ProtectedFileEvidence) { evidence.BackupConfig = value }},
-		{"backup key", inputs.BackupKeyPath, func(value ProtectedFileEvidence) { evidence.BackupKey = value }},
 		{"brand config", inputs.BrandConfigPath, func(value ProtectedFileEvidence) { evidence.BrandConfig = value }},
 		{"policy config", inputs.PolicyConfigPath, func(value ProtectedFileEvidence) { evidence.PolicyConfig = value }},
+	}
+	if inputs.BackupConfigPath != "" {
+		files = append(files,
+			fileBinding{"backup config", inputs.BackupConfigPath, func(value ProtectedFileEvidence) { evidence.BackupConfig = &value }},
+			fileBinding{"backup key", inputs.BackupKeyPath, func(value ProtectedFileEvidence) { evidence.BackupKey = &value }},
+		)
 	}
 	for _, file := range files {
 		value, err := capture(file.label, file.path)

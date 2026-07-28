@@ -846,3 +846,23 @@ func TestPreflightRejectsStaleEarlyOrWrongMaintenanceNotice(t *testing.T) {
 		})
 	}
 }
+
+func TestPreflightBackupEvidenceIsAMatchedPairOrDeferred(t *testing.T) {
+	inputs := PreflightInputs{}
+	inputs.BackupConfigPath, inputs.BackupKeyPath = "/a", ""
+	if err := inputs.Validate(); err == nil {
+		t.Fatal("backup config without its key was accepted")
+	}
+	inputs.BackupConfigPath, inputs.BackupKeyPath = "", "/b"
+	if err := inputs.Validate(); err == nil {
+		t.Fatal("backup key without its config was accepted")
+	}
+	evidence := PreflightEvidence{BackupConfig: &ProtectedFileEvidence{}}
+	if err := evidence.Validate(); err == nil {
+		t.Fatal("backup config evidence without key evidence was accepted")
+	}
+	evidence = PreflightEvidence{BackupKey: &ProtectedFileEvidence{}}
+	if err := evidence.Validate(); err == nil {
+		t.Fatal("backup key evidence without config evidence was accepted")
+	}
+}

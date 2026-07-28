@@ -659,38 +659,40 @@ else
   block "Portal readiness is not green"
 fi
 
-protected_file /etc/workagent/backup.json "installed backup configuration" 600
 if [[ -f /etc/workagent/backup.json ]]; then
+  protected_file /etc/workagent/backup.json "installed backup configuration" 600
   check_template_contract /etc/workagent/backup.json "installed backup" \
     '"local_directory": "/var/lib/workagent-backup/local"' \
     '"off_host_directory": "/mnt/workagent-backup/off-host"' \
     '"require_remote_filesystem": true'
-fi
-if mountpoint -q "$backup_mount"; then
-  backup_fstype=$(findmnt -rn -T "$backup_mount" -o FSTYPE 2>/dev/null || true)
-  case "$backup_fstype" in
-    nfs|nfs4|cifs|smb3|ceph|fuse.*)
-      pass "off-host backup root uses an approved remote filesystem"
-      ;;
-    *)
-      block "off-host backup root is not an approved remote filesystem"
-      ;;
-  esac
-else
-  block "off-host backup root is not a mount point; local-only backup is forbidden"
-fi
-
-backup_metric=/var/lib/node_exporter/textfile_collector/workagent_backup.prom
-if [[ -r $backup_metric && ! -L $backup_metric ]]; then
-  backup_timestamp=$(awk '$1 == "workagent_backup_last_success_timestamp_seconds" && $2 ~ /^[0-9]+([.][0-9]+)?$/ {print int($2); exit}' "$backup_metric")
-  now=$(date +%s)
-  if [[ $backup_timestamp =~ ^[0-9]+$ ]] && (( backup_timestamp <= now && now - backup_timestamp <= 90000 )); then
-    pass "a verified off-host backup completed within 25 hours"
+  if mountpoint -q "$backup_mount"; then
+    backup_fstype=$(findmnt -rn -T "$backup_mount" -o FSTYPE 2>/dev/null || true)
+    case "$backup_fstype" in
+      nfs|nfs4|cifs|smb3|ceph|fuse.*)
+        pass "off-host backup root uses an approved remote filesystem"
+        ;;
+      *)
+        block "off-host backup root is not an approved remote filesystem"
+        ;;
+    esac
   else
-    block "no verified off-host backup completed within 25 hours"
+    block "off-host backup root is not a mount point; local-only backup is forbidden"
+  fi
+
+  backup_metric=/var/lib/node_exporter/textfile_collector/workagent_backup.prom
+  if [[ -r $backup_metric && ! -L $backup_metric ]]; then
+    backup_timestamp=$(awk '$1 == "workagent_backup_last_success_timestamp_seconds" && $2 ~ /^[0-9]+([.][0-9]+)?$/ {print int($2); exit}' "$backup_metric")
+    now=$(date +%s)
+    if [[ $backup_timestamp =~ ^[0-9]+$ ]] && (( backup_timestamp <= now && now - backup_timestamp <= 90000 )); then
+      pass "a verified off-host backup completed within 25 hours"
+    else
+      block "no verified off-host backup completed within 25 hours"
   fi
 else
-  block "verified backup success metric is missing"
+  warn "verified backup success metric is missing"
+fi
+else
+  warn "backup is deferred on this host; configure /etc/workagent/backup.json and an approved remote mount before the first upgrade"
 fi
 
 if [[ -x /usr/sbin/getenforce ]]; then

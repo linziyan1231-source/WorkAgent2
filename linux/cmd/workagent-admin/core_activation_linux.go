@@ -307,6 +307,11 @@ func loadCoreBootstrapPortal() (config.Portal, error) {
 }
 
 func verifyProductionCoreBackupEnvironment() error {
+	// A completely absent backup configuration means backup is deferred on
+	// this host; any present configuration must verify completely.
+	if _, err := os.Lstat(coreBackupConfigPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	configuration, err := backup.LoadConfig(coreBackupConfigPath)
 	if err != nil {
 		return err

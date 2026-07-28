@@ -507,6 +507,19 @@ func fixedRootCallbacks(destination, portalConfigPath string, initialFleet bool,
 	return verify, drain, nil
 }
 
+// loadOptionalBackupConfig loads the protected backup configuration, or
+// reports backup as deferred when the configuration file is entirely absent.
+func loadOptionalBackupConfig(path string) (backup.Config, bool, error) {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return backup.Config{}, true, nil
+	}
+	configuration, err := backup.LoadConfig(path)
+	if err != nil {
+		return backup.Config{}, false, err
+	}
+	return configuration, false, nil
+}
+
 func preflight(arguments []string) error {
 	flags := commandFlags("preflight")
 	pointerPath := flags.String("pointer", "", "absolute current pointer path")
@@ -605,14 +618,17 @@ func preflight(arguments []string) error {
 			return fmt.Errorf("preflight tenant %s host check: %w", userValue.TenantID, hostErr)
 		}
 	}
-	backupConfiguration, err := backup.LoadConfig(*backupConfigPath)
+	backupConfiguration, backupDeferred, err := loadOptionalBackupConfig(*backupConfigPath)
 	if err != nil {
 		return err
 	}
-	if err := backup.VerifyEnvironment(backupConfiguration, true); err != nil {
+	backupInputPath := *backupConfigPath
+	if backupDeferred {
+		backupInputPath = ""
+	} else if err := backup.VerifyEnvironment(backupConfiguration, true); err != nil {
 		return fmt.Errorf("preflight backup destination check: %w", err)
 	}
-	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, *backupConfigPath, backupConfiguration, targetRoot, brand, policy)
+	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, backupInputPath, backupConfiguration, targetRoot, brand, policy)
 	if err != nil {
 		return err
 	}
@@ -730,15 +746,21 @@ func activate(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	backupConfiguration, err := backup.LoadConfig(*backupConfigPath)
+	backupConfiguration, backupDeferred, err := loadOptionalBackupConfig(*backupConfigPath)
 	if err != nil {
 		return err
 	}
-	if err := backup.VerifyEnvironment(backupConfiguration, true); err != nil {
+	if backupDeferred && currentRelease != "" {
+		return errors.New("release upgrades require a configured, verified backup; backup is deferred on this host")
+	}
+	backupInputPath := *backupConfigPath
+	if backupDeferred {
+		backupInputPath = ""
+	} else if err := backup.VerifyEnvironment(backupConfiguration, true); err != nil {
 		return fmt.Errorf("activation backup destination check: %w", err)
 	}
 	targetRoot := filepath.Join(*releasesRoot, *values.releaseID)
-	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, *backupConfigPath, backupConfiguration, targetRoot, brand, policy)
+	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, backupInputPath, backupConfiguration, targetRoot, brand, policy)
 	if err != nil {
 		return err
 	}

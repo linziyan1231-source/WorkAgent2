@@ -844,3 +844,16 @@ func TestPreflightOutputRejectsSymlinkHardlinkAndCanonicalAliases(t *testing.T) 
 		t.Fatalf("missing pointer's canonical alias was accepted as preflight output: %v", err)
 	}
 }
+
+func TestLoadOptionalBackupConfigDefersOnlyWhenAbsent(t *testing.T) {
+	if _, deferred, err := loadOptionalBackupConfig(filepath.Join(t.TempDir(), "absent.json")); err != nil || !deferred {
+		t.Fatalf("absent backup config: deferred=%t err=%v", deferred, err)
+	}
+	unsafe := filepath.Join(t.TempDir(), "unsafe.json")
+	if err := os.WriteFile(unsafe, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, deferred, err := loadOptionalBackupConfig(unsafe); err == nil || deferred {
+		t.Fatalf("present but unsafe backup config: deferred=%t err=%v", deferred, err)
+	}
+}
