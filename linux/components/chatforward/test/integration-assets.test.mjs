@@ -15,13 +15,15 @@ test("bridge service uses a dedicated account, encrypted credential and loopback
   const launcher = await repositoryFile("components/chatforward/integration/run-server.sh");
   assert.match(unit, /^User=workagent-chatforward$/m);
   assert.match(unit, /^LoadCredentialEncrypted=chatforward-key:/m);
-  assert.match(unit, /^ExecStartPost=.*node --jitless .*readiness\.mjs --timeout-ms 15000$/m);
+  assert.match(unit, /^ExecStartPost=.*node .*readiness\.mjs --timeout-ms 15000$/m);
   assert.match(unit, /^ProtectSystem=strict$/m);
   assert.match(unit, /^MemoryDenyWriteExecute=yes$/m);
   assert.match(launcher, /^export CHATFORWARD_HOST=127\.0\.0\.1$/m);
   assert.match(launcher, /^export CHATFORWARD_PORT=3210$/m);
   assert.match(launcher, /^export CHATFORWARD_MAX_PAIRS=3$/m);
-  assert.match(launcher, /--jitless/);
+  // --jitless disables WebAssembly on this Node build, which breaks undici
+  // fetch on the quota and readiness paths, so the launcher must not use it.
+  assert.doesNotMatch(launcher, /--jitless/);
   assert.match(launcher, /--use-env-proxy/);
   assert.match(launcher, /NO_PROXY=127\.0\.0\.1,localhost/);
 });

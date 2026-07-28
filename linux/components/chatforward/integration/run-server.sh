@@ -56,4 +56,4 @@ export CHATFORWARD_HOST=127.0.0.1
 export CHATFORWARD_PORT=3210
 export CHATFORWARD_MAX_PAIRS=3
 export CHATFORWARD_SECRET_FILE=$secret_file
-exec "$node_binary" --jitless --use-env-proxy "$server_entry"
+exec "$node_binary" --use-env-proxy "$server_entry"
