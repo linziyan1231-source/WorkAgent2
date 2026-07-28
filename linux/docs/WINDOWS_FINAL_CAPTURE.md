@@ -36,6 +36,9 @@ below a root-owned `0700` directory, with no symbolic-link ancestor. Do
 not commit it, paste it into tickets, or pass its contents on a command line.
 It binds:
 
+- one exact direct Windows SSH endpoint: canonical IPv4 address, port, login
+  user, opaque host-key alias, Ed25519 host key, and an exact Ed25519 client
+  identity;
 - exactly one Portal database, WAL, SHM, and Portal configuration file;
 - the notification state and non-browser ChatForward shared state;
 - exactly eight complete tenant roots;
@@ -56,6 +59,80 @@ limits include local inputs and conservative filesystem overhead. The final
 destination parent must already be a real root-owned `0700` directory with the
 configured free-space reserve.
 
+### Private SSH transport approval
+
+Schema-v1 capture specs and SSH aliases are not production inputs. The
+schema-v2 spec requires a separate canonical, root-owned, single-link `0600`
+SSH transport profile below a root-owned `0700` directory. The profile binds
+one canonical public or management IPv4 literal, a port and login user, an
+opaque alias of the form `workagent-windows-` plus 32 lowercase hexadecimal
+characters, the exact `ssh-ed25519` host-key algorithm, and absolute paths plus
+operator-approved SHA-256 digests for two dedicated files:
+
+- a one-record known-hosts file whose exact canonical line is
+  `<opaque-alias> ssh-ed25519 <base64-key>` followed by one newline; and
+- one unencrypted Ed25519 private identity file encoded as exactly one
+  canonical PEM block.
+
+The profile, known-hosts file and identity must each be a real root-owned,
+single-link `0600` file with a real root-owned `0700` parent and no symbolic
+link ancestor. They must be dedicated to this capture and must not be the
+normal root SSH configuration, normal `known_hosts`, an agent, or a default
+identity below `~/.ssh`.
+
+Obtain and verify the Windows OpenSSH host public key through the Windows
+console or an independent management plane. First-use acceptance and an
+unauthenticated `ssh-keyscan` result are not approval. Confirm that the host
+private key is unique and has not been cloned. The IPv4 address must route
+directly to this one Windows host; a DNS name, VIP, load balancer, transparent
+failover, `ProxyCommand`, `ProxyJump`, or SSH bastion is not admitted by this
+schema. If a jump path is unavoidable, it must be explicitly modeled and
+pinned in a future schema before production use.
+
+The canonical profile has this exact field order and indentation; replace the
+illustrative values and digests with independently approved private values:
+
+```json
+{
+  "schema_version": 1,
+  "ssh_transport": {
+    "connect_address": "198.51.100.10",
+    "port": 22,
+    "user": "capture-operator",
+    "host_key_alias": "workagent-windows-11111111111111111111111111111111",
+    "host_key_algorithm": "ssh-ed25519",
+    "known_hosts": {
+      "path": "/root/private/windows-capture-known-hosts",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "identity": {
+      "path": "/root/private/windows-capture-identity",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  }
+}
+```
+
+The example is structural only and is not an approved endpoint or key.
+
+### Trust and authorization boundary
+
+This evidence model trusts the Linux kernel, root account, release operator,
+and the independent management-plane host-key verification. The private
+spec, receipts, gate, sealed transport inputs, and capture manifest provide
+integrity and durable binding inside that trust boundary; they are not
+authenticity proof against a malicious or compromised root account. A threat
+model that includes hostile root requires an external signer or immutable
+audit service before production cutover.
+
+The three-rehearsal gate qualifies one exact spec, executable, revision, and
+SSH transport binding. It deliberately has no expiry, planned capture ID, or
+single-use token, so it is not by itself a fresh cutover authorization.
+Release/legal approval, the authorized Windows writer freeze, and the final
+delta result remain separate external cutover gates. If policy requires a
+time-limited or one-shot authorization, issue and verify that approval outside
+this tool rather than treating an older 3/3 gate as sufficient.
+
 The bootstrap helper derives this private input only from the protected legacy
 snapshot and its completed migration report; it never contacts Windows:
 
@@ -64,6 +141,7 @@ snapshot and its completed migration report; it never contacts Windows:
   --init-spec \
   --legacy-snapshot /root/private/protected-legacy-snapshot \
   --migration-report /root/private/completed-stage/report.json \
+  --ssh-transport-profile /root/private/windows-capture-ssh-transport.json \
   --spec-output /root/private/workagent-final-capture.json
 ```
 
@@ -191,6 +269,9 @@ external receipt files. It records the factual `cross_run_state` value
 evidence. Receipt and gate errors and stdout reports remain anonymous.
 The gate output parent is likewise held by one directory descriptor from
 preflight through publication and must retain the same path device/inode.
+At both ends of sealing, the sealer also reopens and validates the exact
+content-pinned SSH known-hosts and identity inputs, but it never constructs an
+SSH session or contacts Windows.
 
 A failed or drifted attempt produces no receipt and cannot count. One failure
 reports every detected anonymous drift class: OAuth file-count,
@@ -199,9 +280,24 @@ numbers. It never emits a Windows path, tenant leaf, OAuth filename, digest
 value, or content. A rehearsal and its 3/3 gate are still not a snapshot and
 must never be substituted for the frozen final capture.
 
-The command invokes only the fixed SSH target and a static `bash -s` program.
-All data arguments are lowercase hex, SSH is batch-only with TTY and forwarding
-disabled, and the remote external programs are fixed to
+The command constructs exactly one immutable SSH transport session from the
+schema-v2 binding for the complete invocation. It securely reads and hashes
+the dedicated inputs, validates the one canonical known-host record and
+Ed25519 identity, and places their exact bytes in sealed Linux memory files.
+Every SSH child uses those same sealed bytes; the mutable source files are
+reopened and revalidated before any success receipt or manifest is published.
+The sealed files are closed before success publication.
+
+SSH reads no user or system configuration (`-F none`), normal identity files
+are cleared before the one sealed identity is added, normal and global
+known-host files are disabled, and agents, certificates, password,
+keyboard-interactive, GSSAPI, host-based authentication, multiplexing, DNS,
+canonicalization, host-key updates, proxy commands and jump hosts are all
+disabled. Strict host-key checking uses only the sealed one-record file and
+the exact opaque alias and Ed25519 algorithm. The local SSH child receives a
+minimal fixed environment with askpass disabled. All data arguments are
+lowercase hex, SSH is batch-only with TTY and forwarding disabled, and the
+remote external programs are fixed to
 `/usr/bin/bash`, `/usr/bin/find`, `/usr/bin/stat`, `/usr/bin/sha256sum`, and
 `/usr/bin/tar`.
 Remote stderr and stdout are hard bounded. Stderr text is never returned or
@@ -271,6 +367,10 @@ rehashes all files and pinned local inputs, validates the start journal and
 both evidence documents and the preserved canonical rehearsal gate against the
 completion manifest, rejects unexpected entries, and matches the complete
 manifest before returning success.
+Because this path is deliberately local-only, it does not open or require the
+live SSH identity or known-hosts files. It verifies their binding transitively
+through the exact schema-v2 spec digest already preserved by the gate and
+manifest.
 
 ## Separate final-delta check
 
@@ -332,6 +432,11 @@ completion time, and aggregate for later private migration evidence. It
 performs the same complete local integrity gate and cannot contact Windows.
 Its binding schema remains version 1: the exact schema-v2 manifest digest is
 the transitive binding to the preserved rehearsal-gate digest and bytes.
+
+Any change to the approved address, port, user, host key, known-hosts bytes,
+or identity bytes requires a new no-replace schema-v2 spec path and three new
+rehearsal receipts and gate. Existing schema-v1 specs, binaries, receipts and
+gates are historical evidence only and cannot count toward this cutover.
 This deliberately local-only verifier validates the stored gate but does not
 require the original capture executable to remain installed; only operations
 that can contact Windows enforce the live executable identity.

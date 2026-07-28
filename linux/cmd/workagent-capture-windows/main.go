@@ -16,15 +16,15 @@ import (
 )
 
 type commandOptions struct {
-	spec, legacySnapshot, migrationReport, specOutput string
-	destination, captureID, confirm                   string
-	rehearsalID, receiptOutput, rehearsalGate         string
-	gateOutput                                        string
-	receiptPaths                                      stringSliceFlag
-	check, capture, initSpec, verifyFinalDelta        bool
-	sealRehearsalGate                                 bool
-	windowsFrozen                                     bool
-	writersQuiesced                                   bool
+	spec, legacySnapshot, migrationReport, transportProfile, specOutput string
+	destination, captureID, confirm                                     string
+	rehearsalID, receiptOutput, rehearsalGate                           string
+	gateOutput                                                          string
+	receiptPaths                                                        stringSliceFlag
+	check, capture, initSpec, verifyFinalDelta                          bool
+	sealRehearsalGate                                                   bool
+	windowsFrozen                                                       bool
+	writersQuiesced                                                     bool
 }
 
 type stringSliceFlag []string
@@ -47,6 +47,7 @@ func parseArguments(arguments []string) (commandOptions, error) {
 	flags.BoolVar(&options.initSpec, "init-spec", false, "create a private spec from a protected legacy snapshot and completed migration report")
 	flags.StringVar(&options.legacySnapshot, "legacy-snapshot", "", "absolute root-owned 0700 protected legacy snapshot used only by --init-spec")
 	flags.StringVar(&options.migrationReport, "migration-report", "", "absolute root-owned 0600 completed migration report used only by --init-spec")
+	flags.StringVar(&options.transportProfile, "ssh-transport-profile", "", "absolute canonical root-owned 0600 SSH transport approval used only by --init-spec")
 	flags.StringVar(&options.specOutput, "spec-output", "", "absolute private spec path used only by --init-spec; exact-content retries converge")
 	flags.StringVar(&options.rehearsalID, "rehearsal-id", "", "unique ID for one read-only rehearsal")
 	flags.StringVar(&options.receiptOutput, "receipt-output", "", "absolute unique no-replace private rehearsal receipt path")
@@ -73,13 +74,13 @@ func parseArguments(arguments []string) (commandOptions, error) {
 	if options.initSpec {
 		if options.spec != "" || options.destination != "" || options.captureID != "" || options.confirm != "" || options.windowsFrozen || options.writersQuiesced ||
 			options.rehearsalID != "" || options.receiptOutput != "" || len(options.receiptPaths) != 0 || options.gateOutput != "" || options.rehearsalGate != "" {
-			return commandOptions{}, fmt.Errorf("--init-spec accepts only --legacy-snapshot, --migration-report, and --spec-output")
+			return commandOptions{}, fmt.Errorf("--init-spec accepts only --legacy-snapshot, --migration-report, --ssh-transport-profile, and --spec-output")
 		}
-		if options.legacySnapshot == "" || options.migrationReport == "" || options.specOutput == "" {
-			return commandOptions{}, fmt.Errorf("--init-spec requires --legacy-snapshot, --migration-report, and --spec-output")
+		if options.legacySnapshot == "" || options.migrationReport == "" || options.transportProfile == "" || options.specOutput == "" {
+			return commandOptions{}, fmt.Errorf("--init-spec requires --legacy-snapshot, --migration-report, --ssh-transport-profile, and --spec-output")
 		}
 	} else if options.check {
-		if options.legacySnapshot != "" || options.migrationReport != "" || options.specOutput != "" || options.destination != "" || options.captureID != "" || options.windowsFrozen ||
+		if options.legacySnapshot != "" || options.migrationReport != "" || options.transportProfile != "" || options.specOutput != "" || options.destination != "" || options.captureID != "" || options.windowsFrozen ||
 			len(options.receiptPaths) != 0 || options.gateOutput != "" || options.rehearsalGate != "" {
 			return commandOptions{}, fmt.Errorf("rehearsal accepts only its spec, receipt, writer-quiescence, and confirmation inputs")
 		}
@@ -87,7 +88,7 @@ func parseArguments(arguments []string) (commandOptions, error) {
 			return commandOptions{}, fmt.Errorf("rehearsal requires --spec, --rehearsal-id, --receipt-output, --writers-quiesced, and the exact confirmation")
 		}
 	} else if options.sealRehearsalGate {
-		if options.legacySnapshot != "" || options.migrationReport != "" || options.specOutput != "" ||
+		if options.legacySnapshot != "" || options.migrationReport != "" || options.transportProfile != "" || options.specOutput != "" ||
 			options.destination != "" || options.captureID != "" || options.confirm != "" || options.windowsFrozen || options.writersQuiesced ||
 			options.rehearsalID != "" || options.receiptOutput != "" || options.rehearsalGate != "" {
 			return commandOptions{}, fmt.Errorf("gate sealing accepts only --spec, three --rehearsal-receipt values, and --gate-output")
@@ -95,7 +96,7 @@ func parseArguments(arguments []string) (commandOptions, error) {
 		if options.spec == "" || len(options.receiptPaths) != 3 || options.gateOutput == "" {
 			return commandOptions{}, fmt.Errorf("gate sealing requires --spec, exactly three --rehearsal-receipt values, and --gate-output")
 		}
-	} else if options.legacySnapshot != "" || options.migrationReport != "" || options.specOutput != "" || options.writersQuiesced ||
+	} else if options.legacySnapshot != "" || options.migrationReport != "" || options.transportProfile != "" || options.specOutput != "" || options.writersQuiesced ||
 		options.rehearsalID != "" || options.receiptOutput != "" || len(options.receiptPaths) != 0 || options.gateOutput != "" {
 		return commandOptions{}, fmt.Errorf("capture and final-delta modes do not accept spec-initialization inputs")
 	} else if options.capture && (options.spec == "" || options.rehearsalGate == "" || options.destination == "" || options.captureID == "" || !options.windowsFrozen || options.confirm != "FINAL-WINDOWS-CAPTURE:"+options.captureID) {
@@ -115,7 +116,10 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if options.initSpec {
-		report, err := wincapture.InitializeSpec(ctx, wincapture.InitSpecOptions{LegacySnapshot: options.legacySnapshot, MigrationReport: options.migrationReport, Output: options.specOutput})
+		report, err := wincapture.InitializeSpec(ctx, wincapture.InitSpecOptions{
+			LegacySnapshot: options.legacySnapshot, MigrationReport: options.migrationReport,
+			TransportProfile: options.transportProfile, Output: options.specOutput,
+		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "workagent-capture-windows:", err)
 			os.Exit(1)

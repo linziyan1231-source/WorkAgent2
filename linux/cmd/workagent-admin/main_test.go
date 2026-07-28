@@ -886,6 +886,11 @@ func TestCaddyLiveConfigMatchesRunningAdminAPI(t *testing.T) {
 		t.Skip("root-owned signed Caddyfile contract requires root")
 	}
 	root := t.TempDir()
+	// Go 1.26+ creates t.TempDir with 0o755; the Caddy admin contract
+	// requires the protected parent directory to be exactly 0o700.
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	socketPath := filepath.Join(root, "admin.sock")
 	caddyfilePath := filepath.Join(root, "Caddyfile")
 	if err := os.WriteFile(caddyfilePath, []byte("example.test { respond 200 }\n"), 0o644); err != nil {

@@ -90,6 +90,9 @@ func validateSpec(spec Spec) error {
 	if spec.SchemaVersion != SpecSchemaVersion {
 		return errors.New("capture spec schema version is unsupported")
 	}
+	if err := validateSSHTransport(spec.SSHTransport); err != nil {
+		return err
+	}
 	if spec.ExpectedTenantCount != 8 {
 		return errors.New("capture spec must bind exactly eight tenant trees")
 	}

@@ -29,10 +29,66 @@ const maxConcurrentReadOnlySources = 4
 
 type captureEngine struct {
 	remote          remoteTransport
+	remoteFactory   remoteSessionFactory
 	expectedUID     uint32
 	now             func() time.Time
 	identity        identityProvider
 	checkRunTimeout time.Duration
+}
+
+type remoteSession interface {
+	remoteTransport
+	verify() error
+	close() error
+}
+
+type remoteSessionFactory func(SSHTransport, uint32) (remoteSession, error)
+
+type boundRemoteRun struct {
+	engine   *captureEngine
+	session  remoteSession
+	injected bool
+	closed   bool
+}
+
+func (engine *captureEngine) bindRemoteSession(binding SSHTransport) (*boundRemoteRun, error) {
+	if engine.remote != nil {
+		return &boundRemoteRun{engine: engine, injected: true}, nil
+	}
+	factory := engine.remoteFactory
+	if factory == nil {
+		factory = func(binding SSHTransport, expectedUID uint32) (remoteSession, error) {
+			return newSSHTransport(binding, expectedUID)
+		}
+	}
+	session, err := factory(binding, engine.expectedUID)
+	if err != nil {
+		return nil, err
+	}
+	if session == nil {
+		return nil, errors.New("SSH transport session factory returned no session")
+	}
+	engine.remote = session
+	return &boundRemoteRun{engine: engine, session: session}, nil
+}
+
+func (run *boundRemoteRun) verify() error {
+	if run == nil || run.injected {
+		return nil
+	}
+	if run.closed || run.session == nil {
+		return errors.New("SSH transport session closed before verification")
+	}
+	return run.session.verify()
+}
+
+func (run *boundRemoteRun) close() error {
+	if run == nil || run.injected || run.closed {
+		return nil
+	}
+	run.closed = true
+	run.engine.remote = nil
+	return run.session.close()
 }
 
 type sourceEvidence struct {
@@ -74,7 +130,7 @@ func Check(ctx context.Context, options CheckOptions) (Report, error) {
 		return Report{}, errors.New("Windows capture checks require root")
 	}
 	return (&captureEngine{
-		remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
+		expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
 	}).check(ctx, options)
 }
 
@@ -83,7 +139,7 @@ func Capture(ctx context.Context, options CaptureOptions) (Report, error) {
 		return Report{}, errors.New("final Windows capture requires root")
 	}
 	return (&captureEngine{
-		remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
+		expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
 	}).capture(ctx, options)
 }
 
@@ -97,7 +153,7 @@ func VerifyFinalDelta(ctx context.Context, options FinalDeltaOptions) (Report, e
 		return Report{}, errors.New("final Windows delta verification requires root")
 	}
 	return (&captureEngine{
-		remote: sshTransport{}, expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
+		expectedUID: 0, now: func() time.Time { return time.Now().UTC() }, identity: currentExecutableIdentity,
 	}).verifyFinalDelta(ctx, options)
 }
 
@@ -163,6 +219,11 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	if err != nil || free < required {
 		return Report{}, errors.New("capture destination does not satisfy the configured free-space gate")
 	}
+	remoteRun, err := engine.bindRemoteSession(loaded.value.SSHTransport)
+	if err != nil {
+		return Report{}, err
+	}
+	defer remoteRun.close()
 	partial, err := os.MkdirTemp(parent, "."+options.CaptureID+".partial-")
 	if err != nil {
 		return Report{}, errors.New("create private partial capture")
@@ -245,6 +306,12 @@ func (engine *captureEngine) capture(ctx context.Context, options CaptureOptions
 	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, engine.expectedUID); err != nil {
 		return Report{}, errors.New("private local capture input drifted during final capture")
 	}
+	if err := remoteRun.verify(); err != nil {
+		return Report{}, errors.New("private SSH transport binding drifted during final capture")
+	}
+	if err := remoteRun.close(); err != nil {
+		return Report{}, errors.New("close immutable SSH transport session after final capture")
+	}
 	endingIdentity, err := engine.readExecutableIdentity()
 	if err != nil || endingIdentity != identity {
 		return Report{}, errors.New("executable identity drifted during final capture")
@@ -298,6 +365,11 @@ func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options Final
 	if err != nil || identity != gate.Executable {
 		return Report{}, errors.New("final-delta executable identity does not match the captured rehearsal gate")
 	}
+	remoteRun, err := engine.bindRemoteSession(loaded.value.SSHTransport)
+	if err != nil {
+		return Report{}, err
+	}
+	defer remoteRun.close()
 	preRemoteIdentity, err := engine.readExecutableIdentity()
 	if err != nil || preRemoteIdentity != identity {
 		return Report{}, errors.New("executable identity drifted before final-delta remote access")
@@ -320,6 +392,12 @@ func (engine *captureEngine) verifyFinalDelta(ctx context.Context, options Final
 	aggregate, err := aggregateSummaries(first)
 	if err != nil || aggregate != manifest.Aggregate {
 		return Report{}, errors.New("Windows final-delta aggregate does not match the completed capture")
+	}
+	if err := remoteRun.verify(); err != nil {
+		return Report{}, errors.New("private SSH transport binding drifted during final-delta verification")
+	}
+	if err := remoteRun.close(); err != nil {
+		return Report{}, errors.New("close immutable SSH transport session after final-delta verification")
 	}
 	postBinding, _, _, postGate, err := verifyCompletedCapture(CompletedCaptureOptions{
 		SpecPath: options.SpecPath, Destination: options.Destination, CaptureID: options.CaptureID,

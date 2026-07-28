@@ -8,7 +8,7 @@ package wincapture
 import "time"
 
 const (
-	SpecSchemaVersion = 1
+	SpecSchemaVersion = 2
 
 	RolePortalDatabase = "portal_database"
 	RolePortalWAL      = "portal_wal"
@@ -42,12 +42,33 @@ const (
 // local input paths are intentionally absent from all public reports.
 type Spec struct {
 	SchemaVersion                  int             `json:"schema_version"`
+	SSHTransport                   SSHTransport    `json:"ssh_transport"`
 	ExpectedTenantCount            int             `json:"expected_tenant_count"`
 	ExpectedExternalWorkspaceCount int             `json:"expected_external_workspace_count"`
 	Sources                        []Source        `json:"sources"`
 	OAuthEvidence                  OAuthEvidence   `json:"oauth_evidence"`
 	LocalFiles                     []LocalFile     `json:"local_files,omitempty"`
 	Limits                         AggregateLimits `json:"limits"`
+}
+
+// SSHTransport is a private, content-pinned description of the one Windows
+// endpoint admitted for rehearsals, final capture, and final-delta reads.
+// Public evidence binds this structure only through the private spec digest.
+type SSHTransport struct {
+	ConnectAddress   string               `json:"connect_address"`
+	Port             int                  `json:"port"`
+	User             string               `json:"user"`
+	HostKeyAlias     string               `json:"host_key_alias"`
+	HostKeyAlgorithm string               `json:"host_key_algorithm"`
+	KnownHosts       TransportFileBinding `json:"known_hosts"`
+	Identity         TransportFileBinding `json:"identity"`
+}
+
+// TransportFileBinding pins one root-private Linux input by exact bytes. The
+// original path is never passed to ssh and is absent from public reports.
+type TransportFileBinding struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 type Source struct {

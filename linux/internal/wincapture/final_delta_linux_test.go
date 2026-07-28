@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,6 +193,45 @@ func TestFinalDeltaBindsExactExecutableBeforeAndAfterRemoteAccess(t *testing.T) 
 	})
 }
 
+type finalDeltaFixtureSession struct {
+	remoteTransport
+	closed *bool
+}
+
+func (session *finalDeltaFixtureSession) verify() error { return nil }
+func (session *finalDeltaFixtureSession) close() error {
+	*session.closed = true
+	return nil
+}
+
+func TestFinalDeltaRechecksExecutableAfterSessionConstructionBeforeSSH(t *testing.T) {
+	spec, specPath, destination, id := completedCaptureFixture(t)
+	transport := newFixtureTransport(t, spec)
+	constructed := false
+	closed := false
+	identity := func() (executableIdentity, error) {
+		value := fixtureExecutableIdentity
+		if constructed {
+			value.SHA256 = strings.Repeat("f", 64)
+		}
+		return value, nil
+	}
+	engine := &captureEngine{
+		expectedUID: uint32(os.Geteuid()), now: time.Now, identity: identity,
+		remoteFactory: func(SSHTransport, uint32) (remoteSession, error) {
+			constructed = true
+			return &finalDeltaFixtureSession{remoteTransport: transport, closed: &closed}, nil
+		},
+	}
+	_, err := engine.verifyFinalDelta(context.Background(), FinalDeltaOptions{
+		SpecPath: specPath, Destination: destination, CaptureID: id,
+		Confirm: finalDeltaConfirmationPrefix + id, WindowsFrozen: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "before final-delta remote access") || transport.callCount() != 0 || !closed {
+		t.Fatalf("session-construction executable drift reached SSH: %v / calls=%d / closed=%t", err, transport.callCount(), closed)
+	}
+}
+
 func TestFinalDeltaFailsClosedOnStableMismatchAndInterPassDrift(t *testing.T) {
 	for _, test := range []struct {
 		name                 string
@@ -296,6 +336,42 @@ func TestVerifyCompletedCaptureReturnsExactStableManifestBinding(t *testing.T) {
 	}
 }
 
+func TestCompletedCaptureVerificationAndReplayRemainTransportIndependent(t *testing.T) {
+	spec, specPath, destination, id := completedCaptureFixture(t)
+	gatePayload, err := os.ReadFile(filepath.Join(destination, "rehearsal-gate.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatePath := filepath.Join(filepath.Dir(specPath), "replay-gate.json")
+	if err := os.WriteFile(gatePath, gatePayload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(spec.SSHTransport.KnownHosts.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(spec.SSHTransport.Identity.Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := verifyCompletedCapture(CompletedCaptureOptions{SpecPath: specPath, Destination: destination, CaptureID: id}, uint32(os.Geteuid())); err != nil {
+		t.Fatalf("local completed-capture verification required live SSH inputs: %v", err)
+	}
+	factoryCalls := 0
+	engine := &captureEngine{
+		expectedUID: uint32(os.Geteuid()), now: time.Now, identity: fixtureIdentityProvider,
+		remoteFactory: func(SSHTransport, uint32) (remoteSession, error) {
+			factoryCalls++
+			return nil, errors.New("unexpected SSH transport construction")
+		},
+	}
+	report, err := engine.capture(context.Background(), CaptureOptions{
+		SpecPath: specPath, RehearsalGate: gatePath, Destination: destination, CaptureID: id,
+		Confirm: finalConfirmationPrefix + id, WindowsFrozen: true,
+	})
+	if err != nil || report.Status != "complete-frozen-capture" || factoryCalls != 0 {
+		t.Fatalf("completed-capture replay required live SSH inputs: %v / %#v / factories=%d", err, report, factoryCalls)
+	}
+}
+
 func completedCaptureFixture(t *testing.T) (Spec, string, string, string) {
 	t.Helper()
 	spec := validSpec(t)
@@ -334,7 +410,12 @@ func assertFinalDeltaFailsBeforeTransport(t *testing.T, spec Spec, specPath, des
 }
 
 func sourceAndDestinationStrings(spec Spec) []string {
-	result := make([]string, 0, len(spec.Sources)*2+len(spec.LocalFiles)*2)
+	result := make([]string, 0, len(spec.Sources)*2+len(spec.LocalFiles)*2+7)
+	result = append(result,
+		spec.SSHTransport.ConnectAddress, spec.SSHTransport.User, spec.SSHTransport.HostKeyAlias,
+		spec.SSHTransport.KnownHosts.Path, spec.SSHTransport.KnownHosts.SHA256,
+		spec.SSHTransport.Identity.Path, spec.SSHTransport.Identity.SHA256,
+	)
 	for _, source := range spec.Sources {
 		result = append(result, source.SourcePath, source.Destination)
 	}

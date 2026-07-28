@@ -11,7 +11,7 @@ func TestParseArgumentsAcceptsOnlyCompleteExclusiveModes(t *testing.T) {
 		{"--seal-rehearsal-gate", "--spec", "/root/private/spec.json", "--rehearsal-receipt", "/root/private/receipt-1.json", "--rehearsal-receipt", "/root/private/receipt-2.json", "--rehearsal-receipt", "/root/private/receipt-3.json", "--gate-output", "/root/private/gate.json"},
 		{"--capture", "--spec", "/root/private/spec.json", "--rehearsal-gate", "/root/private/gate.json", "--destination", "/root/private/" + id, "--capture-id", id, "--windows-frozen", "--confirm", "FINAL-WINDOWS-CAPTURE:" + id},
 		{"--verify-final-delta", "--spec", "/root/private/spec.json", "--destination", "/root/private/" + id, "--capture-id", id, "--windows-frozen", "--confirm", "FINAL-WINDOWS-DELTA:" + id},
-		{"--init-spec", "--legacy-snapshot", "/root/private/legacy", "--migration-report", "/root/private/report.json", "--spec-output", "/root/private/spec.json"},
+		{"--init-spec", "--legacy-snapshot", "/root/private/legacy", "--migration-report", "/root/private/report.json", "--ssh-transport-profile", "/root/private/ssh-transport.json", "--spec-output", "/root/private/spec.json"},
 	}
 	for index, arguments := range valid {
 		if _, err := parseArguments(arguments); err != nil {
@@ -34,6 +34,8 @@ func TestParseArgumentsAcceptsOnlyCompleteExclusiveModes(t *testing.T) {
 		{"--verify-final-delta", "--spec", "/root/private/spec.json", "--destination", "/root/private/" + id, "--capture-id", id, "--windows-frozen", "--confirm", "FINAL-WINDOWS-CAPTURE:" + id},
 		{"--verify-final-delta", "--spec", "/root/private/spec.json", "--destination", "/root/private/" + id, "--capture-id", id, "--windows-frozen", "--confirm", "FINAL-WINDOWS-DELTA:" + id, "--migration-report", "/root/private/report.json"},
 		{"--init-spec", "--legacy-snapshot", "/root/private/legacy", "--migration-report", "/root/private/report.json"},
+		{"--init-spec", "--legacy-snapshot", "/root/private/legacy", "--migration-report", "/root/private/report.json", "--spec-output", "/root/private/spec.json"},
+		{"--check", "--spec", "/root/private/spec.json", "--rehearsal-id", "rehearsal-20260727-0001", "--receipt-output", "/root/private/receipt-1.json", "--writers-quiesced", "--confirm", "REHEARSAL-WRITERS-QUIESCED:rehearsal-20260727-0001", "--ssh-transport-profile", "/root/private/ssh-transport.json"},
 		{"--unknown"},
 	}
 	for index, arguments := range invalid {

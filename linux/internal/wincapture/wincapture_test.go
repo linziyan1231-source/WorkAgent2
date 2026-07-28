@@ -6,9 +6,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"io/fs"
@@ -24,19 +28,33 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 )
 
 func TestSSHArgumentsHexEncodeUntrustedPaths(t *testing.T) {
 	untrusted := "/c/fixture/path;$(touch should-not-run) ' quoted"
-	arguments := sshCommandArguments("inventory", []string{untrusted})
-	wantPrefix := []string{"-T", "-oBatchMode=yes", "-oClearAllForwardings=yes", "-oForwardAgent=no", "-oForwardX11=no", "-oPermitLocalCommand=no", "-oRequestTTY=no", "reference-host", "--", "/usr/bin/bash", "-s", "--", "inventory"}
-	if len(arguments) != len(wantPrefix)+1 {
-		t.Fatalf("argument count = %d", len(arguments))
+	binding := SSHTransport{ConnectAddress: "192.0.2.10", Port: 22, User: "fixture", HostKeyAlias: "workagent-windows-11111111111111111111111111111111", HostKeyAlgorithm: ssh.KeyAlgoED25519}
+	arguments := sshCommandArguments(binding, "/proc/1/fd/3", "/proc/1/fd/4", "inventory", []string{untrusted})
+	wantFixed := []string{"-F", "none", "-oEscapeChar=none", "-oStrictHostKeyChecking=yes", "-oUserKnownHostsFile=/proc/1/fd/3", "-oGlobalKnownHostsFile=/dev/null", "-oHostKeyAlias=" + binding.HostKeyAlias, "-oHostKeyAlgorithms=ssh-ed25519", "-oProxyCommand=none", "-oProxyJump=none", "-oControlMaster=no", "-oControlPath=none", "-oIdentityAgent=none", "-oIdentityFile=none", "-i", "/proc/1/fd/4", "-oCertificateFile=none", "-oIdentitiesOnly=yes", "-p", "22", "-l", "fixture", "--", "192.0.2.10", "/usr/bin/bash", "-s", "--", "inventory"}
+	position := 0
+	for _, expected := range wantFixed {
+		found := false
+		for position < len(arguments)-1 {
+			if arguments[position] == expected {
+				found = true
+				position++
+				break
+			}
+			position++
+		}
+		if !found {
+			t.Fatalf("fixed SSH argument %q is absent or out of order: %#v", expected, arguments)
+		}
 	}
-	for index := range wantPrefix {
-		if arguments[index] != wantPrefix[index] {
-			t.Fatalf("fixed argument %d = %q", index, arguments[index])
+	for _, argument := range arguments {
+		if argument == "reference-host" || strings.Contains(argument, "~/.ssh") || strings.Contains(argument, "/root/.ssh") {
+			t.Fatalf("SSH arguments retained ambient alias or default file: %q", argument)
 		}
 	}
 	encoded := arguments[len(arguments)-1]
@@ -58,6 +76,32 @@ func TestRemoteCommandsHaveFiniteOperationalDeadline(t *testing.T) {
 	}
 }
 
+func TestSSHArgumentsResolveWithoutAmbientConfiguration(t *testing.T) {
+	binding := SSHTransport{ConnectAddress: "192.0.2.10", Port: 22, User: "fixture", HostKeyAlias: "workagent-windows-11111111111111111111111111111111", HostKeyAlgorithm: ssh.KeyAlgoED25519}
+	arguments := sshCommandArguments(binding, "/dev/null", "/dev/null", "inventory", []string{"/c/fixture"})
+	command := exec.Command("/usr/bin/ssh", append([]string{"-G"}, arguments...)...)
+	command.Env = sshCommandEnvironment()
+	command.Stderr = io.Discard
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("fixed SSH options are unsupported: %v", err)
+	}
+	configuration := string(output)
+	for _, required := range []string{
+		"hostname 192.0.2.10\n", "user fixture\n", "hostkeyalias " + binding.HostKeyAlias + "\n",
+		"identityfile none\n", "identityfile /dev/null\n", "userknownhostsfile /dev/null\n", "globalknownhostsfile /dev/null\n", "escapechar none\n",
+	} {
+		if !strings.Contains(configuration, required) {
+			t.Fatalf("resolved SSH configuration omitted %q", required)
+		}
+	}
+	for _, forbidden := range []string{"identityfile ~/.ssh/", "userknownhostsfile /root/.ssh/", "proxycommand ", "proxyjump "} {
+		if strings.Contains(configuration, forbidden) {
+			t.Fatalf("resolved SSH configuration retained ambient setting %q", forbidden)
+		}
+	}
+}
+
 func TestRemoteScriptHasNarrowReadOnlySurface(t *testing.T) {
 	for _, forbidden := range []string{"eval ", "bash -c", "powershell", "cmd.exe", "taskkill", "kill ", "sqlite", "mktemp", "touch ", "mkdir ", "rm ", "cp ", "mv ", "chmod ", "chown ", ">/", "> /"} {
 		if strings.Contains(strings.ToLower(readOnlyRemoteScript), forbidden) {
@@ -74,7 +118,16 @@ func TestRemoteScriptHasNarrowReadOnlySurface(t *testing.T) {
 			t.Fatalf("remote program path is not fixed: %s", fixed)
 		}
 	}
-	if arguments := sshCommandArguments("inventory", []string{"/c/fixture"}); len(arguments) < 10 || arguments[9] != "/usr/bin/bash" {
+	binding := SSHTransport{ConnectAddress: "192.0.2.10", Port: 22, User: "fixture", HostKeyAlias: "workagent-windows-11111111111111111111111111111111", HostKeyAlgorithm: ssh.KeyAlgoED25519}
+	arguments := sshCommandArguments(binding, "/proc/1/fd/3", "/proc/1/fd/4", "inventory", []string{"/c/fixture"})
+	found := false
+	for index := 0; index+4 < len(arguments); index++ {
+		if arguments[index] == "/usr/bin/bash" && arguments[index+1] == "-s" && arguments[index+2] == "--" && arguments[index+3] == "inventory" {
+			found = true
+			break
+		}
+	}
+	if !found {
 		t.Fatal("remote Bash path is not fixed")
 	}
 }
@@ -928,10 +981,48 @@ func validSpec(t *testing.T) Spec {
 			sources[index].MaxFiles = 1
 		}
 	}
-	return Spec{SchemaVersion: 1, ExpectedTenantCount: 8, ExpectedExternalWorkspaceCount: 1, Sources: sources,
+	return Spec{SchemaVersion: SpecSchemaVersion, SSHTransport: validSSHTransport(t), ExpectedTenantCount: 8, ExpectedExternalWorkspaceCount: 1, Sources: sources,
 		OAuthEvidence: OAuthEvidence{SourcePath: "/c/fixture/oauth-auth", MaxFiles: 100, MaxBytes: 1024 * 1024},
 		LocalFiles:    []LocalFile{{Destination: "external-workspaces.json", SHA256: strings.Repeat("0", 64), MaxBytes: 1024 * 1024}},
 		Limits:        AggregateLimits{MaxSources: 64, MaxTotalFiles: 1000, MaxTotalBytes: 1024 * 1024, MaxCaptureBytes: 32 * 1024 * 1024},
+	}
+}
+
+func validSSHTransport(t *testing.T) SSHTransport {
+	t.Helper()
+	root := privateTemp(t)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityPayload := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})
+	identityPath := filepath.Join(root, "capture-identity")
+	if err := os.WriteFile(identityPath, identityPayload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sshPublicKey, err := ssh.NewPublicKey(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := "workagent-windows-11111111111111111111111111111111"
+	knownHostsPayload := append([]byte(alias+" "), ssh.MarshalAuthorizedKey(sshPublicKey)...)
+	knownHostsPath := filepath.Join(root, "capture-known-hosts")
+	if err := os.WriteFile(knownHostsPath, knownHostsPayload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identityDigest := sha256.Sum256(identityPayload)
+	knownHostsDigest := sha256.Sum256(knownHostsPayload)
+	clear(privateDER)
+	clear(identityPayload)
+	clear(knownHostsPayload)
+	return SSHTransport{
+		ConnectAddress: "192.0.2.10", Port: 22, User: "fixture", HostKeyAlias: alias, HostKeyAlgorithm: ssh.KeyAlgoED25519,
+		KnownHosts: TransportFileBinding{Path: knownHostsPath, SHA256: hex.EncodeToString(knownHostsDigest[:])},
+		Identity:   TransportFileBinding{Path: identityPath, SHA256: hex.EncodeToString(identityDigest[:])},
 	}
 }
 

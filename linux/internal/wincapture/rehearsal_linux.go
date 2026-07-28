@@ -196,6 +196,11 @@ func (engine *captureEngine) check(ctx context.Context, options CheckOptions) (R
 	if err := verifyPrivateLocalInputs(loaded.value.LocalFiles, engine.expectedUID); err != nil {
 		return Report{}, err
 	}
+	remoteRun, err := engine.bindRemoteSession(loaded.value.SSHTransport)
+	if err != nil {
+		return Report{}, err
+	}
+	defer remoteRun.close()
 
 	if err := runContext.Err(); err != nil {
 		return Report{}, rehearsalCollectionError(runContext, err)
@@ -222,6 +227,12 @@ func (engine *captureEngine) check(ctx context.Context, options CheckOptions) (R
 	}
 	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, engine.expectedUID); err != nil {
 		return Report{}, errors.New("private local capture input drifted during the read-only rehearsal")
+	}
+	if err := remoteRun.verify(); err != nil {
+		return Report{}, errors.New("private SSH transport binding drifted during the read-only rehearsal")
+	}
+	if err := remoteRun.close(); err != nil {
+		return Report{}, errors.New("close immutable SSH transport session after the read-only rehearsal")
 	}
 	endingIdentity, err := engine.readExecutableIdentity()
 	if err != nil || endingIdentity != identity {
@@ -327,6 +338,9 @@ func sealRehearsalGate(options SealRehearsalGateOptions, expectedUID uint32, ide
 	if err := verifyPrivateLocalInputs(loaded.value.LocalFiles, expectedUID); err != nil {
 		return RehearsalGateReport{}, err
 	}
+	if err := verifySSHTransportInputs(loaded.value.SSHTransport, expectedUID); err != nil {
+		return RehearsalGateReport{}, err
+	}
 	gateParentFD, err := preparePrivateNoReplaceOutput(options.GateOutput, "rehearsal gate", expectedUID)
 	if err != nil {
 		return RehearsalGateReport{}, err
@@ -413,6 +427,9 @@ func sealRehearsalGate(options SealRehearsalGateOptions, expectedUID uint32, ide
 	}
 	if err := verifyPrivateLocalInputs(reloaded.value.LocalFiles, expectedUID); err != nil {
 		return RehearsalGateReport{}, errors.New("private local capture input drifted during rehearsal gate sealing")
+	}
+	if err := verifySSHTransportInputs(reloaded.value.SSHTransport, expectedUID); err != nil {
+		return RehearsalGateReport{}, errors.New("private SSH transport binding drifted during rehearsal gate sealing")
 	}
 	endingIdentity, err := identity()
 	if err != nil || endingIdentity != currentIdentity {
@@ -653,15 +670,6 @@ func preparePrivateNoReplaceOutput(filename, label string, expectedUID uint32) (
 		return -1, fmt.Errorf("inspect %s output", label)
 	}
 	return parentFD, nil
-}
-
-func writePrivatePayloadNoReplace(filename string, payload []byte, label string, expectedUID uint32) error {
-	parentFD, err := preparePrivateNoReplaceOutput(filename, label, expectedUID)
-	if err != nil {
-		return err
-	}
-	defer unix.Close(parentFD)
-	return writePrivatePayloadNoReplaceAt(parentFD, filename, payload, label, expectedUID)
 }
 
 // writePrivatePayloadNoReplaceAt keeps admission, any caller-held advisory

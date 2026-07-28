@@ -34,9 +34,7 @@ type stderrSummary struct {
 	Exceeded bool
 }
 
-type sshTransport struct{}
-
-func (sshTransport) run(ctx context.Context, action string, arguments []string, output io.Writer, maxOutput int64) (stderrSummary, error) {
+func (transport *sshTransport) run(ctx context.Context, action string, arguments []string, output io.Writer, maxOutput int64) (stderrSummary, error) {
 	if action != "inventory" && action != "exclusions" && action != "oauth" && action != "tar" {
 		return stderrSummary{}, errors.New("invalid remote read-only action")
 	}
@@ -45,9 +43,17 @@ func (sshTransport) run(ctx context.Context, action string, arguments []string, 
 	}
 	commandContext, cancel := context.WithTimeout(ctx, remoteReadOnlyCommandTimeout)
 	defer cancel()
-	encoded := sshCommandArguments(action, arguments)
+	transport.mu.Lock()
+	if transport.closed || transport.knownHosts == nil || transport.identity == nil {
+		transport.mu.Unlock()
+		return stderrSummary{}, errors.New("SSH transport session is unavailable")
+	}
+	encoded := sshCommandArguments(transport.binding, transport.knownHosts.path, transport.identity.path, action, arguments)
+	transport.mu.Unlock()
 	command := exec.CommandContext(commandContext, "/usr/bin/ssh", encoded...)
 	command.WaitDelay = remoteReadOnlyWaitDelay
+	command.Dir = "/"
+	command.Env = sshCommandEnvironment()
 	command.Stdin = newStaticScriptReader()
 	limited := &boundedWriter{destination: output, remaining: maxOutput}
 	command.Stdout = limited
@@ -72,11 +78,25 @@ func (sshTransport) run(ctx context.Context, action string, arguments []string, 
 	return stderr.summary(), nil
 }
 
-func sshCommandArguments(action string, arguments []string) []string {
-	encoded := make([]string, 0, len(arguments)+13)
+func sshCommandEnvironment() []string {
+	return []string{"HOME=/nonexistent", "LANG=C", "LC_ALL=C", "PATH=/usr/bin:/bin", "SSH_ASKPASS_REQUIRE=never"}
+}
+
+func sshCommandArguments(binding SSHTransport, knownHostsPath, identityPath, action string, arguments []string) []string {
+	encoded := make([]string, 0, len(arguments)+52)
 	encoded = append(encoded,
-		"-T", "-oBatchMode=yes", "-oClearAllForwardings=yes", "-oForwardAgent=no", "-oForwardX11=no", "-oPermitLocalCommand=no", "-oRequestTTY=no",
-		"reference-host", "--", "/usr/bin/bash", "-s", "--", action,
+		"-F", "none", "-T",
+		"-oBatchMode=yes", "-oClearAllForwardings=yes", "-oForwardAgent=no", "-oForwardX11=no", "-oPermitLocalCommand=no", "-oRequestTTY=no", "-oEscapeChar=none",
+		"-oStrictHostKeyChecking=yes", "-oUserKnownHostsFile="+knownHostsPath, "-oGlobalKnownHostsFile=/dev/null",
+		"-oHostKeyAlias="+binding.HostKeyAlias, "-oHostKeyAlgorithms="+binding.HostKeyAlgorithm,
+		"-oUpdateHostKeys=no", "-oVerifyHostKeyDNS=no", "-oCheckHostIP=no", "-oCanonicalizeHostname=no", "-oKnownHostsCommand=none",
+		"-oProxyCommand=none", "-oProxyJump=none", "-oProxyUseFdpass=no",
+		"-oControlMaster=no", "-oControlPath=none", "-oControlPersist=no",
+		"-oIdentityAgent=none", "-oIdentityFile=none", "-i", identityPath, "-oCertificateFile=none", "-oIdentitiesOnly=yes",
+		"-oPasswordAuthentication=no", "-oKbdInteractiveAuthentication=no", "-oHostbasedAuthentication=no", "-oGSSAPIAuthentication=no",
+		"-oPubkeyAuthentication=yes", "-oPreferredAuthentications=publickey", "-oNumberOfPasswordPrompts=0", "-oAddKeysToAgent=no",
+		"-oLogLevel=ERROR", "-p", strconv.Itoa(binding.Port), "-l", binding.User,
+		"--", binding.ConnectAddress, "/usr/bin/bash", "-s", "--", action,
 	)
 	for _, argument := range arguments {
 		encoded = append(encoded, hex.EncodeToString([]byte(argument)))

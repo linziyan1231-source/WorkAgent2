@@ -26,9 +26,10 @@ import (
 )
 
 type InitSpecOptions struct {
-	LegacySnapshot  string
-	MigrationReport string
-	Output          string
+	LegacySnapshot   string
+	MigrationReport  string
+	TransportProfile string
+	Output           string
 }
 
 type InitSpecReport struct {
@@ -75,10 +76,14 @@ func InitializeSpec(ctx context.Context, options InitSpecOptions) (InitSpecRepor
 	if os.Geteuid() != 0 {
 		return InitSpecReport{}, errors.New("private capture-spec initialization requires root")
 	}
-	for _, item := range []struct{ value, label string }{{options.LegacySnapshot, "legacy snapshot"}, {options.MigrationReport, "migration report"}, {options.Output, "spec output"}} {
+	for _, item := range []struct{ value, label string }{{options.LegacySnapshot, "legacy snapshot"}, {options.MigrationReport, "migration report"}, {options.TransportProfile, "SSH transport profile"}, {options.Output, "spec output"}} {
 		if err := validateAbsoluteFilePath(item.value, item.label); err != nil {
 			return InitSpecReport{}, err
 		}
+	}
+	transport, err := loadSSHTransportProfile(options.TransportProfile, 0)
+	if err != nil {
+		return InitSpecReport{}, err
 	}
 	rootFD, _, err := openPrivateRoot(options.LegacySnapshot, 0)
 	if err != nil {
@@ -133,7 +138,7 @@ func InitializeSpec(ctx context.Context, options InitSpecOptions) (InitSpecRepor
 		return InitSpecReport{}, errors.New("legacy CLIProxy auth directory is invalid")
 	}
 	cliproxyRoot := path.Dir(authPath)
-	spec := Spec{SchemaVersion: 1, ExpectedTenantCount: 8, ExpectedExternalWorkspaceCount: len(external.Workspaces)}
+	spec := Spec{SchemaVersion: SpecSchemaVersion, SSHTransport: transport, ExpectedTenantCount: 8, ExpectedExternalWorkspaceCount: len(external.Workspaces)}
 	addFile := func(id, role, source, destination string, minimum int64) error {
 		relative := destination
 		info, err := secureLegacyFileInfo(rootFD, relative)
@@ -228,6 +233,10 @@ func InitializeSpec(ctx context.Context, options InitSpecOptions) (InitSpecRepor
 	}
 	defer clear(payload)
 	digest := sha256.Sum256(payload)
+	endingTransport, err := loadSSHTransportProfile(options.TransportProfile, 0)
+	if err != nil || endingTransport != transport {
+		return InitSpecReport{}, errors.New("private SSH transport profile drifted during capture-spec initialization")
+	}
 	if err := writePrivateSpecNoReplace(manifestCopy, externalPayload, 0); err != nil {
 		return InitSpecReport{}, errors.New("publish root-owned private external-workspace companion")
 	}
