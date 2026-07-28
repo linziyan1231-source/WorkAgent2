@@ -165,12 +165,9 @@ func TestCLIProxyReadinessChecksAuthenticatedRuntimeContract(t *testing.T) {
 	}
 }
 
-func TestMigrationVerificationAllowsPreOAuthWhileFullReadinessRejectsIt(t *testing.T) {
+func TestCLIProxyReadinessRejectsEmptyProviderOAuthInventory(t *testing.T) {
 	fixture := validReadinessClient()
 	fixture.authFiles = validProviderAuthFiles()
-	if err := checkMigrationReadinessWithClient(context.Background(), readinessEndpoint(), readinessPolicy(), fixture); err != nil {
-		t.Fatalf("pre-OAuth migration verification readiness was rejected: %v", err)
-	}
 	if err := checkReadinessWithClient(context.Background(), readinessEndpoint(), readinessPolicy(), fixture); err == nil {
 		t.Fatal("doctor/Portal full readiness accepted an empty provider OAuth inventory")
 	}

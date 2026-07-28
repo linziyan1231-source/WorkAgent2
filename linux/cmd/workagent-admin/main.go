@@ -20,14 +20,12 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/auth"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/backup"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/backupquiescence"
-	"github.com/linziyan1231-source/WorkAgent2/linux/internal/cliproxy"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/coreactivation"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/edgepublication"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/hostcheck"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
-	"github.com/linziyan1231-source/WorkAgent2/linux/internal/productconfig"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/safelog"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/serviceaction"
@@ -362,19 +360,12 @@ func portalActivationIdentities(ctx context.Context, data *store.Store) ([]store
 	return identities, nil
 }
 
-// activateTenantCatalog is the explicit migration/bootstrap boundary for a
-// database that already contains enabled users while every restored socket is
-// still disabled. It persistently converges the complete catalog before the
-// readiness target is allowed to run, then starts and proves every enabled
-// socket without changing any Portal identity.
-const (
-	productionControlRoot                   = "/opt/workagent/control"
-	productionMigrationReportPath           = "/var/lib/workagent/migration/report.json"
-	productionMigrationPlanPath             = "/var/lib/workagent/migration/cutover/cliproxy-quota-overrides.json"
-	productionMigrationReceiptStagePath     = "/var/lib/workagent/migration/cutover/.cliproxy-live-verification.json.workagent-stage"
-	productionMigrationPublicationJournal   = "/var/lib/workagent/migration/import-stage/journal.json"
-	productionCLIProxyServiceCredentialPath = "/run/credentials/cliproxyapi.service/cliproxy-management-key"
-)
+// activateTenantCatalog is the explicit fresh-bootstrap boundary for a
+// database that already contains an enabled administrator while every restored
+// socket is still disabled. It persistently converges the complete catalog
+// before the readiness target is allowed to run, then starts and proves every
+// enabled socket without changing any Portal identity.
+const productionControlRoot = "/opt/workagent/control"
 
 type tenantCatalogActivationAdmission func(context.Context, config.Portal, *store.Store, []store.PortalUserIdentity) error
 
@@ -382,21 +373,18 @@ func activateTenantCatalog(arguments []string) (resultErr error) {
 	flags := flag.NewFlagSet("activate-tenant-catalog", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "/etc/workagent/portal.json", "Portal configuration")
-	initial := flags.Bool("initial", false, "confirm a fresh one-admin bootstrap with no Windows migration evidence")
-	report := flags.String("report", productionMigrationReportPath, "protected completed Windows migration report")
-	plan := flags.String("plan", productionMigrationPlanPath, "protected CLIProxy migration cutover plan")
-	credential := flags.String("credential", productionCLIProxyServiceCredentialPath, "CLIProxy service-local management credential identity")
+	initial := flags.Bool("initial", false, "confirm a fresh one-admin bootstrap")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("activate-tenant-catalog does not accept positional arguments")
 	}
+	if !*initial {
+		return errors.New("activate-tenant-catalog requires --initial to confirm the fresh bootstrap")
+	}
 	if os.Geteuid() != 0 {
 		return errors.New("tenant catalog activation must run as root")
-	}
-	if *initial && (*report != productionMigrationReportPath || *plan != productionMigrationPlanPath || *credential != productionCLIProxyServiceCredentialPath) {
-		return errors.New("initial tenant activation does not accept migration evidence overrides")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -416,24 +404,8 @@ func activateTenantCatalog(arguments []string) (resultErr error) {
 			resultErr = errors.Join(resultErr, fixed.Close())
 		}
 	}()
-	var receiptValidation cliproxy.LiveVerificationReceiptValidation
 	admission := tenantCatalogActivationAdmission(func(ctx context.Context, portal config.Portal, data *store.Store, identities []store.PortalUserIdentity) error {
-		if *initial {
-			return validateInitialTenantCatalogActivation(ctx, data, identities)
-		}
-		endpoint := portal.CLIProxy
-		endpoint.ManagementCredentialFile = *credential
-		policy, err := productconfig.LoadPolicy(portal.PolicyFile)
-		if err != nil {
-			return err
-		}
-		receiptValidation, err = cliproxy.ValidateMigrationLiveVerificationReceipt(ctx, cliproxy.LiveVerificationReceiptValidationOptions{
-			ReportPath: *report, PlanPath: *plan, PortalDatabasePath: portal.DatabasePath(), CLIProxy: endpoint, Policy: policy,
-		})
-		if err != nil {
-			return fmt.Errorf("validate fresh CLIProxy migration live-verification receipt: %w", err)
-		}
-		return nil
+		return validateInitialTenantCatalogActivation(ctx, data, identities)
 	})
 	portalConfig, identities, err := convergeStoredTenantActivationCatalogLocked(ctx, *configPath, controller, admission)
 	if err != nil {
@@ -450,21 +422,10 @@ func activateTenantCatalog(arguments []string) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	if !*initial {
-		if err := cliproxy.ValidateMigrationLiveVerificationServiceGeneration(ctx, receiptValidation.ServiceGenerationSHA256); err != nil {
-			return fmt.Errorf("CLIProxy service generation changed across tenant activation: %w", err)
-		}
-	}
-	result := map[string]any{
-		"activated": true, "mode": map[bool]string{true: "initial", false: "windows-migration"}[*initial],
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"activated": true, "mode": "initial",
 		"tenants": len(identities), "enabled_sockets": started,
-	}
-	if !*initial {
-		result["migration_receipt"] = cliproxy.MigrationLiveVerificationReceiptPath
-		result["migration_receipt_sha256"] = receiptValidation.ReceiptSHA256
-		result["migration_receipt_expires_at"] = receiptValidation.ExpiresAt
-	}
-	return json.NewEncoder(os.Stdout).Encode(result)
+	})
 }
 
 func convergeStoredTenantActivationCatalogLocked(ctx context.Context, configPath string, controller systemdctl.Controller, admission tenantCatalogActivationAdmission) (portal config.Portal, identities []store.PortalUserIdentity, resultErr error) {
@@ -510,17 +471,6 @@ func validateInitialTenantCatalogActivation(ctx context.Context, data *store.Sto
 	if ctx == nil || data == nil {
 		return errors.New("initial tenant catalog activation evidence is unavailable")
 	}
-	for _, path := range []string{
-		productionMigrationReportPath,
-		productionMigrationPlanPath,
-		cliproxy.MigrationLiveVerificationReceiptPath,
-		productionMigrationReceiptStagePath,
-		productionMigrationPublicationJournal,
-	} {
-		if err := requireInitialMigrationArtifactAbsent(path); err != nil {
-			return err
-		}
-	}
 	users, err := data.ListUsers(ctx)
 	if err != nil {
 		return err
@@ -535,38 +485,6 @@ func validateInitialTenantCatalogShape(users []store.User, identities []store.Po
 		return errors.New("initial tenant activation requires exactly one enabled administrator identity")
 	}
 	return nil
-}
-
-func requireInitialMigrationArtifactAbsent(path string) error {
-	const migrationRoot = "/var/lib/workagent/migration"
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return errors.New("initial migration evidence path is invalid")
-	}
-	relative, err := filepath.Rel(migrationRoot, path)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return errors.New("initial migration evidence path is outside the production migration root")
-	}
-	current := "/var/lib/workagent"
-	for _, component := range append([]string{"migration"}, strings.Split(filepath.Dir(relative), string(filepath.Separator))...) {
-		if component == "." || component == "" {
-			continue
-		}
-		current = filepath.Join(current, component)
-		info, inspectErr := os.Lstat(current)
-		if errors.Is(inspectErr, os.ErrNotExist) {
-			return nil
-		}
-		stat, ok := fsutil.InfoSyscallStat(info)
-		if inspectErr != nil || !ok || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || stat.Uid != 0 || stat.Gid != 0 || info.Mode().Perm()&0o022 != 0 {
-			return fmt.Errorf("initial migration evidence parent is unsafe: %s", current)
-		}
-	}
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect initial migration evidence %s: %w", path, err)
-	}
-	return fmt.Errorf("initial activation is forbidden because migration evidence exists: %s", path)
 }
 
 func startStoredTenantActivationCatalog(ctx context.Context, configPath string, expectedPortal config.Portal, expectedIdentities []store.PortalUserIdentity, controller systemdctl.Controller) (started int, resultErr error) {
