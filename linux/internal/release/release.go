@@ -817,7 +817,7 @@ func activateScopedUnlocked(pointerPath, nextRelease, scope string, now time.Tim
 	if err != nil {
 		return err
 	}
-	return atomicWrite(pointerPath, append(payload, '\n'), 0o600)
+	return atomicWrite(pointerPath, append(payload, '\n'), 0o444)
 }
 
 func Rollback(pointerPath string, now time.Time) (Pointer, error) {
@@ -843,7 +843,7 @@ func rollbackUnlocked(pointerPath string, now time.Time) (Pointer, error) {
 	if err != nil {
 		return Pointer{}, err
 	}
-	if err := atomicWrite(pointerPath, append(payload, '\n'), 0o600); err != nil {
+	if err := atomicWrite(pointerPath, append(payload, '\n'), 0o444); err != nil {
 		return Pointer{}, err
 	}
 	return next, nil
