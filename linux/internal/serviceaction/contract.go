@@ -277,7 +277,7 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required chatforward/app/src/server.js --required-executable chatforward/integration/run-server.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
 		}
 		post = []systemdExecContract{
-			contract("/opt/workagent/shared/chatforward/node/bin/node", "/opt/workagent/shared/chatforward/node/bin/node /opt/workagent/shared/chatforward/integration/readiness.mjs --timeout-ms 15000", false),
+			contract("/opt/workagent/shared/chatforward/node/bin/node", "/opt/workagent/shared/chatforward/node/bin/node --jitless /opt/workagent/shared/chatforward/integration/readiness.mjs --timeout-ms 15000", false),
 		}
 	case "workagent-chatforward-browser.service":
 		pre = []systemdExecContract{
