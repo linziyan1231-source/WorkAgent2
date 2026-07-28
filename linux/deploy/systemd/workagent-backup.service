@@ -8,7 +8,7 @@ ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-backup
 ConditionFileIsExecutable=/usr/libexec/workagent-fixed-root-exec-v1
 ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
 ConditionPathExists=/run/workagent/activation.lock
-ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/opt/workagent/control/manifest.json
 ConditionPathExists=/run/workagent/release-config.lock
 ConditionPathExists=/opt/workagent/control.lock
 ConditionPathExists=/etc/workagent/backup.json
@@ -22,7 +22,7 @@ Environment=WORKAGENT_EXTERNAL_ACTIVATION_LOCK=1
 OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only
 OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only
 ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
-ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release
 ExecStart=/usr/bin/flock --exclusive --no-fork /run/workagent/activation.lock /usr/libexec/workagent-fixed-root-exec-v1 backup /opt/workagent/control/bin/workagent-backup create --portal-config /etc/workagent/portal.json --config /etc/workagent/backup.json --quiesce-systemd
 # A timer that fires while the core transaction owns A_EX can leave the main
 # flock waiting. Stop/rollback must never self-deadlock in ExecStopPost: a

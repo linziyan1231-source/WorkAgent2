@@ -216,13 +216,11 @@ case "$profile" in
   chatforward-login)
     /opt/workagent/control/bin/workagent-release verify \
       --root /opt/workagent/control \
-      --public-key /etc/workagent/trust/release-signing.pub \
       --scope portal \
       --required-executable bin/workagent-admin \
       --required-executable bin/workagent-release || fail "verify signed control root for ChatForward login"
     /opt/workagent/control/bin/workagent-release verify \
       --root /opt/workagent/shared \
-      --public-key /etc/workagent/trust/release-signing.pub \
       --scope shared \
       --required chatforward/app/extension/manifest.json \
       --required-executable chatforward/integration/login.sh \
@@ -232,13 +230,11 @@ case "$profile" in
   chatforward-smoke)
     /opt/workagent/control/bin/workagent-release verify \
       --root /opt/workagent/control \
-      --public-key /etc/workagent/trust/release-signing.pub \
       --scope portal \
       --required-executable admin/smoke-chatforward-browser-sandbox \
       --required-executable bin/workagent-release || fail "verify signed control root for ChatForward smoke"
     /opt/workagent/control/bin/workagent-release verify \
       --root /opt/workagent/shared \
-      --public-key /etc/workagent/trust/release-signing.pub \
       --scope shared \
       --required chatforward/app/extension/manifest.json \
       --required-executable chatforward/integration/run-browser.sh \

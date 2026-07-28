@@ -7,7 +7,7 @@ RequiresMountsFor=/var/lib/workagent/portal
 ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-portal
 ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
 ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
-ConditionPathExists=/opt/workagent/control/manifest.sig
+ConditionPathExists=/opt/workagent/control/manifest.json
 ConditionPathExists=/run/workagent/release-config.lock
 ConditionPathExists=/run/workagent/activation.lock
 ConditionPathExists=/opt/workagent/control.lock
@@ -26,7 +26,7 @@ OpenFile=/opt/workagent/aionui/current.json.lock:workagent-runtime-release-lock:
 WorkingDirectory=/var/lib/workagent/portal
 ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
 ExecStartPre=+/usr/libexec/workagent-recovery-activation-admission-v1
-ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal
 ExecStart=/bin/bash -c '/usr/bin/flock --shared 3 || exit 70; exec "$@"' workagent-runtime-start /opt/workagent/control/bin/workagent-portal --config /etc/workagent/portal.json
 # Provider credentials are intentionally absent from the deny-all staging
 # baseline. Production adds LoadCredential entries in a root-owned drop-in.

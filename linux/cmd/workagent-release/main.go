@@ -254,21 +254,12 @@ type verificationFlags struct {
 	components         map[string]string
 }
 
-// ignoredPublicKeyFlag keeps the retired --public-key flag parseable while the
-// pinned systemd and deploy contract strings that still pass it are updated.
-// The value is accepted and ignored; unsigned SHA-256 manifest verification no
-// longer consumes any trust key. Remove together with the contract strings.
-func ignoredPublicKeyFlag(flags *flag.FlagSet) {
-	_ = flags.String("public-key", "", "retired and ignored: unsigned release verification uses no trust key")
-}
-
 func addVerificationFlags(flags *flag.FlagSet, includeRoot bool) verificationFlags {
 	values := verificationFlags{}
 	if includeRoot {
 		values.root = flags.String("root", "", "immutable release root")
 	}
 	values.releaseID = flags.String("release-id", "", "expected release identifier")
-	ignoredPublicKeyFlag(flags)
 	values.scope = flags.String("scope", "", "expected component scope")
 	flags.Var(&values.required, "required", "required relative release file; repeat as needed")
 	flags.Var(&values.requiredExecutable, "required-executable", "required canonically executable release file; repeat as needed")
@@ -380,7 +371,6 @@ func fixedInstall(arguments []string) error {
 	destination := flags.String("destination", "", "exact fixed-root destination")
 	stagedRoot := flags.String("staged-root", "", "complete verified sibling stage")
 	expectedCurrent := flags.String("expected-current-release", "", "exact current release ID; omit only for first install")
-	ignoredPublicKeyFlag(flags)
 	portalConfig := flags.String("portal-config", "/etc/workagent/portal.json", "protected Portal configuration path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -413,7 +403,6 @@ func fixedRollback(arguments []string) error {
 	destination := flags.String("destination", "", "exact fixed-root destination")
 	expectedCurrent := flags.String("expected-current-release", "", "exact current release ID")
 	expectedPrevious := flags.String("expected-previous-release", "", "exact previous release ID")
-	ignoredPublicKeyFlag(flags)
 	portalConfig := flags.String("portal-config", "/etc/workagent/portal.json", "protected Portal configuration path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -444,7 +433,6 @@ func fixedRollback(arguments []string) error {
 func fixedReconcile(arguments []string) error {
 	flags := commandFlags("fixed-reconcile")
 	destination := flags.String("destination", "", "exact fixed-root destination")
-	ignoredPublicKeyFlag(flags)
 	portalConfig := flags.String("portal-config", "/etc/workagent/portal.json", "protected Portal configuration path")
 	initial := flags.Bool("initial", false, "recover only a pending first control-root install before tenant configuration exists")
 	if err := flags.Parse(arguments); err != nil {
@@ -801,7 +789,6 @@ func rollback(arguments []string) error {
 	flags := commandFlags("rollback")
 	pointerPath := flags.String("pointer", "", "absolute current pointer path")
 	releasesRoot := flags.String("releases-root", "", "root containing immutable releases")
-	ignoredPublicKeyFlag(flags)
 	scope := flags.String("scope", "", "expected component scope")
 	portalConfigPath := flags.String("portal-config", "/etc/workagent/portal.json", "Portal configuration path")
 	var required repeatedFlag

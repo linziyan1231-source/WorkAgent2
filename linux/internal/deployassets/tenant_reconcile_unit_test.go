@@ -13,7 +13,7 @@ func TestTenantConfigReconcileUnitIsExactAndBootBlocking(t *testing.T) {
 		"ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1",
 		"ConditionPathExists=/run/workagent/activation.lock",
 		recoveryAdmissionExecStartPre,
-		"ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-release",
+		"ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-release",
 		"ExecStart=/opt/workagent/control/bin/workagent-admin reconcile-tenant-files --config /etc/workagent/portal.json",
 		"ProtectSystem=strict",
 		"ReadWritePaths=/run/workagent/release-config.lock /etc/workagent /etc/systemd/system /var/lib/workagent",

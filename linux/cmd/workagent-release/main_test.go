@@ -673,7 +673,6 @@ func TestNamedReleaseCommandsRejectUnsafeIDBeforeReadingHostState(t *testing.T) 
 		"--releases-root", releasesRoot,
 		"--pointer", pointer,
 		"--release-id", "..",
-		"--public-key", filepath.Join(channel, "release.pub"),
 		"--scope", release.ScopeRuntime,
 	}
 	if err := preflight(common); err == nil || !strings.Contains(err.Error(), "release-id") {

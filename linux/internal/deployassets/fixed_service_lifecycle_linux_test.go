@@ -702,7 +702,6 @@ type chatForwardHelperFixture struct {
 	target       string
 	controlRoot  string
 	sharedRoot   string
-	publicKey    string
 	verification string
 	childMarker  string
 	locks        []string
@@ -743,13 +742,10 @@ func freezeChatForwardFixtureRoot(t *testing.T, root string) {
 	}
 }
 
-func signChatForwardFixtureRoot(t *testing.T, root, privateKey, scope, componentName string) {
+func manifestChatForwardFixtureRoot(t *testing.T, root, scope, componentName string) {
 	t.Helper()
 	builtAt := time.Unix(1_800_000_000, 0).UTC()
 	component := release.Component{Name: componentName, Version: "1.0.0", SourceRevision: fixedHelperTestRevision}
-	writeChatForwardFixtureFile(t, root, "sbom.spdx.json", `{"spdxVersion":"SPDX-2.3","documentNamespace":"https://workagent.example.test/spdx/fixed-helper","packages":[{"name":"`+componentName+`"}]}`+"\n", 0o444)
-	writeChatForwardFixtureFile(t, root, "provenance.json", `{"schema_version":1,"release_id":"fixed-helper-test","source_revision":"`+fixedHelperTestRevision+`","builder_id":"fixed-helper-test","build_type":"test","invocation_id":"fixed-helper-test","reproducible":true,"materials":[{"uri":"git:workagent-test","revision":"`+fixedHelperTestRevision+`"}]}`+"\n", 0o444)
-	writeChatForwardFixtureFile(t, root, "licenses.json", `{"schema_version":1,"approved":true,"reviewed_at":"`+builtAt.Format(time.RFC3339)+`","entries":[{"component":"`+componentName+`","spdx_expression":"LicenseRef-WorkAgent-Test","copyright":"WorkAgent authorized test fixture"}]}`+"\n", 0o444)
 	metadata := release.Manifest{
 		ReleaseID:                 "fixed-helper-test",
 		SourceRevision:            fixedHelperTestRevision,
@@ -761,18 +757,12 @@ func signChatForwardFixtureRoot(t *testing.T, root, privateKey, scope, component
 		MinimumReadableDataSchema: 1,
 		MaximumReadableDataSchema: 1,
 		Components:                []release.Component{component},
-		SBOMPath:                  "sbom.spdx.json",
-		ProvenancePath:            "provenance.json",
-		LicenseReportPath:         "licenses.json",
 	}
 	manifest, err := release.BuildManifest(root, metadata)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := release.WriteManifest(filepath.Join(root, "manifest.json"), manifest); err != nil {
-		t.Fatal(err)
-	}
-	if err := release.SignManifest(filepath.Join(root, "manifest.json"), filepath.Join(root, "manifest.sig"), privateKey, false); err != nil {
 		t.Fatal(err)
 	}
 	freezeChatForwardFixtureRoot(t, root)
@@ -798,7 +788,6 @@ func TestFixedRootReleaseVerifierSubprocess(t *testing.T) {
 	}
 	arguments := os.Args[separator+2:]
 	root := ""
-	publicKey := ""
 	scope := ""
 	var required []string
 	var requiredExecutable []string
@@ -811,8 +800,6 @@ func TestFixedRootReleaseVerifierSubprocess(t *testing.T) {
 		switch name {
 		case "--root":
 			root = value
-		case "--public-key":
-			publicKey = value
 		case "--scope":
 			scope = value
 		case "--required":
@@ -831,9 +818,6 @@ func TestFixedRootReleaseVerifierSubprocess(t *testing.T) {
 		RequiredPaths:           contract.RequiredPaths,
 		RequiredExecutablePaths: contract.RequiredExecutablePaths,
 		RequireRootOwner:        true,
-		RequireSignature:        true,
-		SignaturePath:           filepath.Join(root, "manifest.sig"),
-		PublicKeyPath:           publicKey,
 		AllowedScopes:           []string{scope},
 	})
 	if err != nil {
@@ -852,7 +836,6 @@ func newChatForwardHelperFixture(t *testing.T, realVerifier string) chatForwardH
 		helper:       filepath.Join(root, "workagent-fixed-root-exec-v1"),
 		controlRoot:  filepath.Join(root, "control"),
 		sharedRoot:   filepath.Join(root, "shared"),
-		publicKey:    filepath.Join(root, "trust", "release-signing.pub"),
 		verification: filepath.Join(root, "verification-arguments"),
 		childMarker:  filepath.Join(root, "child-started"),
 		locks: []string{
@@ -871,13 +854,6 @@ func newChatForwardHelperFixture(t *testing.T, realVerifier string) chatForwardH
 		if err := os.Chmod(path, 0o600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := os.MkdirAll(filepath.Dir(fixture.publicKey), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	privateKey := filepath.Join(root, "trust", "release-signing.key")
-	if err := release.GenerateSigningKey(fixture.publicKey, privateKey); err != nil {
-		t.Fatal(err)
 	}
 
 	verifierWrapper := `#!/bin/bash
@@ -909,8 +885,8 @@ while :; do /bin/sleep 1; done
 	writeChatForwardFixtureFile(t, fixture.sharedRoot, "chatforward/app/extension/manifest.json", "trusted extension\n", 0o444)
 	writeChatForwardFixtureFile(t, fixture.sharedRoot, "chatforward/integration/run-browser.sh", "#!/bin/bash\nexit 0\n", 0o555)
 	writeChatForwardFixtureFile(t, fixture.sharedRoot, "chatforward/node/bin/node", "#!/bin/bash\nexit 0\n", 0o555)
-	signChatForwardFixtureRoot(t, fixture.controlRoot, privateKey, release.ScopePortal, "workagent-control")
-	signChatForwardFixtureRoot(t, fixture.sharedRoot, privateKey, release.ScopeShared, "chatforward")
+	manifestChatForwardFixtureRoot(t, fixture.controlRoot, release.ScopePortal, "workagent-control")
+	manifestChatForwardFixtureRoot(t, fixture.sharedRoot, release.ScopeShared, "chatforward")
 	if err := os.WriteFile(fixture.chrome, []byte("#!/bin/bash\nexit 0\n"), 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -924,7 +900,6 @@ while :; do /bin/sleep 1; done
 	helper = strings.ReplaceAll(helper, "/opt/workagent/shared.lock", fixture.locks[2])
 	helper = strings.ReplaceAll(helper, "/opt/workagent/control", fixture.controlRoot)
 	helper = strings.ReplaceAll(helper, "/opt/workagent/shared", fixture.sharedRoot)
-	helper = strings.ReplaceAll(helper, "/etc/workagent/trust/release-signing.pub", fixture.publicKey)
 	helper = strings.ReplaceAll(helper, "/usr/bin/google-chrome-stable", fixture.chrome)
 	if err := os.WriteFile(fixture.helper, []byte(helper), 0o700); err != nil {
 		t.Fatal(err)
@@ -1036,19 +1011,11 @@ func TestFixedRootChatForwardVerificationRejectsTamperAndHoldsLocks(t *testing.T
 			name: "tampered manifest",
 			mutate: func(t *testing.T, fixture chatForwardHelperFixture) {
 				path := filepath.Join(fixture.controlRoot, "manifest.json")
-				file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := file.WriteString("\n"); err != nil {
-					file.Close()
-					t.Fatal(err)
-				}
-				if err := file.Close(); err != nil {
+				if err := os.WriteFile(path, []byte(`{"schema_version":3}`+"\n"), 0o444); err != nil {
 					t.Fatal(err)
 				}
 			},
-			wantFailure: "release manifest signature is invalid",
+			wantFailure: "release manifest schema_version must be 4",
 		},
 		{
 			name: "tampered shared asset",

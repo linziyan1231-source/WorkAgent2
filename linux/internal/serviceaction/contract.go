@@ -249,13 +249,13 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 	case "workagent-tenant-config-reconcile.service":
 		pre = []systemdExecContract{
 			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-release", true),
 		}
 	case "cliproxyapi.service":
 		pre = []systemdExecContract{
 			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-cliproxy --required-executable bin/workagent-release", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required-executable cliproxyapi/bin/cli-proxy-api --required-executable cliproxyapi/plugins/cpa-key-policy-v0.4.5.so", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-cliproxy --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required-executable cliproxyapi/bin/cli-proxy-api --required-executable cliproxyapi/plugins/cpa-key-policy-v0.4.5.so", true),
 			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy prepare --template /etc/cliproxyapi/config.yaml --output /var/lib/cliproxyapi/config.yaml --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --state-root /var/lib/cliproxyapi", true),
 		}
 		post = []systemdExecContract{
@@ -264,7 +264,7 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 	case "workagent-notification.service":
 		pre = []systemdExecContract{
 			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release", true),
 			contract("/usr/bin/test", "/usr/bin/test -r /etc/workagent/notification.json", false),
 		}
 		post = []systemdExecContract{
@@ -273,8 +273,8 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 	case "workagent-chatforward.service":
 		pre = []systemdExecContract{
 			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required chatforward/app/src/server.js --required-executable chatforward/integration/run-server.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required chatforward/app/src/server.js --required-executable chatforward/integration/run-server.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
 		}
 		post = []systemdExecContract{
 			contract("/opt/workagent/shared/chatforward/node/bin/node", "/opt/workagent/shared/chatforward/node/bin/node --jitless /opt/workagent/shared/chatforward/integration/readiness.mjs --timeout-ms 15000", false),
@@ -282,8 +282,8 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 	case "workagent-chatforward-browser.service":
 		pre = []systemdExecContract{
 			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required chatforward/app/extension/manifest.json --required-executable chatforward/integration/run-browser.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required chatforward/app/extension/manifest.json --required-executable chatforward/integration/run-browser.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
 		}
 		post = []systemdExecContract{
 			contract("/opt/workagent/shared/chatforward/node/bin/node", "/opt/workagent/shared/chatforward/node/bin/node /opt/workagent/shared/chatforward/integration/readiness.mjs --require-controller --timeout-ms 45000", false),
@@ -291,12 +291,12 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 	case "workagent-portal.service":
 		pre = []systemdExecContract{
 			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal", true),
 		}
 	case "workagent-backup.service":
 		pre = []systemdExecContract{
 			core,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release", true),
 		}
 		stopPost = []systemdExecContract{
 			contract("/usr/bin/flock", "/usr/bin/flock --exclusive --nonblock --conflict-exit-code 0 /run/workagent/activation.lock /usr/bin/flock --shared /run/workagent/release-config.lock /usr/bin/flock --shared /opt/workagent/control.lock /opt/workagent/control/bin/workagent-backup resume", false),
@@ -304,7 +304,7 @@ func verifyCoreServiceExecVectors(unit string, properties map[string]string) boo
 	case "workagent-healthcheck.service":
 		pre = []systemdExecContract{
 			core,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-healthcheck --required-executable bin/workagent-release", true),
+			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-healthcheck --required-executable bin/workagent-release", true),
 		}
 	default:
 		return false

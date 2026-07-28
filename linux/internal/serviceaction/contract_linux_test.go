@@ -22,7 +22,7 @@ func TestCoreManagerExecVectorsRejectTransientEffectiveCommandTampering(t *testi
 	join := func(records ...string) string { return strings.Join(records, " ; ") }
 	core := "/usr/libexec/workagent-core-activation-admission-v1"
 	recovery := "/usr/libexec/workagent-recovery-activation-admission-v1"
-	verify := "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release"
+	verify := "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release"
 	testRead := "/usr/bin/test -r /etc/workagent/notification.json"
 	ready := "/usr/bin/curl --noproxy * --fail --silent --show-error --max-time 3 http://127.0.0.1:25888/readyz"
 	properties := map[string]string{
@@ -71,10 +71,10 @@ func TestCoreManagerExecVectorsRejectTransientEffectiveCommandTampering(t *testi
 	backupProperties := map[string]string{
 		"ExecStartPre": join(
 			plainRecord(core, core),
-			plainRecord("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release")),
+			plainRecord("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release")),
 		"ExecStartPreEx": join(
 			extendedRecord(core, core, true),
-			extendedRecord("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release", true)),
+			extendedRecord("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release", true)),
 		"ExecStartPost": "", "ExecStartPostEx": "", "ExecReload": "",
 	}
 	stopPost := "/usr/bin/flock --exclusive --nonblock --conflict-exit-code 0 /run/workagent/activation.lock /usr/bin/flock --shared /run/workagent/release-config.lock /usr/bin/flock --shared /opt/workagent/control.lock /opt/workagent/control/bin/workagent-backup resume"

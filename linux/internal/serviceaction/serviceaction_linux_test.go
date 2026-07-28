@@ -350,7 +350,7 @@ func TestPortalEdgeManagerContractRejectsCompleteManagerOnlyCommandDrift(t *test
 	const core = "/usr/libexec/workagent-core-activation-admission-v1"
 	const recovery = "/usr/libexec/workagent-recovery-activation-admission-v1"
 	const start = `/bin/bash -c /usr/bin/flock --shared 3 || exit 70; exec "$@" workagent-runtime-start /opt/workagent/control/bin/workagent-portal --config /etc/workagent/portal.json`
-	const verify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal"
+	const verify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal"
 	base := map[string]string{
 		"LoadState": "loaded", "NeedDaemonReload": "no", "FragmentPath": "/usr/lib/systemd/system/workagent-portal.service", "DropInPaths": "/etc/systemd/system/workagent-portal.service.d/chatforward.conf /etc/systemd/system/workagent-portal.service.d/credentials.conf", "UnitFileState": "enabled",
 		"ActiveState": "active", "SubState": "running", "MainPID": "42", "ControlPID": "0", "Result": "success", "InvocationID": "portal-generation", "ActiveEnterTimestampMonotonic": "100",
@@ -404,8 +404,8 @@ func TestServiceActionManagerContractsBindCLIProxyAndTimerTargets(t *testing.T) 
 	const core = "/usr/libexec/workagent-core-activation-admission-v1"
 	const recovery = "/usr/libexec/workagent-recovery-activation-admission-v1"
 	const start = "/usr/libexec/workagent-fixed-root-exec-v1 cliproxyapi /opt/workagent/shared/cliproxyapi/bin/cli-proxy-api --config /var/lib/cliproxyapi/config.yaml"
-	const controlVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-cliproxy --required-executable bin/workagent-release"
-	const sharedVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required-executable cliproxyapi/bin/cli-proxy-api --required-executable cliproxyapi/plugins/cpa-key-policy-v0.4.5.so"
+	const controlVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-cliproxy --required-executable bin/workagent-release"
+	const sharedVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required-executable cliproxyapi/bin/cli-proxy-api --required-executable cliproxyapi/plugins/cpa-key-policy-v0.4.5.so"
 	const prepare = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy prepare --template /etc/cliproxyapi/config.yaml --output /var/lib/cliproxyapi/config.yaml --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --state-root /var/lib/cliproxyapi"
 	const bootstrap = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --wait 30s"
 	cliproxy := map[string]string{
@@ -446,7 +446,7 @@ func TestServiceActionManagerContractsBindCLIProxyAndTimerTargets(t *testing.T) 
 	}
 
 	const backupStart = "/usr/bin/flock --exclusive --no-fork /run/workagent/activation.lock /usr/libexec/workagent-fixed-root-exec-v1 backup /opt/workagent/control/bin/workagent-backup create --portal-config /etc/workagent/portal.json --config /etc/workagent/backup.json --quiesce-systemd"
-	const backupVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release"
+	const backupVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release"
 	const backupResume = "/usr/bin/flock --exclusive --nonblock --conflict-exit-code 0 /run/workagent/activation.lock /usr/bin/flock --shared /run/workagent/release-config.lock /usr/bin/flock --shared /opt/workagent/control.lock /opt/workagent/control/bin/workagent-backup resume"
 	backupService := map[string]string{
 		"LoadState": "loaded", "NeedDaemonReload": "no", "FragmentPath": "/usr/lib/systemd/system/workagent-backup.service", "UnitFileState": "static",

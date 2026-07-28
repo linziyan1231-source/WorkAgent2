@@ -209,7 +209,7 @@ func TestProductionUnitsFailClosedOnStorageDependenciesAndCredentials(t *testing
 }
 
 func TestEveryWorkAgentExecutableStartsFromAVerifiedSignedRoot(t *testing.T) {
-	controlVerifier := "/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal"
+	controlVerifier := "/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal"
 	for _, relative := range []string{
 		"deploy/systemd/workagent-portal.service",
 		"deploy/systemd/workagent-userhost@.service",
@@ -226,14 +226,14 @@ func TestEveryWorkAgentExecutableStartsFromAVerifiedSignedRoot(t *testing.T) {
 			t.Fatalf("%s can execute an unsigned legacy control-plane path", relative)
 		}
 	}
-	sharedVerifier := "/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared"
+	sharedVerifier := "/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared"
 	for _, relative := range []string{
 		"deploy/systemd/cliproxyapi.service",
 		"deploy/systemd/workagent-chatforward.service",
 		"deploy/systemd/workagent-chatforward-browser.service",
 	} {
 		unit := repositoryFile(t, relative)
-		requireContains(t, unit, sharedVerifier, "ConditionPathExists=/opt/workagent/shared/manifest.sig")
+		requireContains(t, unit, sharedVerifier, "ConditionPathExists=/opt/workagent/shared/manifest.json")
 		for _, forbidden := range []string{"/opt/workagent/cliproxyapi/", "/opt/workagent/chatforward/current/"} {
 			if strings.Contains(unit, forbidden) {
 				t.Fatalf("%s can execute unsigned shared-service path %s", relative, forbidden)
