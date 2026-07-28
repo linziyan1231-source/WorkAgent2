@@ -8,6 +8,6 @@ This directory pins the exact read-only ChatForward snapshot copied from the Win
 - `integration/` is added to the package after the upstream source tests, shell syntax checks and Linux integration tests all pass.
 - `test/` checks readiness fail-closed behavior and Linux deployment invariants.
 
-The output of `scripts/build-chatforward.sh` is deterministic for the same inputs and `SOURCE_DATE_EPOCH`. It is an input to the approved signed package/release pipeline, not an authorization to install an unsigned archive on a production host.
+The output of `scripts/build-chatforward.sh` is deterministic for the same inputs and `SOURCE_DATE_EPOCH`. It is an input to the approved package/release pipeline, not an authorization to install an unverified archive on a production host.
 
 See `docs/CHATFORWARD_LINUX.md` for the production build, service and one-time ChatGPT login procedure.

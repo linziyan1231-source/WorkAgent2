@@ -49,7 +49,7 @@ Linux-only durability and compatibility patches, run both upstream test suites
 (including focused race tests and full vet), set the core linker
 identities to `7.2.81` and `per-key-models.4`, and emit a root-owned immutable
 `cli-proxy-api` plus `cpa-key-policy-v0.4.5.so`. Packaging must record fresh
-Linux artifact hashes, SBOM, provenance, license approval, and the three shared
+Linux artifact hashes and the three shared
 release components `cliproxyapi=7.2.81`,
 `cliproxyapi-patch=per-key-models.4`, and `cpa-key-policy=0.4.5`.
 

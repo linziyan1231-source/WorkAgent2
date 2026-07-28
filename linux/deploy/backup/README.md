@@ -41,7 +41,7 @@ systemd identity drop-in, the independent Renderer release pointer and one
 copy of each distinct tenant runtime pointer. Release trees themselves remain
 immutable package artifacts. Snapshot discovery rejects unexpected tenant
 configuration entries, proves Portal and tenant state-root/lock ownership,
-checks SQLite, quota and signed current/previous releases, and holds all
+checks SQLite, quota and verified current/previous releases, and holds all
 runtime, CLIProxy and shared release-pointer locks until the encrypted local
 and remote copies have completed. Archive construction rechecks file bytes,
 metadata, namespace identity, symbolic-link targets and directory membership

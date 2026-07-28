@@ -17,11 +17,11 @@ scripts/build-chatforward.sh \
   /absolute/empty/chatforward-output
 ```
 
-For reproducibility evidence, build twice into two new empty directories with the same `SOURCE_DATE_EPOCH` and compare both tarball SHA-256 values. Pass the approved archive and exact CLIProxy artifact root to `scripts/assemble-shared-linux.sh`, generate the evidence in `docs/RELEASE_EVIDENCE.md`, and sign the complete result with scope `shared`. Never extract an unsigned developer artifact over `/opt/workagent/shared`.
+For reproducibility evidence, build twice into two new empty directories with the same `SOURCE_DATE_EPOCH` and compare both tarball SHA-256 values. Pass the approved archive and exact CLIProxy artifact root to `scripts/assemble-shared-linux.sh`, then create the manifest for the complete result with scope `shared` as in `docs/RELEASE_EVIDENCE.md`. Never extract an unverified developer artifact over `/opt/workagent/shared`.
 
-The signed shared release must:
+The verified shared release must:
 
-- contain ChatForward only at `/opt/workagent/shared/chatforward`, alongside the signed CLIProxy payload, and pass the service's complete shared-root verification before start;
+- contain ChatForward only at `/opt/workagent/shared/chatforward`, alongside the CLIProxy payload, and pass the service's complete shared-root verification before start;
 - install the two units, the Portal dependency drop-in, the separate sysusers/tmpfiles definitions, and `/etc/workagent/chatforward.env`;
 - depend on a vendor-supported Chromium/Google Chrome version 116 or newer, Xvfb, xauth and util-linux (`runuser`);
 - enable the Chromium sandbox. `--no-sandbox`, a public debugging port, and a host-network X server are forbidden.
@@ -45,7 +45,7 @@ systemctl daemon-reload
 
 `workagent-chatforward` is locked and has `/usr/sbin/nologin`. Its profile, cache and runtime directories are mode `0700`. The Node bridge can write no application directory and uses `--jitless` so the unit can enforce `MemoryDenyWriteExecute=yes`. Chromium has only its three private write paths, a private `/tmp`, an Xvfb display with TCP disabled, no remote-debugging listener, and no sandbox-disabling flag. Its systemd boundary permits only the `user`, `pid`, and `net` namespace types required by the Chrome 150 user-namespace sandbox; a real transient-unit probe with `NoNewPrivileges=yes` and an empty capability set must pass before release, while `RestrictNamespaces=yes` is known to make the sandbox fail closed.
 
-After the exact host RPMs and signed shared root are staged at the required
+After the exact host RPMs and verified shared root are staged at the required
 `/opt/workagent/shared/chatforward` production path, but before the
 real browser service or one-time login starts, run the isolated acceptance
 gate. It uses a dynamic throwaway UID, private bind-mounted profile/cache/runtime
@@ -68,7 +68,7 @@ sudo /usr/bin/systemd-run --quiet --wait --pipe --collect --service-type=exec \
 
 The immutable `chatforward-smoke` profile admits only that exact Chrome 150
 path and command vector. While holding the catalog, control, and shared locks,
-it verifies both signed roots and their complete smoke consumer contract; it
+it verifies both release roots and their complete smoke consumer contract; it
 then releases only the catalog lock and supervises the smoke through exit.
 
 ## 3. One-time interactive ChatGPT login
@@ -95,8 +95,8 @@ sudo /usr/bin/systemd-run --quiet --wait --pipe --collect --service-type=exec \
 
 The closed `chatforward-login` profile requires the activation descriptor
 first, acquires it exclusively, and only then acquires catalog, control and
-shared locks. It verifies the signed control verifier/admin command and the
-exact signed shared login/readiness/Node/extension contract while all four
+shared locks. It verifies the control verifier/admin command and the
+exact shared login/readiness/Node/extension contract while all four
 lifecycle locks are held. The root supervisor retains every lock through child
 exit while passing only its activation open-file description to the login
 child for possession and journal-cleanliness verification. A fixed-root install,
@@ -104,7 +104,7 @@ recovery, tenant activation or second login therefore cannot overlap the
 interactive browser or its managed service actions. Never run `login.sh`
 directly or remove/reorder the four `OpenFile` properties.
 
-Before touching either managed unit, the helper requires the supervisor's exact already-locked activation capability on descriptor 3 and asks the signed control command to authenticate that descriptor while proving both durable activation journals absent. It then closes its copy; the root supervisor retains the same locked open-file description through the entire interactive browser session and both service starts. The helper stops only the managed browser unit, transfers only the current X11 authorization cookie to a short-lived mode-`0600` file, and opens Chromium as `workagent-chatforward` with the production profile and extension. In that window:
+Before touching either managed unit, the helper requires the supervisor's exact already-locked activation capability on descriptor 3 and asks the control release command to authenticate that descriptor while proving both durable activation journals absent. It then closes its copy; the root supervisor retains the same locked open-file description through the entire interactive browser session and both service starts. The helper stops only the managed browser unit, transfers only the current X11 authorization cookie to a short-lived mode-`0600` file, and opens Chromium as `workagent-chatforward` with the production profile and extension. In that window:
 
 1. Confirm `ChatForward Source Bridge` version `0.16.0` appears on `chrome://extensions/`.
 2. Sign in to the intended ChatGPT account.
@@ -150,4 +150,4 @@ Complete browser acceptance with two distinct Portal users and include: three si
 
 ## 5. Recovery boundary
 
-The Chromium profile is host-bound authentication material and is intentionally outside WorkAgent application backups. A normal service or host restart reuses `/var/lib/workagent/chatforward/chromium`. A blank-host disaster recovery restores signed packages and application state, provisions a new host-bound ChatForward credential from the approved external secret escrow, and then requires the same one-time ChatGPT login. Encrypted systemd credential ciphertext from the failed host is not portable and must not be restored. Never restore or copy the Windows profile, and never place the Linux profile in a tenant-accessible or general-purpose backup archive.
+The Chromium profile is host-bound authentication material and is intentionally outside WorkAgent application backups. A normal service or host restart reuses `/var/lib/workagent/chatforward/chromium`. A blank-host disaster recovery restores verified packages and application state, provisions a new host-bound ChatForward credential from the approved external secret escrow, and then requires the same one-time ChatGPT login. Encrypted systemd credential ciphertext from the failed host is not portable and must not be restored. Never restore or copy the Windows profile, and never place the Linux profile in a tenant-accessible or general-purpose backup archive.

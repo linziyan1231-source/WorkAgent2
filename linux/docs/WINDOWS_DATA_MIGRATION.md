@@ -145,7 +145,7 @@ Legacy managed Codex and Kimi credentials, bootstrap markers, pending bundles, t
 
 ## Privileged stage publication
 
-`workagent-import-stage` is the only supported bridge from a completed Linux stage into the fixed production data paths. It is built into the signed control root, runs only when explicitly invoked by root, and is never a service. Supply both fingerprints from the independently reviewed report; the command does not infer or accept a newer stage silently:
+`workagent-import-stage` is the only supported bridge from a completed Linux stage into the fixed production data paths. It is built into the verified control root, runs only when explicitly invoked by root, and is never a service. Supply both fingerprints from the independently reviewed report; the command does not infer or accept a newer stage silently:
 
 ```bash
 /opt/workagent/control/bin/workagent-import-stage \
@@ -265,7 +265,7 @@ zero control PID,
 successful result, monotonic activation timestamp, and the fixed production
 unit fragment with no drop-ins. The fragment may be installed only at the
 trusted `/etc/systemd/system` or `/usr/lib/systemd/system` service path; its
-descriptor-bound content hash must equal the read-only signed
+descriptor-bound content hash must equal the read-only release
 `/opt/workagent/control/share/deploy/systemd/cliproxyapi.service` asset, and
 systemd must report `NeedDaemonReload=no`; that hash and manager-cache state
 are part of the service-generation proof. Success atomically

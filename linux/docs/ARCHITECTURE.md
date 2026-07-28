@@ -9,7 +9,7 @@ flowchart LR
     SocketB --> HostB["UserHost B\ndedicated UID/cgroup"]
     HostA --> RuntimeA["AionUi + AionCore A\nloopback only"]
     HostB --> RuntimeB["AionUi + AionCore B\nloopback only"]
-    Release["root-owned immutable releases\nmanifest + SBOM"] --> HostA
+    Release["root-owned immutable releases\nmanifest + SHA-256 inventory"] --> HostA
     Release --> HostB
 ```
 
@@ -31,7 +31,7 @@ flowchart LR
 - Releases are root-owned, non-writable, target-locked and fully enumerated by SHA-256 manifest; symlinks and unlisted files fail verification.
 - cgroup v2 enforces `MemoryHigh`, `MemoryMax`, `CPUQuota`, `TasksMax` and control-group cleanup.
 - A root-created global lease set counts actual UserHost lifetimes. Portal and tenant maxima must match and can be configured from 1 to 1000; the host deployment default remains 3.
-- UserHost continuously verifies the signed backend executable, its process tree, the single AionCore loopback listener and the AionCore health version derived from the signed component manifest.
+- UserHost continuously verifies the release backend executable, its process tree, the single AionCore loopback listener and the AionCore health version derived from the release component manifest.
 - Each UserHost lifetime generates a fresh canonical 32-byte transport credential in memory. The credential is never placed in an environment: UserHost puts only the non-secret tenant and fd3 markers in AionUi's initial environment and sends the credential over one anonymous socket packet. AionUi removes the markers from its mutable child environment, although Linux `/proc` still exposes those non-secret initial bytes; AionCore byte-scrubs its tenant, fd and removed legacy-token entries from the initial environment before creating worker threads. UserHost removes every browser-supplied `X-WorkAgent-*` header before injecting only the trusted runtime header. The credential is never passed to Agent CLI processes, persisted or logged, and is zeroed only after HTTP handlers and hijacked WebSocket tunnels have stopped.
 - Portal cookies, browser authorization and CSRF headers are stripped before proxying. Tenant `Set-Cookie` responses are removed.
 

@@ -27,7 +27,7 @@ Complete these checks from a trusted root console:
 ```
 
 Require exactly `ActiveState=active`, `SubState=running`, and a positive
-`MainPID`. The binary must come from the verified signed shared release, and
+`MainPID`. The binary must come from the verified shared release, and
 the service must already have passed its pre-OAuth startup contract. Do not
 copy an auth directory from Windows or another Linux host, and do not run the
 OAuth binary as root.

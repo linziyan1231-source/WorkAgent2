@@ -15,6 +15,6 @@ Run `scripts/build-aionui-linux.sh`. It is offline, refuses to overwrite an outp
 
 The root-only combined-runtime gate is `WORKAGENT_RUNTIME_AUTH_RUNTIME_ROOT=/absolute/release/root go test ./internal/userhost -run TestRealRuntimeAuthRejectsCrossUIDDirectAccess -v`. It does not install or start a service: it launches the real release binaries transiently, proves the secret is absent from both child environments and argument vectors, requires AionUi's exact non-secret markers in its initial `/proc` environment, requires AionCore to have byte-scrubbed the tenant, fd and removed legacy-token entries from its initial `/proc` environment, and exercises the second-UID 403 and JWT non-bypass contract. The ordinary source gate also runs a live same-UID sibling attack under `kernel.yama.ptrace_scope=2`, requiring procfs socket open to fail with `ENXIO` and `pidfd_getfd` to fail with `EPERM`.
 
-The AionUi source `LICENSE` is copied into that audit directory only after its pinned checksum passes. Bundling this original file is distribution evidence, not a substitute for the project-wide approved license report.
+The AionUi source `LICENSE` is copied into that audit directory only after its pinned checksum passes. Bundling this original file is distribution evidence.
 
-The project-wide release assembler must merge this payload with AionCore and the three Agent CLIs, then produce the signed manifest, SBOM, provenance and approved license report. No user database, OAuth token, browser state or credential is an input.
+The project-wide release assembler must merge this payload with AionCore and the three Agent CLIs, then produce the unsigned manifest and its complete SHA-256 inventory. No user database, OAuth token, browser state or credential is an input.

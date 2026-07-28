@@ -30,7 +30,7 @@ When an outbound HTTP/HTTPS proxy is approved, Portal copies one root-controlled
 ## Fail-closed requirements
 
 - Missing or malformed branding, policy, tenant identity, release manifest, credential, trusted-proxy configuration or systemd property prevents startup/readiness.
-- A release hash, provenance, license approval, component version or data-schema mismatch prevents readiness and launch.
+- A release hash, component version or data-schema mismatch prevents readiness and launch.
 - An upgrade cannot pass preflight until the exact per-release maintenance notice has been visible for at least 60 seconds through the authenticated Portal notification endpoint; the protected preflight report binds that evidence to the target release.
 - Enabled ChatForward readiness requires the exact three-pair cap, `quota-v1` protection and source-asset proxy health contract; a listening TCP port or an older partial health response is not sufficient.
 - Unknown models, tenants, forwarded headers, origins and WebSocket upgrades are denied.

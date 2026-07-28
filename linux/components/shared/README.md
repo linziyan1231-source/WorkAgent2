@@ -1,15 +1,14 @@
 # WorkAgent shared-service component contract
 
 The components.json file is the exact component list for a shared or combined
-signed release. It binds CLIProxyAPI, every applied patch family, the policy
+release. It binds CLIProxyAPI, every applied patch family, the policy
 plugin, ChatForward, its browser extension, Node.js, and ws to their
 checksum-locked inputs. It contains no OAuth state, provider account, browser
 profile, management key, policy state, or user data.
 
 The source revisions are hashes of the complete source archive/manifest or the
 tracked composite input manifest, not invented Git commits. Release provenance
-must include every revision, and a package signature does not replace the
-component-level SPDX and license review required by LICENSE_STATUS.md.
+must include every revision.
 
 The shared assembler accepts trusted inputs only through a symlink-free,
 UID/GID-0-owned parent chain with no group/other write permission; the same
