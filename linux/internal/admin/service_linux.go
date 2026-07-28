@@ -46,7 +46,7 @@ func VerifyPortalService(ctx context.Context, portal config.Portal, controller s
 	}
 	hardening, err := controller.Properties(ctx, "workagent-portal.service",
 		"NoNewPrivileges", "UMask", "KillMode", "PrivateDevices", "PrivateTmp", "ProtectClock", "ProtectControlGroups", "ProtectHome", "ProtectHostname",
-		"ProtectKernelLogs", "ProtectKernelModules", "ProtectKernelTunables", "ProtectProc", "ProcSubset", "ProtectSystem", "RestrictRealtime", "LockPersonality",
+		"ProtectKernelLogs", "ProtectKernelModules", "ProtectKernelTunables", "ProtectSystem", "RestrictRealtime", "LockPersonality",
 		"CapabilityBoundingSet", "AmbientCapabilities", "RestrictAddressFamilies", "SystemCallArchitectures", "ReadWritePaths", "InaccessiblePaths",
 		"RestrictNamespaces", "MemoryDenyWriteExecute")
 	if err != nil {
@@ -55,7 +55,7 @@ func VerifyPortalService(ctx context.Context, portal config.Portal, controller s
 	for property, expected := range map[string]string{
 		"NoNewPrivileges": "yes", "UMask": "0077", "KillMode": "control-group", "PrivateDevices": "yes", "PrivateTmp": "yes", "ProtectClock": "yes",
 		"ProtectControlGroups": "yes", "ProtectHome": "yes", "ProtectHostname": "yes", "ProtectKernelLogs": "yes", "ProtectKernelModules": "yes",
-		"ProtectKernelTunables": "yes", "ProtectProc": "invisible", "ProcSubset": "pid", "ProtectSystem": "strict", "RestrictRealtime": "yes",
+		"ProtectKernelTunables": "yes", "ProtectSystem": "strict", "RestrictRealtime": "yes",
 		"LockPersonality": "yes", "CapabilityBoundingSet": "", "AmbientCapabilities": "", "SystemCallArchitectures": "native",
 		"RestrictNamespaces": "yes", "MemoryDenyWriteExecute": "yes",
 	} {

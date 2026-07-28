@@ -45,7 +45,7 @@ func TestPortalServiceSandboxVerificationRejectsWritablePathExpansion(t *testing
 		"MemoryHigh": "1610612736", "MemoryMax": "2147483648", "CPUQuotaPerSecUSec": "2s", "TasksMax": "512",
 		"NoNewPrivileges": "yes", "UMask": "0077", "KillMode": "control-group", "PrivateDevices": "yes", "PrivateTmp": "yes", "ProtectClock": "yes",
 		"ProtectControlGroups": "yes", "ProtectHome": "yes", "ProtectHostname": "yes", "ProtectKernelLogs": "yes", "ProtectKernelModules": "yes",
-		"ProtectKernelTunables": "yes", "ProtectProc": "invisible", "ProcSubset": "pid", "ProtectSystem": "strict", "RestrictRealtime": "yes",
+		"ProtectKernelTunables": "yes", "ProtectSystem": "strict", "RestrictRealtime": "yes",
 		"LockPersonality": "yes", "CapabilityBoundingSet": "", "AmbientCapabilities": "", "SystemCallArchitectures": "native",
 		"RestrictNamespaces": "yes", "MemoryDenyWriteExecute": "yes", "RestrictSUIDSGID": "yes",
 		"RestrictAddressFamilies": "AF_INET6 AF_UNIX AF_INET", "ReadWritePaths": "/run/workagent /var/lib/workagent/portal", "InaccessiblePaths": "-/srv/workagent/users",

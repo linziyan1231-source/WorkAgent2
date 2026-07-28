@@ -135,8 +135,8 @@ func (s *Server) checkTenantReadiness(ctx context.Context) error {
 		if err := admin.VerifyTenantConfigPath(s.cfg, tenant, path); err != nil {
 			return fmt.Errorf("tenant %s configuration protection: %w", userValue.TenantID, err)
 		}
-		if _, err := admin.VerifyTenantHost(s.cfg, tenant); err != nil {
-			return fmt.Errorf("tenant %s host verification: %w", userValue.TenantID, err)
+		if _, err := admin.VerifyTenantRelease(s.cfg, tenant); err != nil {
+			return fmt.Errorf("tenant %s release verification: %w", userValue.TenantID, err)
 		}
 		if err := admin.VerifyTenantService(ctx, s.cfg, tenant, admin.ServiceVerificationOptions{RequireReadySocket: true}); err != nil {
 			return fmt.Errorf("tenant %s service verification: %w", userValue.TenantID, err)

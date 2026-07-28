@@ -61,6 +61,19 @@ func VerifyTenantHost(portal config.Portal, tenant config.Tenant) (TenantVerific
 	if err != nil {
 		return TenantVerification{}, err
 	}
+	release, err := VerifyTenantRelease(portal, tenant)
+	if err != nil {
+		return TenantVerification{}, err
+	}
+	verification.Release = release
+	return verification, nil
+}
+
+// VerifyTenantRelease resolves only the tenant's active runtime release. It is
+// the portion of VerifyTenantHost that a sandboxed Portal may perform: the
+// Portal unit is deliberately denied access to tenant data roots, so data-root
+// and quota verification belongs to root-run host tooling.
+func VerifyTenantRelease(_ config.Portal, tenant config.Tenant) (release.Verified, error) {
 	required := append([]string(nil), tenant.Backend.RequiredReleaseFiles...)
 	requiredExecutables := []string{tenant.Backend.Executable}
 	if tenant.Backend.Migration.Enabled {
@@ -73,10 +86,9 @@ func VerifyTenantHost(portal config.Portal, tenant config.Tenant) (TenantVerific
 		Scope: tenant.Release.Scope, RequiredPaths: required, RequiredExecutablePaths: requiredExecutables, RequireRootOwner: true,
 	})
 	if err != nil {
-		return TenantVerification{}, err
+		return release.Verified{}, err
 	}
-	verification.Release = verified
-	return verification, nil
+	return verified, nil
 }
 
 // VerifyTenantInfrastructure validates the durable host identity, storage and
