@@ -22,8 +22,11 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/backupquiescence"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/coreactivation"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/edgepublication"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/lifecyclelock"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/serviceaction"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/systemdctl"
 )
@@ -54,11 +57,11 @@ var (
 		"workagent-notification.service",
 		"cliproxyapi.service",
 	}
-	rollbackCoreCaddy           = rollbackPublishedCaddyFailClosed
+	rollbackCoreCaddy           = serviceaction.RollbackPublishedCaddyFailClosed
 	verifyCoreBackupEnvironment = verifyProductionCoreBackupEnvironment
 	verifyCorePreflightRollback = verifyProductionCoreRollbackUnitSource
 	syncCorePreflightEnablement = syncCorePersistentEnablement
-	settleCoreCaddy             = settleCommittedCaddyEdge
+	settleCoreCaddy             = serviceaction.SettleCommittedCaddyEdge
 )
 
 type coreSourceVerifier func(string, map[string]string) error
@@ -104,10 +107,10 @@ func activateCoreFleet(arguments []string) (resultErr error) {
 	// Neither recovery protocol may mask the other. In particular, unsafe edge
 	// evidence must not prevent a pending core journal from stopping the whole
 	// fleet before any Portal or database input is read.
-	edgeRecoveryErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
-		return reconcilePendingEdgePublication(cleanupContext, controller)
+	edgeRecoveryErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
+		return edgepublication.ReconcilePending(cleanupContext, controller, serviceaction.WithCleanup, serviceaction.RollbackPublishedCaddyFailClosed)
 	})
-	coreRecoveryErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
+	coreRecoveryErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 		return reconcilePendingCoreActivation(cleanupContext, controller, verifyProductionCoreRollbackUnitSource)
 	})
 	if err := errors.Join(edgeRecoveryErr, coreRecoveryErr); err != nil {
@@ -158,7 +161,7 @@ func activateCoreFleet(arguments []string) (resultErr error) {
 	// A new journal may only be published from a fully fail-closed baseline.
 	// Otherwise a kill before the nested edge watcher starts could leave an old
 	// public Caddy generation or an internal service running indefinitely.
-	if err := withServiceActionCleanup(func(cleanupContext context.Context) error {
+	if err := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 		return rollbackCoreFleetFailClosed(cleanupContext, controller, verifySource, syncCorePersistentEnablement)
 	}); err != nil {
 		return fmt.Errorf("establish fail-closed core baseline before transaction begin: %w", err)
@@ -223,7 +226,7 @@ func activateCoreFleet(arguments []string) (resultErr error) {
 	}
 	transaction = nil
 	if commitErr != nil {
-		return failClosedAfterEdgeCommitError(controller, publication.transaction, commitErr)
+		return edgepublication.FailClosedAfterCommitError(controller, publication.transaction, commitErr, serviceaction.WithCleanup, serviceaction.RollbackPublishedCaddyFailClosed)
 	}
 	if err := settleCommittedCoreCaddyFailClosed(ctx, controller, publication.generation); err != nil {
 		return err
@@ -246,9 +249,9 @@ func commitCoreBeforeNestedEdge(commitCore, commitEdge func() error) (coreCommit
 	return true, nil
 }
 
-func settleCommittedCoreCaddyFailClosed(ctx context.Context, controller systemdctl.Controller, generation caddyPublishingGeneration) error {
+func settleCommittedCoreCaddyFailClosed(ctx context.Context, controller systemdctl.Controller, generation serviceaction.CaddyPublishingGeneration) error {
 	if err := settleCoreCaddy(ctx, controller, generation); err != nil {
-		rollbackErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
+		rollbackErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 			return rollbackCoreCaddy(cleanupContext, controller)
 		})
 		return errors.Join(errors.New("core activation committed but its Caddy watcher did not settle; Caddy was failed closed"), err, rollbackErr)
@@ -315,7 +318,7 @@ func rejectCorePreflightFailClosed(controller systemdctl.Controller, cause error
 	if cause == nil {
 		cause = errors.New("core activation preflight failed")
 	}
-	rollbackErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
+	rollbackErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 		return rollbackCoreFleetFailClosed(cleanupContext, controller, verifyCorePreflightRollback, syncCorePreflightEnablement)
 	})
 	if rollbackErr != nil {
@@ -333,7 +336,7 @@ func startAndProveFreshTenantCatalogReady(ctx context.Context, controller system
 	if err != nil {
 		return err
 	}
-	if !serviceActionUnitStopped(false, before) {
+	if !serviceaction.UnitStopped(false, before) {
 		return errors.New("tenant catalog reconcile service is not at the fail-closed baseline")
 	}
 	targetBefore, err := authenticateCoreUnitState(ctx, controller, tenantCatalogReadyTarget, verifySource)
@@ -394,10 +397,10 @@ func verifyCoreTenantCatalogState(ctx context.Context, controller systemdctl.Con
 }
 
 type coreCaddyPublication struct {
-	generation       caddyPublishingGeneration
-	transaction      *edgePublicationTransaction
-	edgeContent      portalEdgeContentSnapshot
-	portalGeneration portalEdgeGeneration
+	generation       serviceaction.CaddyPublishingGeneration
+	transaction      *edgepublication.Transaction
+	edgeContent      serviceaction.PortalEdgeContentSnapshot
+	portalGeneration serviceaction.PortalEdgeGeneration
 }
 
 func (publication coreCaddyPublication) Verify() error {
@@ -455,7 +458,7 @@ func convergeCoreFleet(ctx context.Context, controller systemdctl.Controller, po
 	if err := errors.Join(verifyTransaction(), publication.Verify()); err != nil {
 		return publication, err
 	}
-	if err := errors.Join(verifyInstalledCoreFleetHelpers(), verifyInstalledEdgeAdmissionHelper()); err != nil {
+	if err := errors.Join(verifyInstalledCoreFleetHelpers(), serviceaction.VerifyInstalledEdgeAdmissionHelper()); err != nil {
 		return publication, fmt.Errorf("immutable core fleet helper set changed during guarded fleet proof: %w", err)
 	}
 	if err := verifyCoreBackupEnvironment(); err != nil {
@@ -464,7 +467,7 @@ func convergeCoreFleet(ctx context.Context, controller systemdctl.Controller, po
 	if err := errors.Join(verifyTransaction(), publication.Verify()); err != nil {
 		return publication, err
 	}
-	finalGeneration, err := verifyPublishedEdge(ctx, portal, controller, publication.edgeContent, publication.portalGeneration)
+	finalGeneration, err := serviceaction.VerifyPublishedEdge(ctx, portal, controller, publication.edgeContent, publication.portalGeneration)
 	if err != nil || finalGeneration != publication.generation {
 		return publication, errors.Join(errors.New("guarded Caddy generation changed during final fleet proof"), err)
 	}
@@ -472,10 +475,10 @@ func convergeCoreFleet(ctx context.Context, controller systemdctl.Controller, po
 }
 
 func publishCoreCaddyEdge(ctx context.Context, controller systemdctl.Controller, portal config.Portal) (coreCaddyPublication, error) {
-	if err := validateProductionPortalEdgeBinding(portal); err != nil {
+	if err := edgepublication.ValidateProductionPortalEdgeBinding(portal); err != nil {
 		return coreCaddyPublication{}, err
 	}
-	edgeContent, err := capturePortalEdgeContent(portal)
+	edgeContent, err := serviceaction.CapturePortalEdgeContent(portal)
 	if err != nil {
 		return coreCaddyPublication{}, fmt.Errorf("capture protected Portal content for core edge publication: %w", err)
 	}
@@ -490,30 +493,30 @@ func publishCoreCaddyEdge(ctx context.Context, controller systemdctl.Controller,
 	if err := errors.Join(proofErr, data.Close()); err != nil {
 		return coreCaddyPublication{}, fmt.Errorf("refuse core edge publication without a converged tenant catalog: %w", err)
 	}
-	portalGeneration, err := preparePortalEdgeGeneration(ctx, portal, controller)
+	portalGeneration, err := serviceaction.PreparePortalEdgeGeneration(ctx, portal, controller)
 	if err != nil {
 		return coreCaddyPublication{}, fmt.Errorf("prepare Portal generation for core edge publication: %w", err)
 	}
-	portalGeneration, err = verifyPortalEdgePublicationReadiness(ctx, portal, controller, edgeContent.PolicyID, edgeContent.BrandID, &portalGeneration, false)
+	portalGeneration, err = serviceaction.VerifyPortalEdgePublicationReadiness(ctx, portal, controller, edgeContent.PolicyID, edgeContent.BrandID, &portalGeneration, false)
 	if err != nil {
 		return coreCaddyPublication{}, fmt.Errorf("refuse core edge publication before full direct readiness: %w", err)
 	}
-	if current, err := capturePortalEdgeContent(portal); err != nil || current != edgeContent {
+	if current, err := serviceaction.CapturePortalEdgeContent(portal); err != nil || current != edgeContent {
 		return coreCaddyPublication{}, errors.Join(errors.New("protected Portal content changed before core edge publication"), err)
 	}
-	if err := verifyInstalledEdgeAdmissionHelper(); err != nil {
+	if err := serviceaction.VerifyInstalledEdgeAdmissionHelper(); err != nil {
 		return coreCaddyPublication{}, err
 	}
-	edgeTransaction, err := beginEdgePublication()
+	edgeTransaction, err := edgepublication.Begin()
 	if err != nil {
 		return coreCaddyPublication{}, fmt.Errorf("persist nested Caddy edge transaction: %w", err)
 	}
-	if err := executeCaddyEdgeCommit(ctx, controller, verifyProductionServiceActionSource, edgeTransaction.Verify); err != nil {
-		return coreCaddyPublication{}, abortEdgePublication(controller, edgeTransaction, errors.Join(errors.New("core Caddy publication action failed"), err))
+	if err := serviceaction.ExecuteCaddyEdgeCommit(ctx, controller, serviceaction.VerifyProductionSource, edgeTransaction.Verify); err != nil {
+		return coreCaddyPublication{}, edgepublication.Abort(controller, edgeTransaction, errors.Join(errors.New("core Caddy publication action failed"), err), serviceaction.WithCleanup, serviceaction.RollbackPublishedCaddyFailClosed)
 	}
-	publishingGeneration, err := verifyPublishedEdge(ctx, portal, controller, edgeContent, portalGeneration)
+	publishingGeneration, err := serviceaction.VerifyPublishedEdge(ctx, portal, controller, edgeContent, portalGeneration)
 	if err != nil {
-		return coreCaddyPublication{}, abortEdgePublication(controller, edgeTransaction, errors.Join(errors.New("core edge publication post-action proof failed"), err))
+		return coreCaddyPublication{}, edgepublication.Abort(controller, edgeTransaction, errors.Join(errors.New("core edge publication post-action proof failed"), err), serviceaction.WithCleanup, serviceaction.RollbackPublishedCaddyFailClosed)
 	}
 	// Ownership deliberately crosses the function boundary. The edge permit
 	// remains locked, and Caddy remains in guarded start-post, until the caller
@@ -524,31 +527,31 @@ func publishCoreCaddyEdge(ctx context.Context, controller systemdctl.Controller,
 	}, nil
 }
 
-func abortCoreFleetActivation(ctx context.Context, controller systemdctl.Controller, transaction *coreactivation.Transaction, edgeTransaction *edgePublicationTransaction, portal config.Portal, verifySource coreSourceVerifier, cause error) error {
+func abortCoreFleetActivation(ctx context.Context, controller systemdctl.Controller, transaction *coreactivation.Transaction, edgeTransaction *edgepublication.Transaction, portal config.Portal, verifySource coreSourceVerifier, cause error) error {
 	if cause == nil {
 		cause = errors.New("core activation failed")
 	}
 	// Close the public edge first while its watcher is still blocked. The
 	// explicit fail-close action happens before ownership is released; the
 	// watcher then independently rejects the still-present evidence.
-	edgeDisableErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
+	edgeDisableErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 		return rollbackCoreCaddy(cleanupContext, controller)
 	})
 	edgeCloseErr := error(nil)
 	if edgeTransaction != nil {
 		edgeCloseErr = edgeTransaction.Close()
 	}
-	edgeReconcileErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
-		return reconcilePendingEdgePublication(cleanupContext, controller)
+	edgeReconcileErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
+		return edgepublication.ReconcilePending(cleanupContext, controller, serviceaction.WithCleanup, serviceaction.RollbackPublishedCaddyFailClosed)
 	})
 	closeErr := error(nil)
 	if transaction != nil {
 		closeErr = transaction.Close()
 	}
-	coreRollbackErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
+	coreRollbackErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 		return rollbackCoreFleetFailClosed(cleanupContext, controller, verifySource, syncCorePersistentEnablement)
 	})
-	tenantProofErr := withServiceActionCleanup(func(cleanupContext context.Context) error {
+	tenantProofErr := serviceaction.WithCleanup(func(cleanupContext context.Context) error {
 		return verifyCoreTenantCatalogState(cleanupContext, controller, portal, false, verifySource)
 	})
 	rollbackErr := errors.Join(edgeDisableErr, edgeReconcileErr, coreRollbackErr, tenantProofErr)
@@ -606,7 +609,7 @@ func rollbackCoreFleetFailClosed(ctx context.Context, controller systemdctl.Cont
 	var failures []error
 	for _, timer := range coreTimerUnits {
 		failures = append(failures, convergeCorePersistentEnablement(ctx, controller, timer, false, verifySource, syncEnablement))
-		target, _ := timerTargetService(timer)
+		target, _ := serviceaction.TimerTargetService(timer)
 		failures = append(failures, controller.Action(ctx, "stop", target))
 	}
 	failures = append(failures, rollbackCoreCaddy(ctx, controller))
@@ -635,7 +638,7 @@ func settleCoreUnitFailureState(ctx context.Context, controller systemdctl.Contr
 		return err
 	}
 	passive := strings.HasSuffix(unit, ".timer") || strings.HasSuffix(unit, ".target")
-	if serviceActionUnitStopped(passive, properties) {
+	if serviceaction.UnitStopped(passive, properties) {
 		return nil
 	}
 	processFree := (properties["ActiveState"] == "inactive" && properties["SubState"] == "dead") ||
@@ -650,7 +653,7 @@ func settleCoreUnitFailureState(ctx context.Context, controller systemdctl.Contr
 		return err
 	}
 	settled, err := authenticateCoreUnitState(ctx, controller, unit, verifySource)
-	if err != nil || !serviceActionUnitStopped(passive, settled) {
+	if err != nil || !serviceaction.UnitStopped(passive, settled) {
 		return errors.Join(errors.New("core unit failure state did not reset to inactive and process-free"), err)
 	}
 	final, err := authenticateCoreUnitState(ctx, controller, unit, verifySource)
@@ -708,10 +711,10 @@ func startAndProveCoreService(ctx context.Context, controller systemdctl.Control
 	if before["UnitFileState"] != "enabled" {
 		return errors.New("core service is not persistently enabled before start")
 	}
-	if serviceActionServiceRunning(before) {
+	if serviceaction.ServiceRunning(before) {
 		return nil
 	}
-	if !serviceActionUnitStopped(false, before) {
+	if !serviceaction.UnitStopped(false, before) {
 		return errors.New("core service is not in a clean startable state")
 	}
 	if err := controller.Action(ctx, "start", unit); err != nil {
@@ -721,14 +724,14 @@ func startAndProveCoreService(ctx context.Context, controller systemdctl.Control
 	if err != nil {
 		return err
 	}
-	if after["UnitFileState"] != "enabled" || !serviceActionServiceRunning(after) {
+	if after["UnitFileState"] != "enabled" || !serviceaction.ServiceRunning(after) {
 		return errors.New("core service did not become active, running, and process-backed")
 	}
 	return nil
 }
 
 func enableAndProveCoreTimer(ctx context.Context, controller systemdctl.Controller, timer string, verifySource coreSourceVerifier, syncEnablement coreEnablementSync) error {
-	target, ok := timerTargetService(timer)
+	target, ok := serviceaction.TimerTargetService(timer)
 	if !ok {
 		return errors.New("core timer target is unavailable")
 	}
@@ -767,12 +770,12 @@ func verifyEveryCoreUnitSource(ctx context.Context, controller systemdctl.Contro
 func verifyCoreFleetDesiredState(ctx context.Context, controller systemdctl.Controller, portal config.Portal, verifySource coreSourceVerifier, allowCoreGuardedCaddy bool) (resultErr error) {
 	for _, unit := range corePersistentServiceUnits {
 		properties, err := authenticateCoreUnitState(ctx, controller, unit, verifySource)
-		if err != nil || properties["UnitFileState"] != "enabled" || !serviceActionServiceRunning(properties) {
+		if err != nil || properties["UnitFileState"] != "enabled" || !serviceaction.ServiceRunning(properties) {
 			return errors.Join(errors.New("core service final state is not enabled and running"), err)
 		}
 	}
 	caddy, err := authenticateCoreUnitState(ctx, controller, "caddy.service", verifySource)
-	caddyReady := serviceActionServiceRunning(caddy)
+	caddyReady := serviceaction.ServiceRunning(caddy)
 	if allowCoreGuardedCaddy {
 		mainPID, pidErr := strconv.ParseUint(caddy["MainPID"], 10, 64)
 		controlPID, controlErr := strconv.ParseUint(caddy["ControlPID"], 10, 64)
@@ -818,28 +821,28 @@ func verifyConvergedCoreFleet(ctx context.Context, controller systemdctl.Control
 			return err
 		}
 	}
-	content, err := capturePortalEdgeContent(portal)
+	content, err := serviceaction.CapturePortalEdgeContent(portal)
 	if err != nil {
 		return err
 	}
-	portalGeneration, err := capturePortalEdgeGeneration(ctx, portal, controller)
+	portalGeneration, err := serviceaction.CapturePortalEdgeGeneration(ctx, portal, controller)
 	if err != nil {
 		return err
 	}
 	caddyBefore, err := authenticateCoreUnitState(ctx, controller, "caddy.service", verifySource)
-	if err != nil || !serviceActionServiceRunning(caddyBefore) {
+	if err != nil || !serviceaction.ServiceRunning(caddyBefore) {
 		return errors.Join(errors.New("converged Caddy generation is unavailable"), err)
 	}
-	if err := verifyCaddyLiveConfig(ctx, caddyBefore["MainPID"]); err != nil {
+	if err := serviceaction.VerifyCaddyLiveConfig(ctx, caddyBefore["MainPID"]); err != nil {
 		return err
 	}
-	if err := errors.Join(verifyInstalledCoreFleetHelpers(), verifyInstalledEdgeAdmissionHelper()); err != nil {
+	if err := errors.Join(verifyInstalledCoreFleetHelpers(), serviceaction.VerifyInstalledEdgeAdmissionHelper()); err != nil {
 		return fmt.Errorf("immutable core fleet helper set changed during converged-fleet proof: %w", err)
 	}
-	if _, err := verifyPortalEdgePublicationReadiness(ctx, portal, controller, content.PolicyID, content.BrandID, &portalGeneration, true); err != nil {
+	if _, err := serviceaction.VerifyPortalEdgePublicationReadiness(ctx, portal, controller, content.PolicyID, content.BrandID, &portalGeneration, true); err != nil {
 		return err
 	}
-	if err := verifyCaddyLiveConfig(ctx, caddyBefore["MainPID"]); err != nil {
+	if err := serviceaction.VerifyCaddyLiveConfig(ctx, caddyBefore["MainPID"]); err != nil {
 		return err
 	}
 	if err := verifyCoreBackupEnvironment(); err != nil {
@@ -849,7 +852,7 @@ func verifyConvergedCoreFleet(ctx context.Context, controller systemdctl.Control
 	if err != nil || !reflect.DeepEqual(caddyBefore, caddyAfter) {
 		return errors.Join(errors.New("Caddy generation changed during converged-fleet proof"), err)
 	}
-	currentContent, err := capturePortalEdgeContent(portal)
+	currentContent, err := serviceaction.CapturePortalEdgeContent(portal)
 	if err != nil || currentContent != content {
 		return errors.Join(errors.New("protected Portal content changed during converged-fleet proof"), err)
 	}
@@ -863,16 +866,16 @@ func verifyCoreRollbackState(ctx context.Context, controller systemdctl.Controll
 			return errors.Join(errors.New("core rollback did not durably disable a persistent unit"), err)
 		}
 		if strings.HasSuffix(unit, ".timer") {
-			if !serviceActionUnitStopped(true, properties) {
+			if !serviceaction.UnitStopped(true, properties) {
 				return errors.New("core rollback left a timer active")
 			}
-		} else if !serviceActionUnitStopped(false, properties) {
+		} else if !serviceaction.UnitStopped(false, properties) {
 			return errors.New("core rollback left a service process active")
 		}
 	}
 	for _, unit := range []string{"workagent-backup.service", "workagent-healthcheck.service", "workagent-tenant-config-reconcile.service"} {
 		properties, err := authenticateCoreUnitState(ctx, controller, unit, verifySource)
-		if err != nil || !serviceActionUnitStopped(false, properties) {
+		if err != nil || !serviceaction.UnitStopped(false, properties) {
 			return errors.Join(errors.New("core rollback left a static service active"), err)
 		}
 	}
@@ -907,7 +910,7 @@ func authenticateCoreUnitState(ctx context.Context, controller systemdctl.Contro
 
 func coreUnitPropertyNames(unit string) []string {
 	if unit == "caddy.service" {
-		return serviceActionPropertyNames(false, unit)
+		return serviceaction.PropertyNames(false, unit)
 	}
 	common := []string{"LoadState", "ActiveState", "SubState", "UnitFileState", "FragmentPath", "DropInPaths", "NeedDaemonReload"}
 	switch unit {
@@ -928,16 +931,16 @@ func coreUnitPropertyNames(unit string) []string {
 }
 
 func verifyProductionCoreUnitSource(unit string, properties map[string]string, portal config.Portal) error {
-	if err := verifyCoreManagerContract(unit, properties); err != nil {
+	if err := serviceaction.VerifyCoreManagerContract(unit, properties); err != nil {
 		return err
 	}
 	if unit == "caddy.service" {
-		return verifyProductionServiceActionSource(unit, properties)
+		return serviceaction.VerifyProductionSource(unit, properties)
 	}
 	if unit == "workagent-portal.service" {
-		return verifyPortalEdgeUnitSourceAt(properties, portal, productionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"}, "/etc/systemd/system")
+		return serviceaction.VerifyPortalEdgeUnitSourceAt(properties, portal, serviceaction.ProductionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"}, "/etc/systemd/system")
 	}
-	return verifyCoreUnitSourceAt(unit, properties, productionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"})
+	return verifyCoreUnitSourceAt(unit, properties, serviceaction.ProductionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"})
 }
 
 // Recovery must not depend on a readable Portal configuration or database.
@@ -945,16 +948,16 @@ func verifyProductionCoreUnitSource(unit string, properties map[string]string, p
 // credential disabled/enabled), so both can be authenticated without loading
 // product state before the pending fleet has been stopped.
 func verifyProductionCoreRollbackUnitSource(unit string, properties map[string]string) error {
-	if err := verifyCoreManagerContract(unit, properties); err != nil {
+	if err := serviceaction.VerifyCoreManagerContract(unit, properties); err != nil {
 		return err
 	}
 	if unit == "caddy.service" {
-		return verifyProductionServiceActionSource(unit, properties)
+		return serviceaction.VerifyProductionSource(unit, properties)
 	}
 	if unit == "workagent-portal.service" {
-		return verifyPortalRollbackUnitSourceAt(properties, productionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"}, "/etc/systemd/system")
+		return verifyPortalRollbackUnitSourceAt(properties, serviceaction.ProductionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"}, "/etc/systemd/system")
 	}
-	return verifyCoreUnitSourceAt(unit, properties, productionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"})
+	return verifyCoreUnitSourceAt(unit, properties, serviceaction.ProductionControlRoot, []string{"/etc/systemd/system", "/usr/lib/systemd/system"})
 }
 
 func verifyPortalRollbackUnitSourceAt(properties map[string]string, controlRoot string, systemdRoots []string, dropInRoot string) error {
@@ -974,11 +977,11 @@ func verifyPortalRollbackUnitSourceAt(properties map[string]string, controlRoot 
 	chatDropIn := filepath.Join(dropInRoot, "workagent-portal.service.d", "chatforward.conf")
 	credentialsDropIn := filepath.Join(dropInRoot, "workagent-portal.service.d", "credentials.conf")
 	dropIns := strings.Fields(properties["DropInPaths"])
-	if len(dropIns) != 2 || !sameExactWords(dropIns, []string{chatDropIn, credentialsDropIn}) {
+	if len(dropIns) != 2 || !serviceaction.SameExactWords(dropIns, []string{chatDropIn, credentialsDropIn}) {
 		return errors.New("Portal rollback drop-in namespace is not exact")
 	}
 	for _, path := range []string{fragment, chatDropIn, credentialsDropIn} {
-		if err := verifyInstalledSystemdSourceFile(path); err != nil {
+		if err := serviceaction.VerifyInstalledSystemdSourceFile(path); err != nil {
 			return err
 		}
 	}
@@ -996,216 +999,12 @@ func verifyPortalRollbackUnitSourceAt(properties map[string]string, controlRoot 
 	if err != nil {
 		return err
 	}
-	disabledDigest, disabledErr := portalCredentialsReferenceDigest(config.Portal{}, controlRoot)
-	enabledDigest, enabledErr := portalCredentialsReferenceDigest(config.Portal{AdminMasterPasswordHashFile: "present"}, controlRoot)
+	disabledDigest, disabledErr := serviceaction.PortalCredentialsReferenceDigest(config.Portal{}, controlRoot)
+	enabledDigest, enabledErr := serviceaction.PortalCredentialsReferenceDigest(config.Portal{AdminMasterPasswordHashFile: "present"}, controlRoot)
 	if disabledErr != nil || enabledErr != nil || (installedCredentials != disabledDigest && installedCredentials != enabledDigest) {
 		return errors.Join(errors.New("Portal credential drop-in is outside the two signed rollback shapes"), disabledErr, enabledErr)
 	}
 	return nil
-}
-
-func verifyCoreManagerContract(unit string, properties map[string]string) error {
-	if properties["LoadState"] != "loaded" || properties["NeedDaemonReload"] != "no" || properties["FragmentPath"] == "" {
-		return errors.New("core manager-loaded unit is unavailable or stale")
-	}
-	persistent := false
-	var executable, arguments, serviceType, runtimeUser, runtimeGroup string
-	switch unit {
-	case "workagent-tenant-catalog-ready.target":
-		return errorUnless(properties["UnitFileState"] == "static", "core readiness target is not static")
-	case "workagent-backup.timer":
-		persistent = true
-		if properties["Unit"] != "workagent-backup.service" || properties["Persistent"] != "yes" {
-			return errors.New("backup timer manager contract is invalid")
-		}
-	case "workagent-healthcheck.timer":
-		persistent = true
-		if properties["Unit"] != "workagent-healthcheck.service" || properties["Persistent"] != "yes" {
-			return errors.New("health timer manager contract is invalid")
-		}
-	case "caddy.service":
-		persistent = true
-		if err := verifyCaddyManagerContract(properties); err != nil {
-			return err
-		}
-	case "workagent-tenant-config-reconcile.service":
-		executable = "/opt/workagent/control/bin/workagent-admin"
-		arguments = "/opt/workagent/control/bin/workagent-admin reconcile-tenant-files --config /etc/workagent/portal.json"
-		serviceType, runtimeUser, runtimeGroup = "oneshot", "root", "root"
-	case "cliproxyapi.service":
-		persistent = true
-		executable = "/usr/libexec/workagent-fixed-root-exec-v1"
-		arguments = "/usr/libexec/workagent-fixed-root-exec-v1 cliproxyapi /opt/workagent/shared/cliproxyapi/bin/cli-proxy-api --config /var/lib/cliproxyapi/config.yaml"
-		serviceType, runtimeUser, runtimeGroup = "exec", "cliproxyapi", "cliproxyapi"
-	case "workagent-notification.service":
-		persistent = true
-		executable = "/usr/libexec/workagent-fixed-root-exec-v1"
-		arguments = "/usr/libexec/workagent-fixed-root-exec-v1 notification /opt/workagent/control/bin/workagent-notification"
-		serviceType, runtimeUser, runtimeGroup = "simple", "workagent-notification", "workagent-notification"
-	case "workagent-chatforward.service":
-		persistent = true
-		executable = "/usr/libexec/workagent-fixed-root-exec-v1"
-		arguments = coreChatForwardManagerExec
-		serviceType, runtimeUser, runtimeGroup = "exec", "workagent-chatforward", "workagent-chatforward"
-	case "workagent-chatforward-browser.service":
-		persistent = true
-		executable = "/usr/libexec/workagent-fixed-root-exec-v1"
-		arguments = "/usr/libexec/workagent-fixed-root-exec-v1 chatforward-browser /opt/workagent/shared/chatforward/integration/run-browser.sh"
-		serviceType, runtimeUser, runtimeGroup = "exec", "workagent-chatforward", "workagent-chatforward"
-	case "workagent-portal.service":
-		persistent = true
-		executable = "/bin/bash"
-		arguments = `/bin/bash -c /usr/bin/flock --shared 3 || exit 70; exec "$@" workagent-runtime-start /opt/workagent/control/bin/workagent-portal --config /etc/workagent/portal.json`
-		serviceType, runtimeUser, runtimeGroup = "notify", "workagent", "workagent"
-	case "workagent-backup.service":
-		executable = "/usr/bin/flock"
-		arguments = "/usr/bin/flock --exclusive --no-fork /run/workagent/activation.lock /usr/libexec/workagent-fixed-root-exec-v1 backup /opt/workagent/control/bin/workagent-backup create --portal-config /etc/workagent/portal.json --config /etc/workagent/backup.json --quiesce-systemd"
-		serviceType, runtimeUser, runtimeGroup = "oneshot", "root", "root"
-	case "workagent-healthcheck.service":
-		executable = "/usr/libexec/workagent-fixed-root-exec-v1"
-		arguments = "/usr/libexec/workagent-fixed-root-exec-v1 healthcheck /opt/workagent/control/bin/workagent-healthcheck /var/lib/node_exporter/textfile_collector/workagent_host.prom"
-		serviceType, runtimeUser, runtimeGroup = "oneshot", "root", "root"
-	default:
-		return errors.New("unit is outside the exact core manager contract")
-	}
-	if persistent {
-		if properties["UnitFileState"] != "enabled" && properties["UnitFileState"] != "disabled" {
-			return errors.New("persistent core unit has an invalid unit-file state")
-		}
-	} else if properties["UnitFileState"] != "static" {
-		return errors.New("static core unit has an invalid unit-file state")
-	}
-	mainVectorExact := true
-	if executable != "" {
-		mainVectorExact = exactCoreManagerExecVector(properties["ExecStart"], properties["ExecStartEx"], []systemdExecContract{{executable: executable, flattenedArgv: arguments}})
-	}
-	if executable != "" && (properties["Type"] != serviceType || properties["User"] != runtimeUser || properties["Group"] != runtimeGroup || !mainVectorExact ||
-		!verifyCoreServiceExecVectors(unit, properties)) {
-		return errors.New("core manager-loaded service identity or command does not match policy")
-	}
-	return nil
-}
-
-func verifyCoreServiceExecVectors(unit string, properties map[string]string) bool {
-	const (
-		coreAdmit     = "/usr/libexec/workagent-core-activation-admission-v1"
-		recoveryAdmit = "/usr/libexec/workagent-recovery-activation-admission-v1"
-	)
-	contract := func(executable, arguments string, privileged bool) systemdExecContract {
-		return systemdExecContract{executable: executable, flattenedArgv: arguments, privileged: privileged}
-	}
-	core := contract(coreAdmit, coreAdmit, true)
-	recovery := contract(recoveryAdmit, recoveryAdmit, true)
-	var pre, post, stopPost []systemdExecContract
-	switch unit {
-	case "workagent-tenant-config-reconcile.service":
-		pre = []systemdExecContract{
-			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-release", true),
-		}
-	case "cliproxyapi.service":
-		pre = []systemdExecContract{
-			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-cliproxy --required-executable bin/workagent-release", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required-executable cliproxyapi/bin/cli-proxy-api --required-executable cliproxyapi/plugins/cpa-key-policy-v0.4.5.so", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy prepare --template /etc/cliproxyapi/config.yaml --output /var/lib/cliproxyapi/config.yaml --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --state-root /var/lib/cliproxyapi", true),
-		}
-		post = []systemdExecContract{
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --wait 30s", true),
-		}
-	case "workagent-notification.service":
-		pre = []systemdExecContract{
-			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release", true),
-			contract("/usr/bin/test", "/usr/bin/test -r /etc/workagent/notification.json", false),
-		}
-		post = []systemdExecContract{
-			contract("/usr/bin/curl", "/usr/bin/curl --noproxy * --fail --silent --show-error --max-time 3 http://127.0.0.1:25888/readyz", false),
-		}
-	case "workagent-chatforward.service":
-		pre = []systemdExecContract{
-			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required chatforward/app/src/server.js --required-executable chatforward/integration/run-server.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
-		}
-		post = []systemdExecContract{
-			contract("/opt/workagent/shared/chatforward/node/bin/node", "/opt/workagent/shared/chatforward/node/bin/node --jitless /opt/workagent/shared/chatforward/integration/readiness.mjs --timeout-ms 15000", false),
-		}
-	case "workagent-chatforward-browser.service":
-		pre = []systemdExecContract{
-			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release", true),
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --public-key /etc/workagent/trust/release-signing.pub --scope shared --required chatforward/app/extension/manifest.json --required-executable chatforward/integration/run-browser.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs", true),
-		}
-		post = []systemdExecContract{
-			contract("/opt/workagent/shared/chatforward/node/bin/node", "/opt/workagent/shared/chatforward/node/bin/node /opt/workagent/shared/chatforward/integration/readiness.mjs --require-controller --timeout-ms 45000", false),
-		}
-	case "workagent-portal.service":
-		pre = []systemdExecContract{
-			core, recovery,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-release --required-executable bin/workagent-portal", true),
-		}
-	case "workagent-backup.service":
-		pre = []systemdExecContract{
-			core,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release", true),
-		}
-		stopPost = []systemdExecContract{
-			contract("/usr/bin/flock", "/usr/bin/flock --exclusive --nonblock --conflict-exit-code 0 /run/workagent/activation.lock /usr/bin/flock --shared /run/workagent/release-config.lock /usr/bin/flock --shared /opt/workagent/control.lock /opt/workagent/control/bin/workagent-backup resume", false),
-		}
-	case "workagent-healthcheck.service":
-		pre = []systemdExecContract{
-			core,
-			contract("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-healthcheck --required-executable bin/workagent-release", true),
-		}
-	default:
-		return false
-	}
-	return exactCoreManagerExecVector(properties["ExecStartPre"], properties["ExecStartPreEx"], pre) &&
-		exactCoreManagerExecVector(properties["ExecStartPost"], properties["ExecStartPostEx"], post) &&
-		exactCoreManagerExecVector(properties["ExecStopPost"], properties["ExecStopPostEx"], stopPost) &&
-		properties["ExecStop"] == "" && properties["ExecStopEx"] == "" && properties["ExecReload"] == "" && properties["ExecReloadEx"] == ""
-}
-
-func exactCoreManagerExecVector(plainValue, extendedValue string, contracts []systemdExecContract) bool {
-	if len(contracts) == 0 {
-		return plainValue == "" && extendedValue == ""
-	}
-	plain := append([]systemdExecContract(nil), contracts...)
-	for index := range plain {
-		plain[index].privileged = false
-	}
-	return exactSystemdExecSequence(plainValue, plain...) && exactSystemdExtendedExecSequence(extendedValue, contracts...)
-}
-
-func exactSystemdExtendedExecSequence(value string, contracts ...systemdExecContract) bool {
-	if len(contracts) == 0 || strings.Count(value, "{ path=") != len(contracts) {
-		return false
-	}
-	remaining := value
-	for index, contract := range contracts {
-		end := strings.Index(remaining, " }")
-		if end < 0 {
-			return false
-		}
-		record := remaining[:end+2]
-		flags := ""
-		if contract.privileged {
-			flags = "privileged"
-		}
-		prefix := "{ path=" + contract.executable + " ; argv[]=" + contract.flattenedArgv + " ; flags=" + flags + " ;"
-		if !strings.HasPrefix(record, prefix) || !strings.HasSuffix(record, " }") || strings.Count(record, "{ path=") != 1 {
-			return false
-		}
-		remaining = remaining[end+2:]
-		if index+1 < len(contracts) {
-			if !strings.HasPrefix(remaining, " ; ") {
-				return false
-			}
-			remaining = remaining[3:]
-		}
-	}
-	return remaining == ""
 }
 
 func verifyCoreUnitSourceAt(unit string, properties map[string]string, controlRoot string, systemdRoots []string) error {
@@ -1234,7 +1033,7 @@ func verifyCoreUnitSourceAt(unit string, properties map[string]string, controlRo
 	if !accepted || len(strings.Fields(properties["DropInPaths"])) != 0 {
 		return errors.New("core systemd source namespace or drop-in set is not exact")
 	}
-	if err := verifyInstalledSystemdSourceFile(fragment); err != nil {
+	if err := serviceaction.VerifyInstalledSystemdSourceFile(fragment); err != nil {
 		return err
 	}
 	installed, err := release.ProtectedFileSHA256(fragment, true)
@@ -1258,7 +1057,7 @@ func verifyInstalledCoreFleetHelpers() error {
 	for _, name := range []string{"workagent-core-activation-admission-v1", "workagent-recovery-activation-admission-v1", "workagent-fixed-root-exec-v1"} {
 		bindings = append(bindings, coreFleetHelperBinding{
 			installed: filepath.Join("/usr/libexec", name),
-			reference: filepath.Join(productionControlRoot, "share/deploy/libexec", name),
+			reference: filepath.Join(serviceaction.ProductionControlRoot, "share/deploy/libexec", name),
 		})
 	}
 	return verifyInstalledCoreFleetHelpersAt(bindings, []string{"/usr", "/usr/libexec"})
@@ -1270,7 +1069,7 @@ func verifyInstalledCoreFleetHelpersAt(bindings []coreFleetHelperBinding, ancest
 	}
 	for _, directory := range ancestors {
 		info, err := os.Lstat(directory)
-		stat, ok := infoSyscallStat(info)
+		stat, ok := fsutil.InfoSyscallStat(info)
 		if err != nil || !ok || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0o022 != 0 || stat.Uid != 0 || stat.Gid != 0 {
 			return errors.Join(fmt.Errorf("immutable core fleet helper ancestor %s is unsafe", directory), err)
 		}
@@ -1282,7 +1081,7 @@ func verifyInstalledCoreFleetHelpersAt(bindings []coreFleetHelperBinding, ancest
 		}
 		seen[binding.installed] = true
 		info, err := os.Lstat(binding.installed)
-		before, ok := infoSyscallStat(info)
+		before, ok := fsutil.InfoSyscallStat(info)
 		if err != nil || !ok || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o555 || before.Uid != 0 || before.Gid != 0 || before.Nlink != 1 {
 			return errors.Join(fmt.Errorf("installed immutable core fleet helper is unsafe: %s", binding.installed), err)
 		}
@@ -1295,7 +1094,7 @@ func verifyInstalledCoreFleetHelpersAt(bindings []coreFleetHelperBinding, ancest
 			return errors.Join(fmt.Errorf("installed core fleet helper does not match the signed control release: %s", binding.installed), err)
 		}
 		afterInfo, err := os.Lstat(binding.installed)
-		after, afterOK := infoSyscallStat(afterInfo)
+		after, afterOK := fsutil.InfoSyscallStat(afterInfo)
 		if err != nil || !afterOK || !sameCoreFleetHelperIdentity(before, after) {
 			return errors.Join(fmt.Errorf("installed core fleet helper changed during authentication: %s", binding.installed), err)
 		}
@@ -1319,7 +1118,7 @@ func syncCorePersistentEnablement(enabled bool, unit, fragmentPath string) error
 	}
 	for _, directory := range []string{"/etc/systemd/system", wants} {
 		info, err := os.Lstat(directory)
-		stat, ok := infoSyscallStat(info)
+		stat, ok := fsutil.InfoSyscallStat(info)
 		if err != nil || !ok || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || stat.Uid != 0 || stat.Gid != 0 || info.Mode().Perm()&0o022 != 0 {
 			return errors.Join(errors.New("core persistent enablement directory is unsafe"), err)
 		}
@@ -1328,10 +1127,10 @@ func syncCorePersistentEnablement(enabled bool, unit, fragmentPath string) error
 	if err := verifyCoreEnablementLink(linkPath, fragmentPath, enabled); err != nil {
 		return err
 	}
-	if err := syncEdgeDirectory(wants); err != nil {
+	if err := fsutil.SyncDirectory(wants); err != nil {
 		return fmt.Errorf("sync core persistent wants directory: %w", err)
 	}
-	if err := syncEdgeDirectory("/etc/systemd/system"); err != nil {
+	if err := fsutil.SyncDirectory("/etc/systemd/system"); err != nil {
 		return fmt.Errorf("sync core persistent systemd directory: %w", err)
 	}
 	return verifyCoreEnablementLink(linkPath, fragmentPath, enabled)
@@ -1345,7 +1144,7 @@ func verifyCoreEnablementLink(linkPath, fragmentPath string, enabled bool) error
 		}
 		return errors.Join(errors.New("core persistent enablement link remains or is unreadable"), err)
 	}
-	stat, ok := infoSyscallStat(info)
+	stat, ok := fsutil.InfoSyscallStat(info)
 	if err != nil || !ok || info.Mode()&os.ModeSymlink == 0 || stat.Uid != 0 || stat.Gid != 0 || stat.Nlink != 1 {
 		return errors.Join(errors.New("core persistent enablement link is unsafe"), err)
 	}

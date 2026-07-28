@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package edgepublication
 
 import (
 	"errors"
@@ -26,18 +26,18 @@ func TestCanonicalEdgePublicationEvidenceIsExactAndBounded(t *testing.T) {
 	}{
 		{
 			name:  "journal",
-			value: edgePublicationJournal{SchemaVersion: 1, BootID: bootID, PermitDevice: 11, PermitInode: 22},
+			value: journal{SchemaVersion: 1, BootID: bootID, PermitDevice: 11, PermitInode: 22},
 			want:  `{"schema_version":1,"boot_id":"11111111-2222-4333-8444-555555555555","permit_device":11,"permit_inode":22}` + "\n",
 		},
 		{
 			name:  "permit",
-			value: edgePublicationPermit{SchemaVersion: 1, BootID: bootID, JournalDevice: 33, JournalInode: 44},
+			value: permit{SchemaVersion: 1, BootID: bootID, JournalDevice: 33, JournalInode: 44},
 			want:  `{"schema_version":1,"boot_id":"11111111-2222-4333-8444-555555555555","journal_device":33,"journal_inode":44}` + "\n",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := canonicalEdgePublicationJSON(test.value)
+			got, err := canonicalJSON(test.value)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -50,10 +50,10 @@ func TestCanonicalEdgePublicationEvidenceIsExactAndBounded(t *testing.T) {
 		})
 	}
 
-	if _, err := canonicalEdgePublicationJSON(make(chan int)); err == nil {
+	if _, err := canonicalJSON(make(chan int)); err == nil {
 		t.Fatal("an unencodable edge-publication value was accepted")
 	}
-	if _, err := canonicalEdgePublicationJSON(struct {
+	if _, err := canonicalJSON(struct {
 		Value string `json:"value"`
 	}{Value: strings.Repeat("x", 1024)}); err == nil {
 		t.Fatal("oversized edge-publication evidence was accepted")
@@ -70,7 +70,7 @@ func TestSafeEdgeArtifactStatRequiresOneRootOwnedPrivateRegularFile(t *testing.T
 		Nlink: 1,
 		Size:  1,
 	}
-	if !safeEdgeArtifactStat(base, false) {
+	if !safeArtifactStat(base, false) {
 		t.Fatal("safe edge-publication artifact metadata was rejected")
 	}
 
@@ -91,7 +91,7 @@ func TestSafeEdgeArtifactStatRequiresOneRootOwnedPrivateRegularFile(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			value := base
 			test.alter(&value)
-			if safeEdgeArtifactStat(value, false) {
+			if safeArtifactStat(value, false) {
 				t.Fatal("unsafe edge-publication artifact metadata was accepted")
 			}
 		})
@@ -99,22 +99,22 @@ func TestSafeEdgeArtifactStatRequiresOneRootOwnedPrivateRegularFile(t *testing.T
 
 	empty := base
 	empty.Size = 0
-	if safeEdgeArtifactStat(empty, false) {
+	if safeArtifactStat(empty, false) {
 		t.Fatal("empty completed edge-publication evidence was accepted")
 	}
-	if !safeEdgeArtifactStat(empty, true) {
+	if !safeArtifactStat(empty, true) {
 		t.Fatal("empty in-progress edge-publication evidence was rejected")
 	}
 	maximum := base
 	maximum.Size = 1024
-	if !safeEdgeArtifactStat(maximum, false) {
+	if !safeArtifactStat(maximum, false) {
 		t.Fatal("maximum-size edge-publication evidence was rejected")
 	}
 }
 
 func TestSameEdgeArtifactStatBindsStableIdentityAndSecurityMetadata(t *testing.T) {
 	base := unix.Stat_t{Dev: 10, Ino: 20, Mode: unix.S_IFREG | 0o600, Uid: 0, Gid: 0, Nlink: 1, Size: 100}
-	if !sameEdgeArtifactStat(base, base) {
+	if !sameArtifactStat(base, base) {
 		t.Fatal("identical edge-publication metadata did not match")
 	}
 	tests := []struct {
@@ -133,7 +133,7 @@ func TestSameEdgeArtifactStatBindsStableIdentityAndSecurityMetadata(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			changed := base
 			test.alter(&changed)
-			if sameEdgeArtifactStat(base, changed) {
+			if sameArtifactStat(base, changed) {
 				t.Fatal("changed edge-publication metadata matched its authenticated snapshot")
 			}
 		})
@@ -149,7 +149,7 @@ func TestVerifyEdgeOpenArtifactDetectsContentAndPathReplacement(t *testing.T) {
 	t.Run("exact artifact", func(t *testing.T) {
 		path, fd, stat := createEdgeArtifactFixture(t, payload)
 		defer unix.Close(fd)
-		if err := verifyEdgeOpenArtifact(fd, path, stat, payload); err != nil {
+		if err := verifyOpenArtifact(fd, path, stat, payload); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -162,7 +162,7 @@ func TestVerifyEdgeOpenArtifactDetectsContentAndPathReplacement(t *testing.T) {
 		if _, err := unix.Pwrite(fd, changed, 0); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyEdgeOpenArtifact(fd, path, stat, payload); err == nil || !strings.Contains(err.Error(), "content changed") {
+		if err := verifyOpenArtifact(fd, path, stat, payload); err == nil || !strings.Contains(err.Error(), "content changed") {
 			t.Fatalf("same-size content mutation result=%v", err)
 		}
 	})
@@ -176,7 +176,7 @@ func TestVerifyEdgeOpenArtifactDetectsContentAndPathReplacement(t *testing.T) {
 		if err := os.WriteFile(path, payload, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyEdgeOpenArtifact(fd, path, stat, payload); err == nil {
+		if err := verifyOpenArtifact(fd, path, stat, payload); err == nil {
 			t.Fatal("replacement edge-publication path was accepted")
 		}
 	})
@@ -188,7 +188,7 @@ func TestEdgePublicationPermitLockPersistsUntilCallerClosesAfterFailClosedDecisi
 	if err != nil {
 		t.Fatal(err)
 	}
-	transaction := &edgePublicationTransaction{permitFD: ownerFD}
+	transaction := &Transaction{permitFD: ownerFD}
 	if err := unix.Flock(ownerFD, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		t.Fatal(err)
 	}
@@ -223,9 +223,9 @@ func TestEdgePublicationCommitDurablyClearsJournalBeforeFinalPermitSignal(t *tes
 	}
 	events := edgePublicationDurabilityEvents(function.Body)
 	want := []string{
-		"unlink:" + edgePublicationJournalPath,
-		"sync:" + edgePublicationJournalPath,
-		"unlink:" + edgePublicationPermitPath,
+		"unlink:" + JournalPath,
+		"sync:" + JournalPath,
+		"unlink:" + PermitPath,
 		"close:permitFD",
 	}
 	if !reflect.DeepEqual(events, want) {
@@ -237,14 +237,14 @@ func TestEdgePublicationCommitDurablyClearsJournalBeforeFinalPermitSignal(t *tes
 }
 
 func TestEdgePublicationReconcileDisablesBeforeAndAfterManagerReload(t *testing.T) {
-	function := parseEdgePublicationFunction(t, "reconcilePendingEdgePublication", false)
+	function := parseEdgePublicationFunction(t, "ReconcilePending", false)
 	var events []string
 	ast.Inspect(function.Body, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if isIdentifierCall(call, "rollbackPublishedCaddyFailClosed") {
+		if isIdentifierCall(call, "rollbackCaddy") {
 			events = append(events, "disable")
 			return true
 		}
@@ -266,7 +266,7 @@ func TestEdgePublicationReconcileDisablesBeforeAndAfterManagerReload(t *testing.
 }
 
 func TestEdgePublicationBeginPublishesOnlyCanonicalAnonymousEvidenceJournalFirst(t *testing.T) {
-	function := parseEdgePublicationFunction(t, "beginEdgePublication", false)
+	function := parseEdgePublicationFunction(t, "Begin", false)
 	if countASTSelector(function.Body, "unix", "O_TMPFILE") != 2 {
 		t.Fatal("beginEdgePublication must create exactly two anonymous O_TMPFILE evidence inodes")
 	}
@@ -280,10 +280,10 @@ func TestEdgePublicationBeginPublishesOnlyCanonicalAnonymousEvidenceJournalFirst
 		"write:permitFD",
 		"fsync:journalFD",
 		"fsync:permitFD",
-		"link:" + edgePublicationJournalPath,
-		"sync:" + edgePublicationJournalPath,
-		"link:" + edgePublicationPermitPath,
-		"sync:" + edgePublicationPermitPath,
+		"link:" + JournalPath,
+		"sync:" + JournalPath,
+		"link:" + PermitPath,
+		"sync:" + PermitPath,
 	}
 	if !containsOrderedEvents(events, wantSubsequence) {
 		t.Fatalf("beginEdgePublication construction events=%v; missing ordered subsequence %v", events, wantSubsequence)
@@ -301,7 +301,7 @@ func createEdgeArtifactFixture(t *testing.T, payload []byte) (string, int, unix.
 		unix.Close(fd)
 		t.Fatal(err)
 	}
-	if err := writeEdgeFD(fd, payload); err != nil {
+	if err := writeFD(fd, payload); err != nil {
 		unix.Close(fd)
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func createEdgeArtifactFixture(t *testing.T, payload []byte) (string, int, unix.
 		unix.Close(fd)
 		t.Fatal(err)
 	}
-	if !safeEdgeArtifactStat(stat, false) {
+	if !safeArtifactStat(stat, false) {
 		unix.Close(fd)
 		t.Fatalf("test fixture has unsafe metadata: mode=%#o uid=%d gid=%d nlink=%d size=%d", stat.Mode, stat.Uid, stat.Gid, stat.Nlink, stat.Size)
 	}
@@ -323,15 +323,17 @@ func parseEdgePublicationFunction(t *testing.T, name string, method bool) *ast.F
 	if !ok {
 		t.Fatal("resolve edge-publication test source path")
 	}
-	mainPath := filepath.Join(filepath.Dir(testPath), "main.go")
-	parsed, err := parser.ParseFile(token.NewFileSet(), mainPath, nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, declaration := range parsed.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if ok && function.Name.Name == name && (function.Recv != nil) == method {
-			return function
+	packageDir := filepath.Dir(testPath)
+	for _, source := range []string{"transaction_linux.go", "recover_linux.go"} {
+		parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(packageDir, source), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Name.Name == name && (function.Recv != nil) == method {
+				return function
+			}
 		}
 	}
 	t.Fatalf("function %s not found", name)
@@ -351,7 +353,7 @@ func edgePublicationDurabilityEvents(node ast.Node) []string {
 			}
 			return true
 		}
-		if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "syncEdgeDirectory" {
+		if isSelectorCall(call, "fsutil", "SyncDirectory") {
 			if path, ok := edgePublicationDirectoryArgument(call.Args); ok {
 				events = append(events, "sync:"+path)
 			}
@@ -374,7 +376,7 @@ func callsAfterPermitUnlink(node ast.Node) []string {
 	ast.Inspect(node, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if ok && isSelectorCall(call, "unix", "Unlink") {
-			if path, ok := edgePublicationPathArgument(call.Args); ok && path == edgePublicationPermitPath {
+			if path, ok := edgePublicationPathArgument(call.Args); ok && path == PermitPath {
 				permitUnlink = call.End()
 			}
 		}
@@ -462,11 +464,11 @@ func edgePublicationConstructionEvents(node ast.Node) []string {
 			if descriptor, ok := identifierArgument(call.Args); ok {
 				events = append(events, "fsync:"+descriptor)
 			}
-		case isIdentifierCall(call, "writeEdgeFD"):
+		case isIdentifierCall(call, "writeFD"):
 			if descriptor, ok := identifierArgument(call.Args); ok {
 				events = append(events, "write:"+descriptor)
 			}
-		case isIdentifierCall(call, "syncEdgeDirectory"):
+		case isSelectorCall(call, "fsutil", "SyncDirectory"):
 			if path, ok := edgePublicationDirectoryArgument(call.Args); ok {
 				events = append(events, "sync:"+path)
 			}
@@ -524,10 +526,10 @@ func edgePublicationPathArgument(arguments []ast.Expr) (string, bool) {
 		return "", false
 	}
 	switch identifier {
-	case "edgePublicationPermitPath":
-		return edgePublicationPermitPath, true
-	case "edgePublicationJournalPath":
-		return edgePublicationJournalPath, true
+	case "PermitPath":
+		return PermitPath, true
+	case "JournalPath":
+		return JournalPath, true
 	default:
 		return "", false
 	}

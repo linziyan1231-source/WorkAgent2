@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/coreactivation"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/serviceaction"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/systemdctl"
 )
 
@@ -62,7 +63,7 @@ func (controller *coreActivationSystemd) Action(_ context.Context, arguments ...
 	case "start":
 		if strings.HasSuffix(unit, ".timer") {
 			state["ActiveState"], state["SubState"] = "active", "waiting"
-			if target, ok := timerTargetService(unit); ok {
+			if target, ok := serviceaction.TimerTargetService(unit); ok {
 				targetState := controller.states[target]
 				targetState["ActiveState"], targetState["SubState"] = "activating", "start"
 				targetState["MainPID"], targetState["ControlPID"] = "4242", "0"
@@ -287,115 +288,6 @@ func TestFreshTenantCatalogReadinessRequiresNewSuccessfulUnskippedInvocation(t *
 	}
 }
 
-func TestCoreManagerExecVectorsRejectTransientEffectiveCommandTampering(t *testing.T) {
-	plainRecord := func(executable, arguments string) string {
-		return "{ path=" + executable + " ; argv[]=" + arguments + " ; ignore_errors=no ; pid=0 ; code=(null) ; status=0/0 }"
-	}
-	extendedRecord := func(executable, arguments string, privileged bool) string {
-		flags := ""
-		if privileged {
-			flags = "privileged"
-		}
-		return "{ path=" + executable + " ; argv[]=" + arguments + " ; flags=" + flags + " ; pid=0 ; code=(null) ; status=0/0 }"
-	}
-	join := func(records ...string) string { return strings.Join(records, " ; ") }
-	core := "/usr/libexec/workagent-core-activation-admission-v1"
-	recovery := "/usr/libexec/workagent-recovery-activation-admission-v1"
-	verify := "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release"
-	testRead := "/usr/bin/test -r /etc/workagent/notification.json"
-	ready := "/usr/bin/curl --noproxy * --fail --silent --show-error --max-time 3 http://127.0.0.1:25888/readyz"
-	properties := map[string]string{
-		"ExecStartPre":    join(plainRecord(core, core), plainRecord(recovery, recovery), plainRecord("/usr/bin/flock", verify), plainRecord("/usr/bin/test", testRead)),
-		"ExecStartPreEx":  join(extendedRecord(core, core, true), extendedRecord(recovery, recovery, true), extendedRecord("/usr/bin/flock", verify, true), extendedRecord("/usr/bin/test", testRead, false)),
-		"ExecStartPost":   plainRecord("/usr/bin/curl", ready),
-		"ExecStartPostEx": extendedRecord("/usr/bin/curl", ready, false),
-		"ExecStopPost":    "", "ExecStopPostEx": "", "ExecReload": "",
-	}
-	if !verifyCoreServiceExecVectors("workagent-notification.service", properties) {
-		t.Fatal("exact notification effective command vectors were rejected")
-	}
-	for _, field := range []string{"ExecStartPre", "ExecStartPreEx", "ExecStartPost", "ExecStartPostEx", "ExecReload", "ExecReloadEx"} {
-		t.Run(field, func(t *testing.T) {
-			tampered := cloneCoreProperties(properties)
-			if field == "ExecReload" {
-				tampered[field] = plainRecord("/bin/true", "/bin/true")
-			} else {
-				tampered[field] += " drift"
-			}
-			if verifyCoreServiceExecVectors("workagent-notification.service", tampered) {
-				t.Fatalf("transient manager tampering of %s was accepted", field)
-			}
-		})
-	}
-	manager := cloneCoreProperties(properties)
-	manager["LoadState"], manager["NeedDaemonReload"], manager["FragmentPath"], manager["UnitFileState"] = "loaded", "no", "/usr/lib/systemd/system/workagent-notification.service", "enabled"
-	manager["Type"], manager["User"], manager["Group"] = "simple", "workagent-notification", "workagent-notification"
-	start := "/usr/libexec/workagent-fixed-root-exec-v1 notification /opt/workagent/control/bin/workagent-notification"
-	manager["ExecStart"] = plainRecord("/usr/libexec/workagent-fixed-root-exec-v1", start)
-	manager["ExecStartEx"] = extendedRecord("/usr/libexec/workagent-fixed-root-exec-v1", start, false)
-	manager["ExecStop"], manager["ExecStopEx"] = "", ""
-	if err := verifyCoreManagerContract("workagent-notification.service", manager); err != nil {
-		t.Fatalf("exact notification manager contract was rejected: %v", err)
-	}
-	for _, field := range []string{"ExecStartEx", "ExecStop", "ExecStopEx"} {
-		t.Run(field, func(t *testing.T) {
-			tampered := cloneCoreProperties(manager)
-			tampered[field] = extendedRecord("/bin/true", "/bin/true", field == "ExecStartEx")
-			if err := verifyCoreManagerContract("workagent-notification.service", tampered); err == nil {
-				t.Fatalf("transient manager tampering of %s was accepted", field)
-			}
-		})
-	}
-
-	backupProperties := map[string]string{
-		"ExecStartPre": join(
-			plainRecord(core, core),
-			plainRecord("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release")),
-		"ExecStartPreEx": join(
-			extendedRecord(core, core, true),
-			extendedRecord("/usr/bin/flock", "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --public-key /etc/workagent/trust/release-signing.pub --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release", true)),
-		"ExecStartPost": "", "ExecStartPostEx": "", "ExecReload": "",
-	}
-	stopPost := "/usr/bin/flock --exclusive --nonblock --conflict-exit-code 0 /run/workagent/activation.lock /usr/bin/flock --shared /run/workagent/release-config.lock /usr/bin/flock --shared /opt/workagent/control.lock /opt/workagent/control/bin/workagent-backup resume"
-	backupProperties["ExecStopPost"] = plainRecord("/usr/bin/flock", stopPost)
-	backupProperties["ExecStopPostEx"] = extendedRecord("/usr/bin/flock", stopPost, false)
-	if !verifyCoreServiceExecVectors("workagent-backup.service", backupProperties) {
-		t.Fatal("exact backup stop-post vector was rejected")
-	}
-	backupProperties["ExecStopPost"] = strings.Replace(backupProperties["ExecStopPost"], "--nonblock", "--wait", 1)
-	if verifyCoreServiceExecVectors("workagent-backup.service", backupProperties) {
-		t.Fatal("tampered backup stop-post vector was accepted")
-	}
-}
-
-func TestCoreCaddyManagerContractRejectsNonPersistentUnitState(t *testing.T) {
-	for _, invalid := range []string{"static", "masked", "linked", "bad"} {
-		t.Run(invalid, func(t *testing.T) {
-			properties := caddyServiceState(false, false, "", 0)
-			properties["UnitFileState"] = invalid
-			if err := verifyCoreManagerContract("caddy.service", properties); err == nil {
-				t.Fatalf("Caddy UnitFileState=%s was accepted by the core contract", invalid)
-			}
-		})
-	}
-}
-
-func TestChatForwardManagerContractAcceptsOnlyExpandedCredentialSpecifier(t *testing.T) {
-	plain := func(arguments string) string {
-		return "{ path=/usr/libexec/workagent-fixed-root-exec-v1 ; argv[]=" + arguments + " ; ignore_errors=no ; pid=0 ; code=(null) ; status=0/0 }"
-	}
-	extended := func(arguments string) string {
-		return "{ path=/usr/libexec/workagent-fixed-root-exec-v1 ; argv[]=" + arguments + " ; flags= ; pid=0 ; code=(null) ; status=0/0 }"
-	}
-	expected := []systemdExecContract{{executable: "/usr/libexec/workagent-fixed-root-exec-v1", flattenedArgv: coreChatForwardManagerExec}}
-	if !exactCoreManagerExecVector(plain(coreChatForwardManagerExec), extended(coreChatForwardManagerExec), expected) {
-		t.Fatal("expanded systemd credential directory was rejected")
-	}
-	raw := strings.Replace(coreChatForwardManagerExec, "/run/credentials/workagent-chatforward.service", "%d", 1)
-	if exactCoreManagerExecVector(plain(raw), extended(raw), expected) {
-		t.Fatal("unexpanded percent-d credential specifier was accepted from manager state")
-	}
-}
 
 func TestImmutableCoreFleetHelperSetBindsEveryInstalledHelper(t *testing.T) {
 	if os.Geteuid() != 0 {
@@ -489,13 +381,13 @@ func TestCoreCommitAlwaysPrecedesNestedEdgeCommit(t *testing.T) {
 func TestCommittedCaddySettlementFailureAlwaysFailsClosed(t *testing.T) {
 	originalSettle, originalRollback := settleCoreCaddy, rollbackCoreCaddy
 	t.Cleanup(func() { settleCoreCaddy, rollbackCoreCaddy = originalSettle, originalRollback })
-	settleCoreCaddy = func(context.Context, systemdctl.Controller, caddyPublishingGeneration) error {
+	settleCoreCaddy = func(context.Context, systemdctl.Controller, serviceaction.CaddyPublishingGeneration) error {
 		return errors.New("watcher failed")
 	}
 	rolledBack := false
 	rollbackCoreCaddy = func(context.Context, systemdctl.Controller) error { rolledBack = true; return nil }
 	controller := &coreActivationSystemd{states: map[string]map[string]string{}}
-	if err := settleCommittedCoreCaddyFailClosed(context.Background(), controller, caddyPublishingGeneration{MainPID: "1"}); err == nil || !rolledBack {
+	if err := settleCommittedCoreCaddyFailClosed(context.Background(), controller, serviceaction.CaddyPublishingGeneration{MainPID: "1"}); err == nil || !rolledBack {
 		t.Fatalf("settlement failure was not failed closed: err=%v rolledBack=%t", err, rolledBack)
 	}
 }
@@ -559,7 +451,7 @@ func TestCoreActivationStructuralCrashBoundariesAreOrdered(t *testing.T) {
 	ordered(activate,
 		"AcquireActivationExclusiveForCoreReconciliation",
 		"acquireAuthenticatedControlConsumer(ctx)",
-		"reconcilePendingEdgePublication",
+		"edgepublication.ReconcilePending",
 		"reconcilePendingCoreActivation",
 		"backupquiescence.AssertClean()",
 		"backup.AssertNoPendingRecoveryActivation()",
@@ -573,14 +465,14 @@ func TestCoreActivationStructuralCrashBoundariesAreOrdered(t *testing.T) {
 		"startAndProveFreshTenantCatalogReady",
 		"convergeCoreFleet",
 		"commitCoreBeforeNestedEdge",
-		"failClosedAfterEdgeCommitError",
+		"edgepublication.FailClosedAfterCommitError",
 		"settleCommittedCoreCaddyFailClosed",
 	)
 	if strings.Count(activate, "acquireAuthenticatedControlConsumer(ctx)") != 2 {
 		t.Fatal("core activation must have exactly one authenticated snapshot before recovery and one after C_EX reconciliation")
 	}
 	firstAcquire := strings.Index(activate, "acquireAuthenticatedControlConsumer(ctx)")
-	firstReplay := strings.Index(activate, "reconcilePendingEdgePublication")
+	firstReplay := strings.Index(activate, "edgepublication.ReconcilePending")
 	if firstAcquire < 0 || firstReplay < 0 || firstAcquire >= firstReplay || strings.Contains(activate[firstAcquire:firstReplay], "controller.Action") || strings.Contains(activate[firstAcquire:firstReplay], "rejectCorePreflightFailClosed") {
 		t.Fatal("initial running-control authentication failure can reach a systemd mutation")
 	}
@@ -604,11 +496,11 @@ func TestCoreActivationStructuralCrashBoundariesAreOrdered(t *testing.T) {
 	}
 
 	converge := function("convergeCoreFleet")
-	ordered(converge, "publishCoreCaddyEdge", "for _, timer := range coreTimerUnits", "verifyCoreBackupEnvironment()", "verifyPublishedEdge")
+	ordered(converge, "publishCoreCaddyEdge", "for _, timer := range coreTimerUnits", "verifyCoreBackupEnvironment()", "serviceaction.VerifyPublishedEdge")
 	publish := function("publishCoreCaddyEdge")
 	if strings.Contains(publish, "edgeTransaction.Commit()") || strings.Contains(publish, "edgeTransaction.Close()") {
 		t.Fatal("nested edge ownership was committed or closed inside publishCoreCaddyEdge")
 	}
 	abort := function("abortCoreFleetActivation")
-	ordered(abort, "rollbackCoreCaddy", "edgeTransaction.Close()", "reconcilePendingEdgePublication", "transaction.Close()", "rollbackCoreFleetFailClosed")
+	ordered(abort, "rollbackCoreCaddy", "edgeTransaction.Close()", "edgepublication.ReconcilePending", "transaction.Close()", "rollbackCoreFleetFailClosed")
 }
