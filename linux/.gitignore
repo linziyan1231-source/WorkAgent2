@@ -1,5 +1,6 @@
 # Internal planning and approval material must never enter the WorkAgent2 product repository.
 /COMPANY_B_LINUX_FRESH_DEPLOYMENT_PLAN.md
+/AGENTS.md
 /.phase0-private/
 /.local-deployment/
 /.local-migration/
