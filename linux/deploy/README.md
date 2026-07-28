@@ -362,4 +362,4 @@ gate.
 
 The socket is created by systemd with owner `workagent` and mode 0600. Each UserHost service is assigned a dedicated tenant account by a root-owned drop-in. The template defaults to `workagent-disabled`, so a missing identity override fails closed.
 
-The UserHost template intentionally does not set `RestrictSUIDSGID=yes`: on the audited systemd build that directive blocked `openat2`, removing the stronger path-confinement primitive. `NoNewPrivileges`, an empty capability set, read-only system hierarchy and a dedicated UID remain enabled.
+The service units intentionally do not set `RestrictSUIDSGID=yes`: on the audited systemd build that directive blocked `openat2`, removing the stronger path-confinement primitive. `NoNewPrivileges`, an empty capability set, read-only system hierarchy and a dedicated UID remain enabled.
