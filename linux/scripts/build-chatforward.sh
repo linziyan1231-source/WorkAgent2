@@ -112,6 +112,28 @@ cp -- "$toolchain_root/bin/node" "$release_root/node/bin/node"
 cp -- "$toolchain_root/LICENSE" "$release_root/node/LICENSE"
 cp -- "$source_manifest" "$node_manifest" "$dependency_manifest" "$component_directory/VERSION" "$release_root/"
 
+# Chrome 137+ ignores --load-extension outside developer mode, so the browser
+# extension ships as a CRX installed through a managed policy. The signing key
+# is host-pinned so the derived extension ID is stable across rebuilds.
+extension_key=${CHATFORWARD_EXTENSION_KEY:-/etc/workagent/chatforward-extension.pem}
+if [[ ! -f $extension_key || -L $extension_key || $(stat -Lc '%u:%a' -- "$extension_key") != "0:600" ]]; then
+  echo "the pinned ChatForward extension signing key is missing or unsafe: $extension_key" >&2
+  exit 1
+fi
+chromium_packager=${CHATFORWARD_CHROMIUM_BIN:-/usr/bin/google-chrome-stable}
+"$chromium_packager" --pack-extension="$release_root/app/extension" --pack-extension-key="$extension_key" --no-sandbox --user-data-dir="$temporary_directory/pack-profile" >/dev/null 2>&1 ||
+  { echo "ChatForward extension CRX packing failed" >&2; exit 1; }
+mv -- "$release_root/app/extension.crx" "$release_root/extension.crx"
+extension_id=$(openssl rsa -in "$extension_key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}' | cut -c1-32 | tr '0-9a-f' 'a-p')
+extension_version=$(sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' "$release_root/app/extension/manifest.json")
+printf '%s\n' \
+  '<?xml version="1.0" encoding="UTF-8"?>' \
+  '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">' \
+  "  <app appid=\"$extension_id\">" \
+  "    <updatecheck codebase=\"file:///opt/workagent/shared/chatforward/extension.crx\" version=\"$extension_version\" />" \
+  '  </app>' \
+  '</gupdate>' > "$release_root/update.xml"
+
 source_manifest_sha256=$(sha256sum "$source_manifest" | awk '{print $1}')
 node_archive_sha256=$(sha256sum "$node_archive" | awk '{print $1}')
 package_lock_sha256=$(sha256sum "$source_directory/package-lock.json" | awk '{print $1}')

@@ -36,7 +36,10 @@ test("browser service keeps the profile private without disabling Chromium sandb
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/workagent\/chatforward /m);
   assert.match(unit, /readiness\.mjs --require-controller/);
   assert.match(launcher, /--user-data-dir="\$profile_directory"/);
-  assert.match(launcher, /--load-extension="\$extension_directory"/);
+  // Chrome 137+ ignores --load-extension outside developer mode; the
+  // extension is CRX-installed through the managed policy written by
+  // tmpfiles, so the launcher must not bypass that install.
+  assert.doesNotMatch(launcher, /--load-extension|--disable-extensions-except/);
   assert.match(launcher, /--password-store=basic/);
   assert.match(launcher, /--disable-background-mode/);
   assert.match(launcher, /-nolisten tcp/);

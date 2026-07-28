@@ -143,8 +143,6 @@ fi
 "$chromium_binary" \
   --user-data-dir="$profile_directory" \
   --disk-cache-dir="$cache_directory" \
-  --load-extension="$extension_directory" \
-  --disable-extensions-except="$extension_directory" \
   --password-store=basic \
   --ozone-platform=x11 \
   --no-first-run \

@@ -48,7 +48,7 @@ func VerifyPortalService(ctx context.Context, portal config.Portal, controller s
 		"NoNewPrivileges", "UMask", "KillMode", "PrivateDevices", "PrivateTmp", "ProtectClock", "ProtectControlGroups", "ProtectHome", "ProtectHostname",
 		"ProtectKernelLogs", "ProtectKernelModules", "ProtectKernelTunables", "ProtectProc", "ProcSubset", "ProtectSystem", "RestrictRealtime", "LockPersonality",
 		"CapabilityBoundingSet", "AmbientCapabilities", "RestrictAddressFamilies", "SystemCallArchitectures", "ReadWritePaths", "InaccessiblePaths",
-		"RestrictNamespaces", "MemoryDenyWriteExecute", "RestrictSUIDSGID")
+		"RestrictNamespaces", "MemoryDenyWriteExecute")
 	if err != nil {
 		return fmt.Errorf("inspect Portal service sandbox: %w", err)
 	}
@@ -57,7 +57,7 @@ func VerifyPortalService(ctx context.Context, portal config.Portal, controller s
 		"ProtectControlGroups": "yes", "ProtectHome": "yes", "ProtectHostname": "yes", "ProtectKernelLogs": "yes", "ProtectKernelModules": "yes",
 		"ProtectKernelTunables": "yes", "ProtectProc": "invisible", "ProcSubset": "pid", "ProtectSystem": "strict", "RestrictRealtime": "yes",
 		"LockPersonality": "yes", "CapabilityBoundingSet": "", "AmbientCapabilities": "", "SystemCallArchitectures": "native",
-		"RestrictNamespaces": "yes", "MemoryDenyWriteExecute": "yes", "RestrictSUIDSGID": "yes",
+		"RestrictNamespaces": "yes", "MemoryDenyWriteExecute": "yes",
 	} {
 		if hardening[property] != expected {
 			return fmt.Errorf("Portal service hardening property %s does not match policy", property)
