@@ -91,6 +91,9 @@ func VerifyLiveTenantIdentityCatalogWithPendingCreate(ctx context.Context, porta
 // be temporarily inactive while an activation-locked backup or resource
 // update is quiescing the fleet.
 func VerifyLiveTenantActivationCatalog(ctx context.Context, portal config.Portal, data *store.Store, controller systemdctl.Controller) error {
+	if controller == nil {
+		controller = systemdctl.Default()
+	}
 	identities, err := verifyLiveTenantIdentityCatalog(ctx, portal, data, nil, false)
 	if err != nil {
 		return err
