@@ -496,8 +496,8 @@ func TestFixedRootDrainProvesExactControlFleetAndOrder(t *testing.T) {
 	}
 
 	controller.loaded = []string{tenantSocket}
-	if err := ensureFixedRootFleetStopped(context.Background(), fixedroot.ControlPath, configs, controller); err == nil {
-		t.Fatal("missing protected tenant service instance was accepted")
+	if err := ensureFixedRootFleetStopped(context.Background(), fixedroot.ControlPath, configs, controller); err != nil {
+		t.Fatalf("configured tenant absent from the in-memory unit table was rejected: %v", err)
 	}
 }
 

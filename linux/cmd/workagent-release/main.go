@@ -1064,16 +1064,14 @@ func ensureExactLoadedTenantUnits(ctx context.Context, tenantUnits []string, con
 	for _, unit := range tenantUnits {
 		expected[unit] = true
 	}
-	seen := make(map[string]bool, len(loaded))
+	// systemd only keeps instances in memory after their first start job. A
+	// configured but never-started tenant is absent from this list, which is
+	// the strongest possible stopped proof; the clean-state check above already
+	// proved every expected unit loadable and inactive. The enumeration only
+	// has to reject loaded tenant units without protected configuration.
 	for _, unit := range loaded {
 		if !expected[unit] {
 			return fmt.Errorf("loaded tenant unit %s has no protected tenant configuration", unit)
-		}
-		seen[unit] = true
-	}
-	for _, unit := range tenantUnits {
-		if !seen[unit] {
-			return fmt.Errorf("protected tenant unit %s is not loaded", unit)
 		}
 	}
 	return nil
