@@ -44,16 +44,23 @@ const (
 	migrationLiveReceiptFragmentMaximum   = 1024 * 1024
 )
 
+// migrationReceiptEvidence is the evidence field list shared by the issued
+// live-verification receipt and the bound evidence re-collected at activation
+// time. It is embedded in both so the fields exist exactly once.
+type migrationReceiptEvidence struct {
+	Report         migrationReceiptReport      `json:"report"`
+	Plan           migrationReceiptPlan        `json:"plan"`
+	Portal         migrationReceiptPortal      `json:"portal"`
+	PendingBundles []migrationReceiptPending   `json:"pending_bundles"`
+	PolicyState    migrationReceiptPolicyState `json:"policy_state"`
+}
+
 type migrationLiveVerificationReceipt struct {
-	SchemaVersion  int                           `json:"schema_version"`
-	ReceiptPath    string                        `json:"receipt_path"`
-	IssuedAt       string                        `json:"issued_at"`
-	ExpiresAt      string                        `json:"expires_at"`
-	Report         migrationReceiptReport        `json:"report"`
-	Plan           migrationReceiptPlan          `json:"plan"`
-	Portal         migrationReceiptPortal        `json:"portal"`
-	PendingBundles []migrationReceiptPending     `json:"pending_bundles"`
-	PolicyState    migrationReceiptPolicyState   `json:"policy_state"`
+	SchemaVersion int    `json:"schema_version"`
+	ReceiptPath   string `json:"receipt_path"`
+	IssuedAt      string `json:"issued_at"`
+	ExpiresAt     string `json:"expires_at"`
+	migrationReceiptEvidence
 	CLIProxy       migrationReceiptCLIProxyProof `json:"cliproxy_verified_contract"`
 	EvidenceSHA256 string                        `json:"evidence_sha256"`
 }
@@ -118,11 +125,7 @@ type migrationReceiptServiceGeneration struct {
 }
 
 type migrationReceiptBoundEvidence struct {
-	Report            migrationReceiptReport
-	Plan              migrationReceiptPlan
-	Portal            migrationReceiptPortal
-	PendingBundles    []migrationReceiptPending
-	PolicyState       migrationReceiptPolicyState
+	migrationReceiptEvidence
 	InputContract     string
 	LiveCatalog       string
 	LiveKeys          string
@@ -598,13 +601,16 @@ func collectMigrationReceiptBoundEvidenceLocked(
 		return migrationReceiptBoundEvidence{}, err
 	}
 	return migrationReceiptBoundEvidence{
-		Report: migrationReceiptReport{
-			Path: options.ReportPath, SHA256: artifacts.reportSHA256,
-			SourceFingerprint: artifacts.report.SourceFingerprint,
-			OutputFingerprint: artifacts.report.OutputFingerprint,
+		migrationReceiptEvidence: migrationReceiptEvidence{
+			Report: migrationReceiptReport{
+				Path: options.ReportPath, SHA256: artifacts.reportSHA256,
+				SourceFingerprint: artifacts.report.SourceFingerprint,
+				OutputFingerprint: artifacts.report.OutputFingerprint,
+			},
+			Plan:   migrationReceiptPlan{Path: options.PlanPath, SHA256: artifacts.planSHA256},
+			Portal: portal, PendingBundles: pending, PolicyState: policyState,
 		},
-		Plan:   migrationReceiptPlan{Path: options.PlanPath, SHA256: artifacts.planSHA256},
-		Portal: portal, PendingBundles: pending, PolicyState: policyState, InputContract: contract,
+		InputContract: contract,
 	}, nil
 }
 
@@ -867,11 +873,12 @@ func buildMigrationLiveVerificationReceipt(
 	now = now.UTC()
 	now = time.Unix(0, now.UnixNano()).UTC()
 	expires := now.Add(migrationLiveReceiptTTL)
+	receiptEvidence := evidence.migrationReceiptEvidence
+	receiptEvidence.PendingBundles = append([]migrationReceiptPending(nil), evidence.PendingBundles...)
 	receipt := migrationLiveVerificationReceipt{
 		SchemaVersion: migrationLiveReceiptSchema, ReceiptPath: receiptPath,
 		IssuedAt: now.Format(time.RFC3339Nano), ExpiresAt: expires.Format(time.RFC3339Nano),
-		Report: evidence.Report, Plan: evidence.Plan, Portal: evidence.Portal,
-		PendingBundles: append([]migrationReceiptPending(nil), evidence.PendingBundles...), PolicyState: evidence.PolicyState,
+		migrationReceiptEvidence: receiptEvidence,
 		CLIProxy: migrationReceiptCLIProxyProof{
 			InputContractSHA256: evidence.InputContract,
 			LiveCatalogSHA256:   evidence.LiveCatalog,

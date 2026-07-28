@@ -83,20 +83,22 @@ func migrationReceiptTestEvidence() migrationReceiptBoundEvidence {
 	tenantID := "11111111-1111-4111-8111-111111111111"
 	hash := func(character string) string { return strings.Repeat(character, 64) }
 	return migrationReceiptBoundEvidence{
-		Report: migrationReceiptReport{
-			Path: "/var/lib/workagent/migration/report.json", SHA256: hash("a"),
-			SourceFingerprint: hash("b"), OutputFingerprint: hash("c"),
-		},
-		Plan: migrationReceiptPlan{Path: "/var/lib/workagent/migration/cutover/cliproxy-quota-overrides.json", SHA256: hash("d")},
-		Portal: migrationReceiptPortal{
-			DatabasePath: "/var/lib/workagent/portal/portal.db", Users: 1, IdentityCatalogSHA256: hash("e"),
-		},
-		PendingBundles: []migrationReceiptPending{{
-			TenantID: tenantID, Path: "/srv/workagent/users/" + tenantID + "/credentials/model-bootstrap-v1.pending.json",
-			BundleSHA256: hash("f"), StateSHA256: hash("1"), BundleVersion: 1,
-		}},
-		PolicyState: migrationReceiptPolicyState{
-			Path: "/var/lib/cliproxyapi/policy/cpa-key-policy-state.json", SHA256: hash("2"), Size: 1234, UID: 991, GID: 991,
+		migrationReceiptEvidence: migrationReceiptEvidence{
+			Report: migrationReceiptReport{
+				Path: "/var/lib/workagent/migration/report.json", SHA256: hash("a"),
+				SourceFingerprint: hash("b"), OutputFingerprint: hash("c"),
+			},
+			Plan: migrationReceiptPlan{Path: "/var/lib/workagent/migration/cutover/cliproxy-quota-overrides.json", SHA256: hash("d")},
+			Portal: migrationReceiptPortal{
+				DatabasePath: "/var/lib/workagent/portal/portal.db", Users: 1, IdentityCatalogSHA256: hash("e"),
+			},
+			PendingBundles: []migrationReceiptPending{{
+				TenantID: tenantID, Path: "/srv/workagent/users/" + tenantID + "/credentials/model-bootstrap-v1.pending.json",
+				BundleSHA256: hash("f"), StateSHA256: hash("1"), BundleVersion: 1,
+			}},
+			PolicyState: migrationReceiptPolicyState{
+				Path: "/var/lib/cliproxyapi/policy/cpa-key-policy-state.json", SHA256: hash("2"), Size: 1234, UID: 991, GID: 991,
+			},
 		},
 		InputContract: hash("3"), LiveCatalog: hash("4"), LiveKeys: hash("5"),
 		ServiceGeneration: migrationReceiptServiceGeneration{
