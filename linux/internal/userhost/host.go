@@ -124,7 +124,7 @@ func New(cfg config.Tenant, listener net.Listener, logger *log.Logger) (*Host, e
 	if cfg.Backend.AgentCLI.BinDirectory != "" {
 		requiredExecutables = append(requiredExecutables, cfg.Backend.AgentCLI.CodexExecutable, cfg.Backend.AgentCLI.KimiExecutable, cfg.Backend.AgentCLI.PythonExecutable)
 	}
-	verifiedRelease, err := release.ResolveActive(cfg.Release.ReleasesRoot, cfg.Release.PointerFile, cfg.Release.PublicKeyFile, release.ResolveOptions{
+	verifiedRelease, err := release.ResolveActive(cfg.Release.ReleasesRoot, cfg.Release.PointerFile, release.ResolveOptions{
 		Scope: cfg.Release.Scope, RequiredPaths: requiredPaths, RequiredExecutablePaths: requiredExecutables, RequireRootOwner: true,
 	})
 	if err != nil {

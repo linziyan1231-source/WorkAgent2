@@ -48,11 +48,10 @@ func TestPortalRendererChannelMustBeCompleteAndCanonical(t *testing.T) {
 	root := t.TempDir()
 	value := validPortal(root)
 	value.Renderer = RendererRelease{
-		ReleasesRoot:  filepath.Join(root, "runtime", "releases"),
-		PointerFile:   filepath.Join(root, "runtime", "current.json"),
-		PublicKeyFile: filepath.Join(root, "trust", "release.pub"),
-		Scope:         "runtime",
-		RelativeRoot:  "static",
+		ReleasesRoot: filepath.Join(root, "runtime", "releases"),
+		PointerFile:  filepath.Join(root, "runtime", "current.json"),
+		Scope:        "runtime",
+		RelativeRoot: "static",
 	}
 	if err := value.Validate(); err != nil {
 		t.Fatalf("valid Renderer release channel rejected: %v", err)
@@ -219,7 +218,7 @@ func validTenant(root string) Tenant {
 		Capacity:         TenantCapacity{SlotDirectory: filepath.Join(root, "capacity"), MaxInstances: 3},
 		Release: TenantRelease{
 			ReleasesRoot: releasesRoot, PointerFile: filepath.Join(filepath.Dir(releasesRoot), "current.json"),
-			PublicKeyFile: filepath.Join(root, "trust", "release.pub"), Scope: "runtime",
+			Scope: "runtime",
 		},
 		Backend: Backend{Executable: "bin/runtime", WorkingDirectory: filepath.Join(dataRoot, "workspace"), HealthPath: "/healthz", ActivityProbe: "aggregate", ActivityPath: "/api/activity", StartupTimeoutSeconds: 30},
 	}

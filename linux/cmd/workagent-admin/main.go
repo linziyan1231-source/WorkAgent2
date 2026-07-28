@@ -97,13 +97,10 @@ func verifyRunningControlExecutable() error {
 	_, err := release.Verify(productionControlRoot, filepath.Join(productionControlRoot, "manifest.json"), release.VerifyOptions{
 		RequiredExecutablePaths: []string{"bin/workagent-admin", "share/deploy/libexec/workagent-core-activation-admission-v1", "share/deploy/libexec/workagent-edge-publication-admission-v1"},
 		RequireRootOwner:        true,
-		RequireSignature:        true,
-		SignaturePath:           filepath.Join(productionControlRoot, "manifest.sig"),
-		PublicKeyPath:           "/etc/workagent/trust/release-signing.pub",
 		AllowedScopes:           []string{release.ScopePortal},
 	})
 	if err != nil {
-		return fmt.Errorf("authenticate current control release: %w", err)
+		return fmt.Errorf("verify current control release: %w", err)
 	}
 	return release.VerifyRunningExecutable(productionControlRoot, "workagent-admin")
 }

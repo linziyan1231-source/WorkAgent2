@@ -90,11 +90,10 @@ type PortalPaths struct {
 }
 
 type RendererRelease struct {
-	ReleasesRoot  string `json:"releases_root,omitempty"`
-	PointerFile   string `json:"pointer_file,omitempty"`
-	PublicKeyFile string `json:"public_key_file,omitempty"`
-	Scope         string `json:"scope,omitempty"`
-	RelativeRoot  string `json:"relative_root,omitempty"`
+	ReleasesRoot string `json:"releases_root,omitempty"`
+	PointerFile  string `json:"pointer_file,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	RelativeRoot string `json:"relative_root,omitempty"`
 }
 
 type RuntimePolicy struct {
@@ -204,10 +203,9 @@ type TenantCapacity struct {
 }
 
 type TenantRelease struct {
-	ReleasesRoot  string `json:"releases_root"`
-	PointerFile   string `json:"pointer_file"`
-	PublicKeyFile string `json:"public_key_file"`
-	Scope         string `json:"scope"`
+	ReleasesRoot string `json:"releases_root"`
+	PointerFile  string `json:"pointer_file"`
+	Scope        string `json:"scope"`
 }
 
 type Backend struct {
@@ -377,7 +375,7 @@ func (p Portal) ValidateProductionLayout(configPath string) error {
 			return errors.New("Portal production trusted proxies must be restricted to loopback CIDRs")
 		}
 	}
-	if !p.Renderer.Configured() || p.Renderer.ReleasesRoot != "/opt/workagent/aionui/releases" || p.Renderer.PointerFile != "/opt/workagent/aionui/current.json" || p.Renderer.PublicKeyFile != "/etc/workagent/trust/release-signing.pub" || p.Renderer.Scope != "runtime" || p.Renderer.RelativeRoot != "static" {
+	if !p.Renderer.Configured() || p.Renderer.ReleasesRoot != "/opt/workagent/aionui/releases" || p.Renderer.PointerFile != "/opt/workagent/aionui/current.json" || p.Renderer.Scope != "runtime" || p.Renderer.RelativeRoot != "static" {
 		return errors.New("Portal production Renderer channel is not canonical")
 	}
 	if p.AdminMasterPasswordHashFile != "" && p.AdminMasterPasswordHashFile != "/run/credentials/workagent-portal.service/admin-master-password-hash" {
@@ -405,7 +403,7 @@ func loopbackPrefix(prefix netip.Prefix) bool {
 }
 
 func (r RendererRelease) Configured() bool {
-	return r.ReleasesRoot != "" || r.PointerFile != "" || r.PublicKeyFile != "" || r.Scope != "" || r.RelativeRoot != ""
+	return r.ReleasesRoot != "" || r.PointerFile != "" || r.Scope != "" || r.RelativeRoot != ""
 }
 
 func (r RendererRelease) validate() error {
@@ -413,9 +411,8 @@ func (r RendererRelease) validate() error {
 		return nil
 	}
 	for name, value := range map[string]string{
-		"renderer.releases_root":   r.ReleasesRoot,
-		"renderer.pointer_file":    r.PointerFile,
-		"renderer.public_key_file": r.PublicKeyFile,
+		"renderer.releases_root": r.ReleasesRoot,
+		"renderer.pointer_file":  r.PointerFile,
 	} {
 		if err := absoluteCleanPath(name, value); err != nil {
 			return err
@@ -618,7 +615,7 @@ func (t Tenant) Validate() error {
 	}
 	for name, value := range map[string]string{
 		"data_root": t.DataRoot, "socket_path": t.SocketPath, "release.releases_root": t.Release.ReleasesRoot,
-		"release.pointer_file": t.Release.PointerFile, "release.public_key_file": t.Release.PublicKeyFile,
+		"release.pointer_file": t.Release.PointerFile,
 		"backend.working_directory": t.Backend.WorkingDirectory, "capacity.slot_directory": t.Capacity.SlotDirectory,
 	} {
 		if err := absoluteCleanPath(name, value); err != nil {

@@ -34,7 +34,7 @@ func BuildConfig(portal config.Portal, portalUID uint32, identity Identity, limi
 		OutboundProxyURL: portal.OutboundProxyURL,
 		Capacity:         config.TenantCapacity{SlotDirectory: "/run/workagent/capacity", MaxInstances: portal.Runtime.MaxConcurrentInstances, ProjectID: identity.ProjectID, DiskHardLimitBytes: identity.DiskHardLimitBytes},
 		Limits:           limits.Effective(),
-		Release:          config.TenantRelease{ReleasesRoot: "/opt/workagent/aionui/releases", PointerFile: "/opt/workagent/aionui/current.json", PublicKeyFile: "/etc/workagent/trust/release-signing.pub", Scope: "runtime"},
+		Release:          config.TenantRelease{ReleasesRoot: "/opt/workagent/aionui/releases", PointerFile: "/opt/workagent/aionui/current.json", Scope: "runtime"},
 		Backend: config.Backend{
 			Executable: "bin/aionui-web", Arguments: []string{"start", "--port", "{listen_port}", "--data-dir", "{data_root}/data", "--work-dir", "{data_root}/workspace", "--log-dir", "{data_root}/logs", "--static-dir", "{release_root}/static", "--backend-bin", "{release_root}/bin/aioncore", "--no-open"},
 			RequiredReleaseFiles: []string{"static/index.html", "workagent-builtin-assistants/assistants.json", "workagent-builtin-assistants/rules/aionui-assistant.en-US.md", "workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md", "workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md"}, WorkingDirectory: filepath.Join(dataRoot, "workspace"),

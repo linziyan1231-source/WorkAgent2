@@ -23,7 +23,6 @@
   "release": {
     "releases_root": "/opt/workagent/aionui/releases",
     "pointer_file": "/opt/workagent/aionui/current.json",
-    "public_key_file": "/etc/workagent/trust/release-signing.pub",
     "scope": "runtime"
   },
   "backend": {

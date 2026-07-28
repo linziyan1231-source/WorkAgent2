@@ -33,7 +33,6 @@ const (
 	quiesceJournalPath     = backupquiescence.JournalPath
 	maxQuiesceJournalBytes = 256 * 1024
 	backupControlRoot      = "/opt/workagent/control"
-	backupReleasePublicKey = "/etc/workagent/trust/release-signing.pub"
 )
 
 var (
@@ -243,13 +242,10 @@ func verifyRunningBackupExecutable() error {
 	_, err := release.Verify(backupControlRoot, filepath.Join(backupControlRoot, "manifest.json"), release.VerifyOptions{
 		RequiredExecutablePaths: []string{"bin/workagent-backup", "bin/workagent-release"},
 		RequireRootOwner:        true,
-		RequireSignature:        true,
-		SignaturePath:           filepath.Join(backupControlRoot, "manifest.sig"),
-		PublicKeyPath:           backupReleasePublicKey,
 		AllowedScopes:           []string{release.ScopePortal},
 	})
 	if err != nil {
-		return fmt.Errorf("authenticate current control release: %w", err)
+		return fmt.Errorf("verify current control release: %w", err)
 	}
 	return release.VerifyRunningExecutable(backupControlRoot, "workagent-backup")
 }

@@ -263,7 +263,6 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 	if _, err := release.ResolveActive(
 		portal.Renderer.ReleasesRoot,
 		portal.Renderer.PointerFile,
-		portal.Renderer.PublicKeyFile,
 		release.ResolveOptions{
 			Scope: portal.Renderer.Scope, RequiredPaths: []string{rendererIndex}, RequireRootOwner: true,
 		},
@@ -273,7 +272,6 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 	if err := verifyRecoveredPreviousRelease(
 		portal.Renderer.ReleasesRoot,
 		portal.Renderer.PointerFile,
-		portal.Renderer.PublicKeyFile,
 		portal.Renderer.Scope,
 		[]string{rendererIndex},
 		nil,
@@ -295,7 +293,6 @@ func DiscoverSnapshot(portalConfigPath string, backupConfig Config) (*Snapshot, 
 		if err := verifyRecoveredPreviousRelease(
 			tenant.Release.ReleasesRoot,
 			tenant.Release.PointerFile,
-			tenant.Release.PublicKeyFile,
 			tenant.Release.Scope,
 			required,
 			requiredExecutables,

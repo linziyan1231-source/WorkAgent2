@@ -720,7 +720,7 @@ func tenantBatchTestTenant(portal config.Portal, tenantID, runtimeUser string, p
 		IdleReapSeconds: portal.Runtime.IdleReapSeconds,
 		Release: config.TenantRelease{
 			ReleasesRoot: releaseRoot, PointerFile: filepath.Join(filepath.Dir(releaseRoot), "current.json"),
-			PublicKeyFile: filepath.Join(portal.Paths.ReleaseRoot, "trust.pub"), Scope: "runtime",
+			Scope: "runtime",
 		},
 		Backend: config.Backend{
 			Executable: "bin/runtime", WorkingDirectory: filepath.Join(dataRoot, "workspace"), HealthPath: "/healthz",

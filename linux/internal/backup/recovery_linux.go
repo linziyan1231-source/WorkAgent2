@@ -733,17 +733,15 @@ func installRecoveredCatalogLocked(
 	if _, err := release.ResolveActive(
 		installedPortal.Renderer.ReleasesRoot,
 		installedPortal.Renderer.PointerFile,
-		installedPortal.Renderer.PublicKeyFile,
 		release.ResolveOptions{
 			Scope: installedPortal.Renderer.Scope, RequiredPaths: []string{rendererIndex}, RequireRootOwner: true,
 		},
 	); err != nil {
-		return recoveredCatalogInstall{}, fmt.Errorf("verify restored signed Renderer release: %w", err)
+		return recoveredCatalogInstall{}, fmt.Errorf("verify restored Renderer release: %w", err)
 	}
 	if err := verifyRecoveredPreviousRelease(
 		installedPortal.Renderer.ReleasesRoot,
 		installedPortal.Renderer.PointerFile,
-		installedPortal.Renderer.PublicKeyFile,
 		installedPortal.Renderer.Scope,
 		[]string{rendererIndex},
 		nil,
@@ -776,7 +774,7 @@ func installRecoveredCatalogLocked(
 			requiredExecutables = append(requiredExecutables, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
 		}
 		if err := verifyRecoveredPreviousRelease(
-			tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.PublicKeyFile, tenant.Release.Scope, required, requiredExecutables,
+			tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.Scope, required, requiredExecutables,
 		); err != nil {
 			return recoveredCatalogInstall{}, fmt.Errorf("verify restored previous tenant release %s: %w", tenant.TenantID, err)
 		}
@@ -790,7 +788,7 @@ func installRecoveredCatalogLocked(
 	}, nil
 }
 
-func verifyRecoveredPreviousRelease(releasesRoot, pointerPath, publicKeyPath, scope string, requiredPaths, requiredExecutablePaths []string) error {
+func verifyRecoveredPreviousRelease(releasesRoot, pointerPath, scope string, requiredPaths, requiredExecutablePaths []string) error {
 	pointer, err := release.LoadProtectedPointer(pointerPath, true)
 	if err != nil || pointer.Scope != scope {
 		return errors.New("restored release pointer changed before previous-release verification")
@@ -800,8 +798,7 @@ func verifyRecoveredPreviousRelease(releasesRoot, pointerPath, publicKeyPath, sc
 	}
 	root := filepath.Join(releasesRoot, pointer.Previous)
 	_, err = release.Verify(root, filepath.Join(root, "manifest.json"), release.VerifyOptions{
-		ExpectedReleaseID: pointer.Previous, RequiredPaths: requiredPaths, RequiredExecutablePaths: requiredExecutablePaths, RequireRootOwner: true, RequireSignature: true,
-		SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKeyPath,
+		ExpectedReleaseID: pointer.Previous, RequiredPaths: requiredPaths, RequiredExecutablePaths: requiredExecutablePaths, RequireRootOwner: true,
 		AllowedScopes: []string{scope},
 	})
 	return err

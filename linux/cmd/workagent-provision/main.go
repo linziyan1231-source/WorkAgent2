@@ -48,7 +48,6 @@ func provisionTenant(arguments []string) (resultErr error) {
 	processLimit := flags.Uint("active-processes", uint(config.DefaultResourceLimits().ActiveProcesses), "tenant active process limit")
 	releasesRoot := flags.String("releases-root", "/opt/workagent/aionui/releases", "runtime release channel root")
 	pointerFile := flags.String("pointer", "/opt/workagent/aionui/current.json", "runtime release pointer")
-	publicKey := flags.String("public-key", "/etc/workagent/trust/release-signing.pub", "trusted release verification key")
 	scope := flags.String("scope", "runtime", "runtime release scope")
 	initial := flags.Bool("initial", false, "provision before the first runtime release activation")
 	reconcile := flags.Bool("reconcile", false, "reconcile an existing matching tenant")
@@ -115,7 +114,7 @@ func provisionTenant(arguments []string) (resultErr error) {
 			OutboundProxyURL: portal.OutboundProxyURL,
 			Capacity:         config.TenantCapacity{SlotDirectory: "/run/workagent/capacity", MaxInstances: portal.Runtime.MaxConcurrentInstances, ProjectID: uint32(*projectID), DiskHardLimitBytes: *diskLimit},
 			Limits:           config.ResourceLimits{MemoryBytes: *memoryLimit, CPUPercent: uint32(*cpuLimit), ActiveProcesses: uint32(*processLimit)},
-			Release:          config.TenantRelease{ReleasesRoot: *releasesRoot, PointerFile: *pointerFile, PublicKeyFile: *publicKey, Scope: *scope},
+			Release:          config.TenantRelease{ReleasesRoot: *releasesRoot, PointerFile: *pointerFile, Scope: *scope},
 			Backend: config.Backend{
 				Executable: "bin/aionui-web", Arguments: []string{"start", "--port", "{listen_port}", "--data-dir", "{data_root}/data", "--work-dir", "{data_root}/workspace", "--log-dir", "{data_root}/logs", "--static-dir", "{release_root}/static", "--backend-bin", "{release_root}/bin/aioncore", "--no-open"},
 				RequiredReleaseFiles: []string{"static/index.html", "workagent-builtin-assistants/assistants.json", "workagent-builtin-assistants/rules/aionui-assistant.en-US.md", "workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md", "workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md"}, WorkingDirectory: filepath.Join(dataRoot, "workspace"),

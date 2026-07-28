@@ -25,7 +25,6 @@ import (
 
 const (
 	recoveryProductionControlRoot = "/opt/workagent/control"
-	recoveryReleasePublicKey      = "/etc/workagent/trust/release-signing.pub"
 	recoverySystemdEtcRoot        = "/etc/systemd/system"
 	recoverySystemdVendorRoot     = "/usr/lib/systemd/system"
 	recoveryInstalledLibexecRoot  = "/usr/libexec"
@@ -71,7 +70,6 @@ var recoverySignedLibexecAssets = []string{
 
 type recoverySystemdContractLayout struct {
 	controlRoot                string
-	publicKey                  string
 	systemdRoots               []string
 	localDropInRoot            string
 	libexecRoot                string
@@ -81,7 +79,6 @@ type recoverySystemdContractLayout struct {
 func productionRecoverySystemdContractLayout() recoverySystemdContractLayout {
 	return recoverySystemdContractLayout{
 		controlRoot:                recoveryProductionControlRoot,
-		publicKey:                  recoveryReleasePublicKey,
 		systemdRoots:               []string{recoverySystemdEtcRoot, recoverySystemdVendorRoot},
 		localDropInRoot:            recoverySystemdEtcRoot,
 		libexecRoot:                recoveryInstalledLibexecRoot,
@@ -174,7 +171,7 @@ func newProductionRecoverySystemdContract(portal config.Portal, tenants []config
 	return newRecoverySystemdContract(portal, tenants, productionRecoverySystemdContractLayout(), true)
 }
 
-func newRecoverySystemdContract(portal config.Portal, tenants []config.Tenant, layout recoverySystemdContractLayout, verifySignature bool) (*recoverySystemdContract, error) {
+func newRecoverySystemdContract(portal config.Portal, tenants []config.Tenant, layout recoverySystemdContractLayout, verifyControlRoot bool) (*recoverySystemdContract, error) {
 	if err := portal.ValidateProductionLayout("/etc/workagent/portal.json"); err != nil {
 		return nil, fmt.Errorf("build recovery systemd contract from Portal policy: %w", err)
 	}
@@ -206,14 +203,13 @@ func newRecoverySystemdContract(portal config.Portal, tenants []config.Tenant, l
 	}
 	sort.Strings(required)
 	sort.Strings(requiredExecutables)
-	if verifySignature {
+	if verifyControlRoot {
 		if _, err := release.Verify(layout.controlRoot, filepath.Join(layout.controlRoot, "manifest.json"), release.VerifyOptions{
 			RequiredPaths: required, RequiredExecutablePaths: requiredExecutables,
-			RequireRootOwner: true, RequireSignature: true,
-			SignaturePath: filepath.Join(layout.controlRoot, "manifest.sig"), PublicKeyPath: layout.publicKey,
-			AllowedScopes: []string{release.ScopePortal},
+			RequireRootOwner: true,
+			AllowedScopes:    []string{release.ScopePortal},
 		}); err != nil {
-			return nil, fmt.Errorf("authenticate signed control unit assets for blank-host recovery: %w", err)
+			return nil, fmt.Errorf("verify control unit assets for blank-host recovery: %w", err)
 		}
 	}
 	references := make(map[string]recoveryProtectedReference, len(required)+len(requiredExecutables))
@@ -275,7 +271,7 @@ func newRecoverySystemdContract(portal config.Portal, tenants []config.Tenant, l
 }
 
 func cleanRecoveryContractLayout(layout recoverySystemdContractLayout) bool {
-	if !cleanAbsolute(layout.controlRoot) || !cleanAbsolute(layout.publicKey) || !cleanAbsolute(layout.localDropInRoot) || !cleanAbsolute(layout.libexecRoot) || len(layout.systemdRoots) == 0 {
+	if !cleanAbsolute(layout.controlRoot) || !cleanAbsolute(layout.localDropInRoot) || !cleanAbsolute(layout.libexecRoot) || len(layout.systemdRoots) == 0 {
 		return false
 	}
 	seen := make(map[string]bool, len(layout.systemdRoots))

@@ -50,7 +50,6 @@ func ValidateTenantBinding(portal config.Portal, tenant config.Tenant) error {
 	}
 	if portal.Renderer.Configured() && (tenant.Release.ReleasesRoot != portal.Renderer.ReleasesRoot ||
 		tenant.Release.PointerFile != portal.Renderer.PointerFile ||
-		tenant.Release.PublicKeyFile != portal.Renderer.PublicKeyFile ||
 		tenant.Release.Scope != portal.Renderer.Scope) {
 		return errors.New("tenant release channel does not match the Portal Renderer channel")
 	}
@@ -70,7 +69,7 @@ func VerifyTenantHost(portal config.Portal, tenant config.Tenant) (TenantVerific
 	if tenant.Backend.AgentCLI.BinDirectory != "" {
 		requiredExecutables = append(requiredExecutables, tenant.Backend.AgentCLI.CodexExecutable, tenant.Backend.AgentCLI.KimiExecutable, tenant.Backend.AgentCLI.PythonExecutable)
 	}
-	verified, err := release.ResolveActive(tenant.Release.ReleasesRoot, tenant.Release.PointerFile, tenant.Release.PublicKeyFile, release.ResolveOptions{
+	verified, err := release.ResolveActive(tenant.Release.ReleasesRoot, tenant.Release.PointerFile, release.ResolveOptions{
 		Scope: tenant.Release.Scope, RequiredPaths: required, RequiredExecutablePaths: requiredExecutables, RequireRootOwner: true,
 	})
 	if err != nil {
