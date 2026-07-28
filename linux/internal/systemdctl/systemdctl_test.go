@@ -1,6 +1,8 @@
 package systemdctl
 
 import (
+	"os"
+	"path/filepath"
 	"context"
 	"testing"
 )
@@ -58,5 +60,24 @@ func TestNonblockingActionIsRestrictedToExactGuardedCaddyStart(t *testing.T) {
 		if err := client.Action(context.Background(), arguments...); err == nil {
 			t.Fatalf("unsafe nonblocking action was accepted: %v", arguments)
 		}
+	}
+}
+
+func TestPropertiesJoinsRepeatedExecRecordsAndDefaultsOmitted(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "systemctl")
+	payload := "#!/bin/sh\nprintf '%s\\n' 'ExecStartPre={ one }' 'ExecStartPre={ two }' 'LoadState=loaded'\n"
+	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{Command: script}
+	properties, err := client.Properties(context.Background(), "workagent-portal.service", "LoadState", "ExecStartPre", "ExecReload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if properties["ExecStartPre"] != "{ one } ; { two }" || properties["LoadState"] != "loaded" {
+		t.Fatalf("repeated Exec records were not joined: %#v", properties)
+	}
+	if value, ok := properties["ExecReload"]; !ok || value != "" {
+		t.Fatalf("omitted property did not default to empty: %#v", properties)
 	}
 }

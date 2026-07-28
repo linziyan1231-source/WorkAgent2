@@ -54,7 +54,13 @@ func (c Client) Properties(ctx context.Context, unit string, names ...string) (m
 		if !found || !validProperty(name) {
 			return nil, errors.New("systemd returned malformed properties")
 		}
-		properties[name] = value
+		// Repeated Exec directives are emitted as multiple same-name lines;
+		// systemd serializes one vector as records joined by " ; ".
+		if existing, ok := properties[name]; ok {
+			properties[name] = existing + " ; " + value
+		} else {
+			properties[name] = value
+		}
 	}
 	for _, name := range names {
 		// systemd omits unset properties from the output; an omitted
