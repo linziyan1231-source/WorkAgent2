@@ -251,30 +251,7 @@ func verifyRunningBackupExecutable() error {
 	if err != nil {
 		return fmt.Errorf("authenticate current control release: %w", err)
 	}
-	running, err := unix.Open("/proc/self/exe", unix.O_RDONLY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fmt.Errorf("open running workagent-backup executable: %w", err)
-	}
-	defer unix.Close(running)
-	currentPath := filepath.Join(backupControlRoot, "bin/workagent-backup")
-	current, err := unix.Open(currentPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fmt.Errorf("open current signed workagent-backup executable: %w", err)
-	}
-	defer unix.Close(current)
-	var runningStat unix.Stat_t
-	var currentStat unix.Stat_t
-	if err := unix.Fstat(running, &runningStat); err != nil {
-		return errors.New("inspect running workagent-backup executable")
-	}
-	if err := unix.Fstat(current, &currentStat); err != nil {
-		return errors.New("inspect current signed workagent-backup executable")
-	}
-	if runningStat.Dev != currentStat.Dev || runningStat.Ino != currentStat.Ino || currentStat.Mode&unix.S_IFMT != unix.S_IFREG ||
-		currentStat.Mode&0o7777 != 0o555 || currentStat.Uid != 0 || currentStat.Gid != 0 || currentStat.Nlink != 1 {
-		return errors.New("running workagent-backup is not the current signed control executable")
-	}
-	return nil
+	return release.VerifyRunningExecutable(backupControlRoot, "workagent-backup")
 }
 
 func requireExternallyHeldActivationLock() error {

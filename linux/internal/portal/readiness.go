@@ -155,7 +155,7 @@ func readProtectedCredential(path string) ([]byte, error) {
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		return nil, errors.New("credential file is unreadable")
+		return nil, fmt.Errorf("read credential file: %w", err)
 	}
 	payload = []byte(strings.TrimSpace(string(payload)))
 	if len(payload) < 16 || len(payload) > 4096 || strings.ContainsAny(string(payload), "\x00\r\n") {

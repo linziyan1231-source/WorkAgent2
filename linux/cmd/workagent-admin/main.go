@@ -105,29 +105,7 @@ func verifyRunningControlExecutable() error {
 	if err != nil {
 		return fmt.Errorf("authenticate current control release: %w", err)
 	}
-	running, err := unix.Open("/proc/self/exe", unix.O_RDONLY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fmt.Errorf("open running workagent-admin executable: %w", err)
-	}
-	defer unix.Close(running)
-	currentPath := filepath.Join(productionControlRoot, "bin/workagent-admin")
-	current, err := unix.Open(currentPath, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fmt.Errorf("open current signed workagent-admin executable: %w", err)
-	}
-	defer unix.Close(current)
-	var runningStat unix.Stat_t
-	var currentStat unix.Stat_t
-	if err := unix.Fstat(running, &runningStat); err != nil {
-		return err
-	}
-	if err := unix.Fstat(current, &currentStat); err != nil {
-		return err
-	}
-	if runningStat.Dev != currentStat.Dev || runningStat.Ino != currentStat.Ino || currentStat.Mode&unix.S_IFMT != unix.S_IFREG || currentStat.Mode&0o7777 != 0o555 || currentStat.Uid != 0 || currentStat.Gid != 0 || currentStat.Nlink != 1 {
-		return errors.New("running workagent-admin is not the current signed control executable")
-	}
-	return nil
+	return release.VerifyRunningExecutable(productionControlRoot, "workagent-admin")
 }
 
 func main() {
@@ -176,7 +154,7 @@ func main() {
 }
 
 func usage(logger *log.Logger) {
-	logger.Fatal("usage: workagent-admin <init-admin|create-user|set-password|set-enabled|activate-tenant-catalog|activate-core-fleet|service-action|set-limits|runtime-status|runtime-start|runtime-stop|runtime-restart|list-users|set-chatgpt-pro-limit|verify-tenant|reconcile-tenant-files|verify-host> [options]")
+	logger.Fatal("usage: workagent-admin <init-admin|create-user|set-password|set-enabled|activate-tenant-catalog|activate-core-fleet|service-action|assert-activation-clean|set-limits|runtime-status|runtime-start|runtime-stop|runtime-restart|list-users|set-chatgpt-pro-limit|verify-tenant|reconcile-tenant-files|verify-host> [options]")
 }
 
 func createUser(arguments []string, forceAdmin, requireEmpty bool) (resultErr error) {
