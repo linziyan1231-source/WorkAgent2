@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -213,20 +214,37 @@ func TestMaintenanceNoticeIsObservedThroughAuthenticatedPortalEndpoint(t *testin
 	}
 }
 
-func (s releaseSystemd) Properties(_ context.Context, unit string, _ ...string) (map[string]string, error) {
+func (s releaseSystemd) Properties(_ context.Context, unit string, names ...string) (map[string]string, error) {
 	if s.checked != nil {
 		*s.checked = append(*s.checked, unit)
 	}
 	state := s.states[unit]
-	properties := map[string]string{"LoadState": "loaded", "ActiveState": state, "SubState": "dead", "ControlPID": "0", "MainPID": "0", "Result": "success", "UnitFileState": "disabled"}
+	// Mirror real systemd: ControlPID/MainPID exist only on services, Result
+	// only on services and timers; other unit types omit them entirely.
+	available := map[string]string{"LoadState": "loaded", "ActiveState": state, "SubState": "dead", "UnitFileState": "disabled"}
+	if strings.HasSuffix(unit, ".service") || strings.HasSuffix(unit, ".timer") {
+		available["Result"] = "success"
+	}
+	if strings.HasSuffix(unit, ".service") {
+		available["ControlPID"] = "0"
+		available["MainPID"] = "0"
+	}
 	if state == "active" {
-		properties["SubState"] = "running"
+		available["SubState"] = "running"
 	}
 	if state == "failed" {
-		properties["SubState"] = "failed"
-		properties["Result"] = "exit-code"
+		available["SubState"] = "failed"
+		available["Result"] = "exit-code"
 	}
 	for name, value := range s.override[unit] {
+		available[name] = value
+	}
+	properties := make(map[string]string, len(names))
+	for _, name := range names {
+		value, ok := available[name]
+		if !ok {
+			return nil, fmt.Errorf("systemd omitted property %s", name)
+		}
 		properties[name] = value
 	}
 	return properties, nil

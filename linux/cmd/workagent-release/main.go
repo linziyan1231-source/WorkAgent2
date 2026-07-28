@@ -997,12 +997,16 @@ func ensureCleanlyStoppedUnitsWithDisabled(ctx context.Context, units []string, 
 		return errors.New("systemd controller is required")
 	}
 	for _, unit := range units {
-		propertyNames := []string{"LoadState", "ActiveState", "SubState", "ControlPID", "Result"}
+		isService := strings.HasSuffix(unit, ".service")
+		isTimer := strings.HasSuffix(unit, ".timer")
+		propertyNames := []string{"LoadState", "ActiveState", "SubState"}
+		if isService {
+			propertyNames = append(propertyNames, "ControlPID", "Result", "MainPID")
+		} else if isTimer {
+			propertyNames = append(propertyNames, "Result")
+		}
 		if requireDisabled[unit] {
 			propertyNames = append(propertyNames, "UnitFileState")
-		}
-		if strings.HasSuffix(unit, ".service") {
-			propertyNames = append(propertyNames, "MainPID")
 		}
 		properties, err := controller.Properties(ctx, unit, propertyNames...)
 		if err != nil {
@@ -1014,7 +1018,8 @@ func ensureCleanlyStoppedUnitsWithDisabled(ctx context.Context, units []string, 
 		if state := properties["ActiveState"]; state != "inactive" {
 			return fmt.Errorf("%s is %s; stop affected services (ChatForward browser before bridge) before switching releases", unit, state)
 		}
-		if properties["SubState"] != "dead" || properties["ControlPID"] != "0" || properties["Result"] != "success" || (strings.HasSuffix(unit, ".service") && properties["MainPID"] != "0") {
+		if properties["SubState"] != "dead" || (isService && (properties["ControlPID"] != "0" || properties["Result"] != "success" || properties["MainPID"] != "0")) ||
+			(isTimer && properties["Result"] != "success") {
 			return fmt.Errorf("%s is not cleanly drained (substate=%s result=%s main_pid=%s control_pid=%s)", unit, properties["SubState"], properties["Result"], properties["MainPID"], properties["ControlPID"])
 		}
 		if requireDisabled[unit] && properties["UnitFileState"] != "disabled" {
