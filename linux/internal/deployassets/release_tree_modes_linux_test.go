@@ -535,10 +535,8 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		`export GIT_CONFIG_NOSYSTEM=1`,
 		`export GIT_ATTR_NOSYSTEM=1`,
 		`unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT`,
-		`syft_version_output=$("$syft_binary" version)`,
 		`govulncheck_version_output=$("$govulncheck_binary" -version)`,
 		`shellcheck_version_output=$("$shellcheck_binary" --version)`,
-		`grep -Fxq 'Version:       1.29.0' <<< "$syft_version_output"`,
 		`grep -Fq 'v1.6.0' <<< "$govulncheck_version_output"`,
 		`grep -Fq 'version: 0.11.0' <<< "$shellcheck_version_output"`,
 		`GIT_OBJECT_DIRECTORY`,
@@ -584,7 +582,6 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		`$syft_binary version | grep`,
 		`$govulncheck_binary -version | grep`,
 		`$shellcheck_binary --version | grep`,
 	} {
@@ -680,14 +677,12 @@ func TestSourceGateFreezesAndBindsExactReleaseTreeModes(t *testing.T) {
 		return offset + index
 	}
 	controlFreeze := strings.Index(source, `"$mode_freeze_helper" freeze public`)
-	controlSBOM := strings.Index(source, `$syft_binary scan "dir:$artifact_directory/control-plane"`)
-	controlGitleaks := indexAfter(`$gitleaks_binary dir`, controlSBOM)
+	controlGitleaks := indexAfter(`$gitleaks_binary dir`, controlFreeze)
 	migrationFreeze := strings.Index(source, `"$mode_freeze_helper" freeze root-only`)
-	migrationSBOM := strings.Index(source, `$syft_binary scan "dir:$artifact_directory/migration-tools"`)
-	migrationGitleaks := indexAfter(`$gitleaks_binary dir`, migrationSBOM)
-	if controlFreeze < 0 || controlSBOM < 0 || controlGitleaks < 0 || controlFreeze >= controlSBOM || controlFreeze >= controlGitleaks ||
-		migrationFreeze < 0 || migrationSBOM < 0 || migrationGitleaks < 0 || migrationFreeze >= migrationSBOM || migrationFreeze >= migrationGitleaks {
-		t.Fatal("source gate does not freeze each payload before its final SBOM/secret scan phase")
+	migrationGitleaks := indexAfter(`$gitleaks_binary dir`, migrationFreeze)
+	if controlFreeze < 0 || controlGitleaks < 0 || controlFreeze >= controlGitleaks ||
+		migrationFreeze < 0 || migrationGitleaks < 0 || migrationFreeze >= migrationGitleaks {
+		t.Fatal("source gate does not freeze each payload before its final secret scan phase")
 	}
 	controlFinalModes := strings.LastIndex(source, `"$mode_freeze_helper" verify public`)
 	controlFinalLayout := strings.LastIndex(source, `--root "$artifact_directory/control-plane" --profile public`)
@@ -1209,8 +1204,8 @@ func TestCIUploadsOnlyAModePreservingSourceGateArchive(t *testing.T) {
 		`--format=posix --pax-option=delete=atime,delete=ctime`,
 		`--no-acls --no-xattrs`,
 		`EVIDENCE.sha256`,
-		`control-plane control-plane.spdx.json control-plane.tree-modes.tsv`,
-		`migration-tools migration-tools.spdx.json migration-tools.tree-modes.tsv`,
+		`control-plane control-plane.tree-modes.tsv`,
+		`migration-tools migration-tools.tree-modes.tsv`,
 		`sudo sh -c 'cd "$1" && sha256sum workagent-source-gate.tar' sh "$upload_root"`,
 		`archive=$upload_root/workagent-source-gate.tar`,
 		`checksum=$upload_root/workagent-source-gate.tar.sha256`,
@@ -1300,14 +1295,11 @@ func createSourceGateTransportFixture(t *testing.T, parent string, timestamp tim
 		"EVIDENCE.sha256":                          {0o600, "outer evidence\n"},
 		"control-plane/README":                     {0o444, "control data\n"},
 		"control-plane/bin/app":                    {0o555, "control executable\n"},
-		"control-plane.spdx.json":                  {0o600, "control sbom\n"},
 		"control-plane.tree-modes.tsv":             {0o400, "control modes\n"},
 		"migration-tools/README":                   {0o400, "migration data\n"},
 		"migration-tools/bin/capture":              {0o500, "migration executable\n"},
-		"migration-tools.spdx.json":                {0o600, "migration sbom\n"},
 		"migration-tools.tree-modes.tsv":           {0o400, "migration modes\n"},
 		"source-gate.json":                         {0o600, "source gate\n"},
-		"source.spdx.json":                         {0o600, "source sbom\n"},
 		"not-authorized-for-transport.extra-proof": {0o600, "must be omitted\n"},
 	}
 	for relative, value := range files {
@@ -1346,9 +1338,9 @@ func sourceGateTransportArguments(root, archivePath string) []string {
 		"--format=posix", "--pax-option=delete=atime,delete=ctime",
 		"--no-acls", "--no-xattrs", "--directory=" + root,
 		"EVIDENCE.sha256",
-		"control-plane", "control-plane.spdx.json", "control-plane.tree-modes.tsv",
-		"migration-tools", "migration-tools.spdx.json", "migration-tools.tree-modes.tsv",
-		"source-gate.json", "source.spdx.json",
+		"control-plane", "control-plane.tree-modes.tsv",
+		"migration-tools", "migration-tools.tree-modes.tsv",
+		"source-gate.json",
 	}
 
 }
@@ -1395,16 +1387,13 @@ func TestSourceGateTransportArchiveRoundTripsExactModesAndOwners(t *testing.T) {
 		"control-plane/README":           0o444,
 		"control-plane/bin/":             0o555,
 		"control-plane/bin/app":          0o555,
-		"control-plane.spdx.json":        0o600,
 		"control-plane.tree-modes.tsv":   0o400,
 		"migration-tools/":               0o500,
 		"migration-tools/README":         0o400,
 		"migration-tools/bin/":           0o500,
 		"migration-tools/bin/capture":    0o500,
-		"migration-tools.spdx.json":      0o600,
 		"migration-tools.tree-modes.tsv": 0o400,
 		"source-gate.json":               0o600,
-		"source.spdx.json":               0o600,
 	}
 	reader := tar.NewReader(bytes.NewReader(first))
 	observed := make(map[string]bool, len(expectedModes))

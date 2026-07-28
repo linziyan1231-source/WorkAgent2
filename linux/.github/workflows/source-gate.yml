@@ -40,7 +40,6 @@ jobs:
         env:
           GO_BIN: go
           GITLEAKS_BIN: ${{ runner.temp }}/workagent-tools/gitleaks
-          SYFT_BIN: ${{ runner.temp }}/workagent-tools/syft
           GOVULNCHECK_BIN: ${{ runner.temp }}/workagent-tools/govulncheck
           SHELLCHECK_BIN: ${{ runner.temp }}/workagent-tools/shellcheck
           EXPECTED_SOURCE_REVISION: ${{ github.sha }}
@@ -122,7 +121,6 @@ jobs:
             PATH="$PATH" \
             GO_BIN="$(command -v go)" \
             GITLEAKS_BIN="$isolated_root/tools/gitleaks" \
-            SYFT_BIN="$isolated_root/tools/syft" \
             GOVULNCHECK_BIN="$isolated_root/tools/govulncheck" \
             SHELLCHECK_BIN="$isolated_root/tools/shellcheck" \
             EXPECTED_SOURCE_REVISION="$EXPECTED_SOURCE_REVISION" \
@@ -182,14 +180,11 @@ jobs:
               export LC_ALL=C
               cd "$1"
               sha256sum \
-                control-plane.spdx.json \
                 control-plane/SHA256SUMS \
                 control-plane.tree-modes.tsv \
-                migration-tools.spdx.json \
                 migration-tools/SHA256SUMS \
                 migration-tools.tree-modes.tsv \
-                source-gate.json \
-                source.spdx.json
+                source-gate.json
             ' sh "$root" | sudo tee "$actual" >/dev/null
             sudo cmp -- "$root/EVIDENCE.sha256" "$actual"
             sudo sh -c 'cd "$1" && sha256sum --strict --check EVIDENCE.sha256 >/dev/null' sh "$root"
@@ -205,7 +200,6 @@ jobs:
               '  "target": "linux/amd64",' \
               '  "go_version": "1.26.5",' \
               '  "gitleaks_version": "8.28.0",' \
-              '  "syft_version": "1.29.0",' \
               '  "govulncheck_version": "1.6.0",' \
               '  "shellcheck_version": "0.11.0",' \
               '  "content_manifest_version": 1,' \
@@ -228,9 +222,9 @@ jobs:
           }
 
           expected_top_level=$(printf '%s\n' \
-            EVIDENCE.sha256 control-plane control-plane.spdx.json control-plane.tree-modes.tsv \
-            migration-tools migration-tools.spdx.json migration-tools.tree-modes.tsv \
-            source-gate.json source.spdx.json | sort)
+            EVIDENCE.sha256 control-plane control-plane.tree-modes.tsv \
+            migration-tools migration-tools.tree-modes.tsv \
+            source-gate.json | sort)
           actual_top_level=$(sudo find "$sealed" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
           test "$actual_top_level" = "$expected_top_level"
           test -z "$(sudo find "$sealed" -mindepth 1 \( -type l -o \( ! -type d ! -type f \) \) -print -quit)"
@@ -244,7 +238,7 @@ jobs:
           test "$(sudo stat -c %a "$sealed")" = 700
           test "$(sudo stat -c %a "$sealed/control-plane")" = 555
           test "$(sudo stat -c %a "$sealed/migration-tools")" = 500
-          for path in control-plane.spdx.json migration-tools.spdx.json source-gate.json source.spdx.json EVIDENCE.sha256; do
+          for path in source-gate.json EVIDENCE.sha256; do
             test "$(sudo stat -c %a "$sealed/$path")" = 600
           done
           for path in control-plane.tree-modes.tsv migration-tools.tree-modes.tsv; do
@@ -270,9 +264,9 @@ jobs:
             --no-acls --no-xattrs \
             --directory="$sealed" \
             EVIDENCE.sha256 \
-            control-plane control-plane.spdx.json control-plane.tree-modes.tsv \
-            migration-tools migration-tools.spdx.json migration-tools.tree-modes.tsv \
-            source-gate.json source.spdx.json
+            control-plane control-plane.tree-modes.tsv \
+            migration-tools migration-tools.tree-modes.tsv \
+            source-gate.json
           extracted=$sealed_parent/extracted
           sudo mkdir -m 0700 "$extracted"
           sudo tar --extract --file="$archive" --same-owner --same-permissions \
@@ -285,9 +279,9 @@ jobs:
             --no-acls --no-xattrs \
             --directory="$extracted" \
             EVIDENCE.sha256 \
-            control-plane control-plane.spdx.json control-plane.tree-modes.tsv \
-            migration-tools migration-tools.spdx.json migration-tools.tree-modes.tsv \
-            source-gate.json source.spdx.json
+            control-plane control-plane.tree-modes.tsv \
+            migration-tools migration-tools.tree-modes.tsv \
+            source-gate.json
           sudo cmp -- "$archive" "$roundtrip"
           test -z "$(sudo find "$extracted" -mindepth 1 \( -type l -o \( ! -type d ! -type f \) \) -print -quit)"
           test -z "$(sudo find "$extracted" -type f -links +1 -print -quit)"

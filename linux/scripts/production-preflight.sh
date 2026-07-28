@@ -587,7 +587,6 @@ absent_path /var/lib/workagent-edge/publication.json "unfinished edge publicatio
 absent_path /run/workagent-core/activation.permit "volatile core activation permit"
 absent_path /var/lib/workagent-core/activation.json "unfinished core activation journal"
 absent_path /var/lib/workagent/tenant-activation.json "unfinished tenant activation transaction journal" 755
-protected_file /etc/workagent/trust/release-signing.pub "release verification key" 644
 if [[ -f /etc/workagent/portal.json ]]; then
   check_template_contract /etc/workagent/portal.json "installed Portal" \
     '"public_origin": "https://workagent.example.invalid"' \

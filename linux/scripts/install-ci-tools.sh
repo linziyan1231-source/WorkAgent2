@@ -38,14 +38,6 @@ download_and_verify \
 tar --extract --gzip --file "$gitleaks_archive" --directory "$temporary" --no-same-owner gitleaks
 install -m 0555 "$temporary/gitleaks" "$destination/gitleaks"
 
-syft_archive=$temporary/syft.tar.gz
-download_and_verify \
-  https://github.com/anchore/syft/releases/download/v1.29.0/syft_1.29.0_linux_amd64.tar.gz \
-  5b01c831cb5d712899d9179cabd80f55b6708dbd36af981ce27e59b6569e6690 \
-  "$syft_archive"
-tar --extract --gzip --file "$syft_archive" --directory "$temporary" --no-same-owner syft
-install -m 0555 "$temporary/syft" "$destination/syft"
-
 shellcheck_archive=$temporary/shellcheck.tar.xz
 download_and_verify \
   https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
@@ -60,7 +52,6 @@ GOBIN=$destination GOTOOLCHAIN=local "$go_binary" install golang.org/x/vuln/cmd/
 chmod 0555 "$destination/govulncheck"
 
 [[ $("$destination/gitleaks" version) == 8.28.0 ]]
-"$destination/syft" version | grep -Fxq 'Version:       1.29.0'
 "$destination/govulncheck" -version | grep -Fq 'v1.6.0'
 "$destination/shellcheck" --version | grep -Fq 'version: 0.11.0'
 echo "pinned CI tools installed"

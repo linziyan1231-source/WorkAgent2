@@ -135,7 +135,6 @@ trap cleanup_source_gate EXIT INT TERM
 
 go_binary=${GO_BIN:-go}
 gitleaks_binary=${GITLEAKS_BIN:-gitleaks}
-syft_binary=${SYFT_BIN:-syft}
 govulncheck_binary=${GOVULNCHECK_BIN:-govulncheck}
 shellcheck_binary=${SHELLCHECK_BIN:-shellcheck}
 
@@ -163,15 +162,11 @@ if [[ $($go_binary version) != go\ version\ go1.26.5\ linux/amd64 ]]; then
   exit 1
 fi
 [[ $($gitleaks_binary version) == 8.28.0 ]]
-syft_version_output=$("$syft_binary" version)
 govulncheck_version_output=$("$govulncheck_binary" -version)
 shellcheck_version_output=$("$shellcheck_binary" --version)
-grep -Fxq 'Version:       1.29.0' <<< "$syft_version_output"
 grep -Fq 'v1.6.0' <<< "$govulncheck_version_output"
 grep -Fq 'version: 0.11.0' <<< "$shellcheck_version_output"
-unset syft_version_output govulncheck_version_output shellcheck_version_output
-
-export SYFT_CHECK_FOR_APP_UPDATE=false
+unset govulncheck_version_output shellcheck_version_output
 
 # Do not trust or contaminate a caller's compiled-object cache. Tests and the
 # final artifact build deliberately use distinct new caches so the release
@@ -585,13 +580,10 @@ verify_artifact_envelope() {
   local -a entries
   local -A expected_specs=(
     [control-plane]='d 555'
-    [control-plane.spdx.json]='f 600'
     [control-plane.tree-modes.tsv]='f 400'
     [migration-tools]='d 500'
-    [migration-tools.spdx.json]='f 600'
     [migration-tools.tree-modes.tsv]='f 400'
     [source-gate.json]='f 600'
-    [source.spdx.json]='f 600'
   )
   root_mode=$(stat -c '%a' -- "$artifact_directory")
   if [[ ! -d $artifact_directory || -L $artifact_directory || $root_mode != 700 ]]; then
@@ -764,7 +756,6 @@ materialize_locked_tree "$snapshot" false
 verify_materialized_snapshot "$snapshot" "source evidence" false
 $gitleaks_binary dir --config "$snapshot/.gitleaks.toml" --ignore-gitleaks-allow \
   --no-banner --redact --exit-code 1 "$snapshot"
-$syft_binary scan "dir:$snapshot" --output "spdx-json=$artifact_directory/source.spdx.json"
 verify_materialized_snapshot "$snapshot" "source evidence after scanners" false
 
 # A fresh cache makes the artifact compilation independent of every test and
@@ -784,7 +775,6 @@ printf '%s\n' \
   '  "target": "linux/amd64",' \
   '  "go_version": "1.26.5",' \
   '  "gitleaks_version": "8.28.0",' \
-  '  "syft_version": "1.29.0",' \
   '  "govulncheck_version": "1.6.0",' \
   '  "shellcheck_version": "0.11.0",' \
   '  "content_manifest_version": 1,' \
@@ -858,7 +848,7 @@ install -m 0555 scripts/smoke-chatforward-browser-sandbox.sh "$administration_di
 install -m 0555 scripts/verify-host-rpms.sh "$administration_directory/verify-host-rpms"
 share_directory=$artifact_directory/control-plane/share
 mkdir -p "$share_directory"
-cp -a -- LICENSE_STATUS.md SECURITY.md config deploy docs "$share_directory/"
+cp -a -- SECURITY.md config deploy docs "$share_directory/"
 printf '%s\n' \
   '[' \
   '  {' \
@@ -898,8 +888,6 @@ control_executables=(
 "$binary_directory/workagent-release" validate-layout \
   --root "$artifact_directory/control-plane" --profile public >/dev/null
 "$content_manifest_helper" verify "$artifact_directory/control-plane" >/dev/null
-$syft_binary scan "dir:$artifact_directory/control-plane" \
-  --output "spdx-json=$artifact_directory/control-plane.spdx.json"
 $gitleaks_binary dir --config "$build_snapshot/.gitleaks.toml" --ignore-gitleaks-allow \
   --no-banner --redact --exit-code 1 "$artifact_directory/control-plane"
 
@@ -929,8 +917,6 @@ migration_executables=(
 "$binary_directory/workagent-release" validate-layout \
   --root "$artifact_directory/migration-tools" --profile root-only >/dev/null
 "$content_manifest_helper" verify "$artifact_directory/migration-tools" >/dev/null
-$syft_binary scan "dir:$artifact_directory/migration-tools" \
-  --output "spdx-json=$artifact_directory/migration-tools.spdx.json"
 $gitleaks_binary dir --config "$build_snapshot/.gitleaks.toml" --ignore-gitleaks-allow \
   --no-banner --redact --exit-code 1 "$artifact_directory/migration-tools"
 
@@ -961,24 +947,17 @@ for command in "${go_migration_commands[@]}"; do
 done
 require_clean_source
 verify_build_snapshot
-chmod 0600 -- \
-  "$artifact_directory/control-plane.spdx.json" \
-  "$artifact_directory/migration-tools.spdx.json" \
-  "$artifact_directory/source-gate.json" \
-  "$artifact_directory/source.spdx.json"
+chmod 0600 -- "$artifact_directory/source-gate.json"
 verify_artifact_envelope false
 
 (
   cd "$artifact_directory"
   sha256sum \
-    control-plane.spdx.json \
     control-plane/SHA256SUMS \
     control-plane.tree-modes.tsv \
-    migration-tools.spdx.json \
     migration-tools/SHA256SUMS \
     migration-tools.tree-modes.tsv \
-    source-gate.json \
-    source.spdx.json > EVIDENCE.sha256
+    source-gate.json > EVIDENCE.sha256
 )
 chmod 0600 -- "$artifact_directory/EVIDENCE.sha256"
 verify_artifact_envelope true
