@@ -42,26 +42,18 @@ func makeRelease(t *testing.T) (string, Manifest) {
 		t.Fatal(err)
 	}
 	builtAt := time.Unix(1_800_000_000, 0).UTC()
-	if err := os.WriteFile(filepath.Join(root, "sbom.spdx.json"), []byte(`{"spdxVersion":"SPDX-2.3","documentNamespace":"https://workagent.example.test/spdx/release-one","packages":[{"name":"workagent-runtime"}]}`), 0o444); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(root, "provenance.json"), []byte(`{"schema_version":1,"release_id":"release-one","source_revision":"`+testRevision+`","builder_id":"workagent-builder-v1","build_type":"release","invocation_id":"fixture-1","reproducible":true,"materials":[{"uri":"git+https://example.test/workagent","revision":"`+testRevision+`"}]}`), 0o444); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "licenses.json"), []byte(`{"schema_version":1,"approved":true,"reviewed_at":"`+builtAt.Format(time.RFC3339)+`","entries":[{"component":"workagent-runtime","spdx_expression":"LicenseRef-WorkAgent-Approved","copyright":"WorkAgent authorized test fixture"}]}`), 0o444); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(root, "bin", "runtime"), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"sbom.spdx.json", "provenance.json", "licenses.json"} {
-		if err := os.Chmod(filepath.Join(root, name), 0o444); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.Chmod(filepath.Join(root, "provenance.json"), 0o444); err != nil {
+		t.Fatal(err)
 	}
 	metadata := Manifest{ReleaseID: "release-one", SourceRevision: testRevision, BuiltAt: builtAt, BrandingVersion: "workagent-v1", PolicyVersion: "deny-all-v1", ComponentScope: ScopeRuntime,
 		DataSchemaVersion: 1, MinimumReadableDataSchema: 1, MaximumReadableDataSchema: 1,
-		Components: []Component{{Name: "workagent-runtime", Version: "1.0.0", SourceRevision: testRevision}}, SBOMPath: "sbom.spdx.json", ProvenancePath: "provenance.json", LicenseReportPath: "licenses.json"}
+		Components: []Component{{Name: "workagent-runtime", Version: "1.0.0", SourceRevision: testRevision}}}
 	manifest, err := BuildManifest(root, metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -76,19 +68,6 @@ func makeRelease(t *testing.T) (string, Manifest) {
 		t.Fatal(err)
 	}
 	return root, manifest
-}
-
-func signTestRelease(t *testing.T, root, signaturePath, privateKeyPath string) {
-	t.Helper()
-	if err := os.Chmod(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := SignManifest(filepath.Join(root, "manifest.json"), signaturePath, privateKeyPath, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(root, 0o555); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func makeNamedTestRelease(t *testing.T, releasesRoot, releaseID, componentVersion string, dataSchema, minimumReadable, maximumReadable int, extraDataPath string) string {
@@ -141,21 +120,7 @@ func makeNamedTestRelease(t *testing.T, releasesRoot, releaseID, componentVersio
 
 func makePreflightInputsFixture(t *testing.T, releaseRoot, evidenceRoot, portalConfig, tenantConfig string) PreflightInputs {
 	t.Helper()
-	if err := os.Chmod(releaseRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	signature := filepath.Join(releaseRoot, "manifest.sig")
-	if err := os.WriteFile(signature, []byte("fixture signature\n"), 0o444); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(signature, 0o444); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(releaseRoot, 0o555); err != nil {
-		t.Fatal(err)
-	}
 	paths := map[string]string{
-		"public": filepath.Join(evidenceRoot, "release.pub"),
 		"backup": filepath.Join(evidenceRoot, "backup.json"),
 		"key":    filepath.Join(evidenceRoot, "backup.key"),
 		"brand":  filepath.Join(evidenceRoot, "brand.json"),
@@ -174,10 +139,10 @@ func makePreflightInputsFixture(t *testing.T, releaseRoot, evidenceRoot, portalC
 		assets[name] = paths["asset-"+name]
 	}
 	return PreflightInputs{
-		TargetManifestPath: filepath.Join(releaseRoot, "manifest.json"), TargetSignaturePath: signature,
-		PublicKeyPath: paths["public"], PortalConfigPath: portalConfig,
-		TenantConfigPaths: map[string]string{"tenant-one": tenantConfig},
-		BackupConfigPath:  paths["backup"], BackupKeyPath: paths["key"],
+		TargetManifestPath: filepath.Join(releaseRoot, "manifest.json"),
+		PortalConfigPath:   portalConfig,
+		TenantConfigPaths:  map[string]string{"tenant-one": tenantConfig},
+		BackupConfigPath:   paths["backup"], BackupKeyPath: paths["key"],
 		BrandID: "workagent", BrandConfigPath: paths["brand"], BrandAssetPaths: assets,
 		PolicyID: "workagent-models-v1", PolicyConfigPath: paths["policy"],
 	}
@@ -198,33 +163,15 @@ func TestReleaseEvidenceGenerationIsDeterministicAndFailClosed(t *testing.T) {
 	if _, err := NewProvenance("runtime-20260727", testRevision, "git:workagent2", "builder-one", "workagent-release-v1", "invocation-one", false, components); err == nil {
 		t.Fatal("non-reproducible release provenance was accepted")
 	}
-	template, err := NewLicenseReviewTemplate(components)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if template.Approved || !template.ReviewedAt.IsZero() || len(template.Entries) != 2 || template.Entries[0].Component != "aionui" || template.Entries[0].SPDXExpression != "" {
-		t.Fatalf("license review template was pre-approved or non-deterministic: %#v", template)
-	}
-	for _, placeholder := range []string{"", "NOASSERTION", "NONE", "review_required", "TODO", "unresolved", "TODO Apache-2.0", "Copyright unknown owner", "license review required"} {
-		if validApprovedLicenseText(placeholder) {
-			t.Fatalf("license placeholder %q was accepted", placeholder)
-		}
-	}
-	if !validApprovedLicenseText("Apache-2.0 OR LicenseRef-WorkAgent-Authorized") {
-		t.Fatal("reviewed SPDX expression was rejected")
-	}
 }
 
 func TestConsumerContractIsCanonicalAndBindsFileRoles(t *testing.T) {
 	contract, err := NewConsumerContract(
-		[]string{"sbom.spdx.json", "provenance.json"},
+		[]string{"provenance.json"},
 		[]string{"bin/runtime"},
 	)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if got := strings.Join(contract.RequiredPaths, ","); got != "provenance.json,sbom.spdx.json" {
-		t.Fatalf("consumer data paths were not sorted canonically: %q", got)
 	}
 	for name, paths := range map[string]struct {
 		data        []string
@@ -232,7 +179,7 @@ func TestConsumerContractIsCanonicalAndBindsFileRoles(t *testing.T) {
 	}{
 		"empty":        {},
 		"dot dot":      {data: []string{".."}},
-		"duplicate":    {data: []string{"sbom.spdx.json", "sbom.spdx.json"}},
+		"duplicate":    {data: []string{"provenance.json", "provenance.json"}},
 		"role overlap": {data: []string{"bin/runtime"}, executables: []string{"bin/runtime"}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -259,11 +206,10 @@ func TestVerifiedPointerMutationRequiresConsumerContract(t *testing.T) {
 	root := t.TempDir()
 	releasesRoot := filepath.Join(root, "releases")
 	pointer := filepath.Join(root, "current.json")
-	publicKey := filepath.Join(root, "release.pub")
-	if _, err := ActivateVerified(releasesRoot, pointer, "release-one", publicKey, ResolveOptions{Scope: ScopeRuntime}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "consumer contract") {
+	if _, err := ActivateVerified(releasesRoot, pointer, "release-one", ResolveOptions{Scope: ScopeRuntime}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "consumer contract") {
 		t.Fatalf("activation without a consumer contract was not rejected first: %v", err)
 	}
-	if _, _, err := RollbackVerified(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "consumer contract") {
+	if _, _, err := RollbackVerified(releasesRoot, pointer, ResolveOptions{Scope: ScopeRuntime}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "consumer contract") {
 		t.Fatalf("rollback without a consumer contract was not rejected first: %v", err)
 	}
 }
@@ -306,33 +252,6 @@ func TestPointerLockRejectsHardLinkedInode(t *testing.T) {
 	}
 }
 
-func TestVerifyRequiresValidEd25519Signature(t *testing.T) {
-	root, _ := makeRelease(t)
-	keyRoot := t.TempDir()
-	publicPath, privatePath := filepath.Join(keyRoot, "release.pub"), filepath.Join(keyRoot, "release.key")
-	if err := GenerateSigningKey(publicPath, privatePath); err != nil {
-		t.Fatal(err)
-	}
-	signaturePath := filepath.Join(root, "manifest.sig")
-	signTestRelease(t, root, signaturePath, privatePath)
-	options := VerifyOptions{ExpectedReleaseID: "release-one", RequireSignature: true, PublicKeyPath: publicPath, AllowedScopes: []string{ScopeRuntime}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"}}
-	if _, err := Verify(root, filepath.Join(root, "manifest.json"), options); err != nil {
-		t.Fatalf("signed release was rejected: %v", err)
-	}
-	if err := os.Chmod(signaturePath, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(signaturePath, []byte("invalid\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(signaturePath, 0o444); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Verify(root, filepath.Join(root, "manifest.json"), options); err == nil {
-		t.Fatal("invalid release signature was accepted")
-	}
-}
-
 func TestRequiredComponentBaselineRejectsExtraManifestComponents(t *testing.T) {
 	root, manifest := makeRelease(t)
 	manifest.Components = append(manifest.Components, Component{Name: "unexpected", Version: "1.0.0", SourceRevision: testRevision})
@@ -345,17 +264,11 @@ func TestRequiredComponentBaselineRejectsExtraManifestComponents(t *testing.T) {
 	if err := os.Chmod(root, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	keyRoot := t.TempDir()
-	publicPath, privatePath := filepath.Join(keyRoot, "release.pub"), filepath.Join(keyRoot, "release.key")
-	if err := GenerateSigningKey(publicPath, privatePath); err != nil {
-		t.Fatal(err)
-	}
-	signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privatePath)
 	if _, err := Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
-		ExpectedReleaseID: "release-one", RequireSignature: true, PublicKeyPath: publicPath,
-		AllowedScopes: []string{ScopeRuntime}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"},
+		ExpectedReleaseID: "release-one",
+		AllowedScopes:     []string{ScopeRuntime}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"},
 	}); err == nil || !strings.Contains(err.Error(), "component set") {
-		t.Fatalf("extra signed component was not rejected by the exact baseline: %v", err)
+		t.Fatalf("extra component was not rejected by the exact baseline: %v", err)
 	}
 }
 
@@ -377,7 +290,7 @@ func TestSignReadyTreeRejectsUmaskDependentModes(t *testing.T) {
 	for name, mutate := range map[string]func(string) error{
 		"private root":             func(root string) error { return os.Chmod(root, 0o700) },
 		"owner writable directory": func(root string) error { return os.Chmod(filepath.Join(root, "bin"), 0o755) },
-		"private metadata":         func(root string) error { return os.Chmod(filepath.Join(root, "sbom.spdx.json"), 0o600) },
+		"private metadata":         func(root string) error { return os.Chmod(filepath.Join(root, "provenance.json"), 0o600) },
 		"setuid executable":        func(root string) error { return os.Chmod(filepath.Join(root, "bin", "runtime"), 0o555|os.ModeSetuid) },
 		"sticky directory":         func(root string) error { return os.Chmod(filepath.Join(root, "bin"), 0o555|os.ModeSticky) },
 	} {
@@ -414,7 +327,7 @@ func TestReleaseTreeExtendedMetadataPolicy(t *testing.T) {
 	}
 
 	root, _ := makeRelease(t)
-	path := filepath.Join(root, "sbom.spdx.json")
+	path := filepath.Join(root, "provenance.json")
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +348,7 @@ func TestReleaseTreeExtendedMetadataPolicy(t *testing.T) {
 
 func TestSignReadyTreeRejectsExternalHardlink(t *testing.T) {
 	root, _ := makeRelease(t)
-	target := filepath.Join(root, "sbom.spdx.json")
+	target := filepath.Join(root, "provenance.json")
 	outside := filepath.Join(filepath.Dir(root), "outside-hardlink")
 	if err := os.Link(target, outside); err != nil {
 		t.Fatal(err)
@@ -534,7 +447,7 @@ func TestVerifyRejectsSymlinkAndUnlistedFile(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "bin", "runtime")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("../sbom.spdx.json", filepath.Join(root, "bin", "runtime")); err != nil {
+	if err := os.Symlink("../provenance.json", filepath.Join(root, "bin", "runtime")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(root, "bin"), 0o555); err != nil {
@@ -592,9 +505,7 @@ func TestManifestHashFixture(t *testing.T) {
 
 func TestLoadManifestAcceptsCompleteLargeRuntimeEvidence(t *testing.T) {
 	files := []File{
-		{Path: "sbom.spdx.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
 		{Path: "provenance.json", SHA256: strings.Repeat("1", 64), Mode: "0444", UID: 0, GID: 0},
-		{Path: "licenses.json", SHA256: strings.Repeat("2", 64), Mode: "0444", UID: 0, GID: 0},
 	}
 	for index := 0; index < 7_500; index++ {
 		files = append(files, File{
@@ -608,7 +519,7 @@ func TestLoadManifestAcceptsCompleteLargeRuntimeEvidence(t *testing.T) {
 		BrandingVersion: "workagent-v1", PolicyVersion: "deny-all-v1", ComponentScope: ScopeRuntime,
 		DataSchemaVersion: 1, MinimumReadableDataSchema: 1, MaximumReadableDataSchema: 1,
 		Components: []Component{{Name: "aioncore", Version: "v0.1.42-editfork.10", SourceRevision: testRevision}},
-		SBOMPath:   "sbom.spdx.json", ProvenancePath: "provenance.json", LicenseReportPath: "licenses.json", Files: files,
+		Files:      files,
 	}
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	if err := WriteManifest(path, manifest); err != nil {
@@ -630,7 +541,7 @@ func TestLoadManifestAcceptsCompleteLargeRuntimeEvidence(t *testing.T) {
 	}
 }
 
-func TestResolveActiveVerifiesProtectedPointerAndSignature(t *testing.T) {
+func TestResolveActiveVerifiesProtectedPointer(t *testing.T) {
 	releaseRoot, _ := makeRelease(t)
 	channel := t.TempDir()
 	releasesRoot := filepath.Join(channel, "releases")
@@ -641,23 +552,18 @@ func TestResolveActiveVerifiesProtectedPointerAndSignature(t *testing.T) {
 	if err := os.Rename(releaseRoot, target); err != nil {
 		t.Fatal(err)
 	}
-	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
-	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
-		t.Fatal(err)
-	}
-	signTestRelease(t, target, filepath.Join(target, "manifest.sig"), privateKey)
 	pointer := filepath.Join(channel, "current.json")
 	if err := ActivateScoped(pointer, "release-one", ScopeRuntime, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"}})
+	verified, err := ResolveActive(releasesRoot, pointer, ResolveOptions{Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"}, RequiredComponents: map[string]string{"workagent-runtime": "1.0.0"}})
 	if err != nil || verified.Manifest.ReleaseID != "release-one" {
 		t.Fatalf("active release did not resolve: %+v err=%v", verified, err)
 	}
 	if err := os.WriteFile(pointer, []byte(`{"schema_version":1,"scope":"runtime","current":"release-one","activated_at":"broken"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"}}); err == nil {
+	if _, err := ResolveActive(releasesRoot, pointer, ResolveOptions{Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"}}); err == nil {
 		t.Fatal("corrupt release pointer was accepted")
 	}
 }
@@ -668,20 +574,13 @@ func TestVerifiedActivationAndRollbackSupportHistoricalComponentVersions(t *test
 	if err := os.Mkdir(releasesRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	oldRoot := makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
-	newRoot := makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 1, 1, 1, "")
-	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
-	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
-		t.Fatal(err)
-	}
-	for _, root := range []string{oldRoot, newRoot} {
-		signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privateKey)
-	}
+	makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
+	makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 1, 1, 1, "")
 	pointer := filepath.Join(channel, "current.json")
 	if err := ActivateScoped(pointer, "release-old", ScopeRuntime, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := ActivateVerified(releasesRoot, pointer, "release-new", publicKey, ResolveOptions{
+	verified, err := ActivateVerified(releasesRoot, pointer, "release-new", ResolveOptions{
 		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
 		RequiredComponents:  map[string]string{"workagent-runtime": "2.0.0"},
 		RequireCurrentMatch: true, ExpectedCurrentRelease: "release-old",
@@ -689,17 +588,17 @@ func TestVerifiedActivationAndRollbackSupportHistoricalComponentVersions(t *test
 	if err != nil || verified.Manifest.ReleaseID != "release-new" {
 		t.Fatalf("cross-version activation failed: release=%q err=%v", verified.Manifest.ReleaseID, err)
 	}
-	next, rolledBack, err := RollbackVerified(releasesRoot, pointer, publicKey, ResolveOptions{
+	next, rolledBack, err := RollbackVerified(releasesRoot, pointer, ResolveOptions{
 		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
 	}, time.Now().UTC())
 	if err != nil || next.Current != "release-old" || rolledBack.Manifest.ReleaseID != "release-old" {
 		t.Fatalf("cross-version rollback failed: pointer=%+v release=%q err=%v", next, rolledBack.Manifest.ReleaseID, err)
 	}
-	active, err := ResolveActive(releasesRoot, pointer, publicKey, ResolveOptions{
+	active, err := ResolveActive(releasesRoot, pointer, ResolveOptions{
 		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
 	})
 	if err != nil || active.Manifest.Components[0].Version != "1.0.0" {
-		t.Fatalf("signed historical release did not remain resolvable: %+v err=%v", active.Manifest, err)
+		t.Fatalf("historical release did not remain resolvable: %+v err=%v", active.Manifest, err)
 	}
 }
 
@@ -709,20 +608,13 @@ func TestActivationAppliesNewConsumerContractOnlyToTarget(t *testing.T) {
 	if err := os.Mkdir(releasesRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	oldRoot := makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
-	newRoot := makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 1, 1, 1, "new-required.txt")
-	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
-	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
-		t.Fatal(err)
-	}
-	for _, root := range []string{oldRoot, newRoot} {
-		signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privateKey)
-	}
+	makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
+	makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 1, 1, 1, "new-required.txt")
 	pointer := filepath.Join(channel, "current.json")
 	if err := ActivateScoped(pointer, "release-old", ScopeRuntime, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ActivateVerified(releasesRoot, pointer, "release-new", publicKey, ResolveOptions{
+	if _, err := ActivateVerified(releasesRoot, pointer, "release-new", ResolveOptions{
 		Scope: ScopeRuntime, RequiredPaths: []string{"new-required.txt"}, RequiredExecutablePaths: []string{"bin/runtime"},
 		RequiredComponents:  map[string]string{"workagent-runtime": "2.0.0"},
 		RequireCurrentMatch: true, ExpectedCurrentRelease: "release-old",
@@ -737,27 +629,20 @@ func TestRollbackRejectsHistoricalReleaseThatCannotReadActiveData(t *testing.T) 
 	if err := os.Mkdir(releasesRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	oldRoot := makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
-	newRoot := makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 2, 1, 2, "")
-	publicKey, privateKey := filepath.Join(channel, "release.pub"), filepath.Join(channel, "release.key")
-	if err := GenerateSigningKey(publicKey, privateKey); err != nil {
-		t.Fatal(err)
-	}
-	for _, root := range []string{oldRoot, newRoot} {
-		signTestRelease(t, root, filepath.Join(root, "manifest.sig"), privateKey)
-	}
+	makeNamedTestRelease(t, releasesRoot, "release-old", "1.0.0", 1, 1, 1, "")
+	makeNamedTestRelease(t, releasesRoot, "release-new", "2.0.0", 2, 1, 2, "")
 	pointer := filepath.Join(channel, "current.json")
 	if err := ActivateScoped(pointer, "release-old", ScopeRuntime, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ActivateVerified(releasesRoot, pointer, "release-new", publicKey, ResolveOptions{
+	if _, err := ActivateVerified(releasesRoot, pointer, "release-new", ResolveOptions{
 		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
 		RequiredComponents:  map[string]string{"workagent-runtime": "2.0.0"},
 		RequireCurrentMatch: true, ExpectedCurrentRelease: "release-old",
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("forward-compatible upgrade failed: %v", err)
 	}
-	if _, _, err := RollbackVerified(releasesRoot, pointer, publicKey, ResolveOptions{
+	if _, _, err := RollbackVerified(releasesRoot, pointer, ResolveOptions{
 		Scope: ScopeRuntime, RequiredExecutablePaths: []string{"bin/runtime"},
 	}, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "restore is required") {
 		t.Fatalf("schema-incompatible historical rollback was accepted: %v", err)
@@ -878,13 +763,11 @@ func TestPreflightBindsActivationInputsAndExpires(t *testing.T) {
 		t.Fatal("activation consumer contract changed after preflight without detection")
 	}
 	for name, path := range map[string]string{
-		"target signature": inputs.TargetSignaturePath,
-		"trusted key":      inputs.PublicKeyPath,
-		"backup config":    inputs.BackupConfigPath,
-		"backup key":       inputs.BackupKeyPath,
-		"brand config":     inputs.BrandConfigPath,
-		"brand asset":      inputs.BrandAssetPaths["logo"],
-		"policy config":    inputs.PolicyConfigPath,
+		"backup config": inputs.BackupConfigPath,
+		"backup key":    inputs.BackupKeyPath,
+		"brand config":  inputs.BrandConfigPath,
+		"brand asset":   inputs.BrandAssetPaths["logo"],
+		"policy config": inputs.PolicyConfigPath,
 	} {
 		t.Run(name+" drift", func(t *testing.T) {
 			original, err := os.ReadFile(path)

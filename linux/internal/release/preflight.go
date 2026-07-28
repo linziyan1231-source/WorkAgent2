@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	PreflightSchemaVersion   = 4
+	PreflightSchemaVersion   = 5
 	MaintenanceNoticeMessage = "系统正在升级，正在进行的任务可能会中断"
 )
 
@@ -30,18 +30,16 @@ type MaintenanceNotice struct {
 }
 
 type PreflightInputs struct {
-	TargetManifestPath  string
-	TargetSignaturePath string
-	PublicKeyPath       string
-	PortalConfigPath    string
-	TenantConfigPaths   map[string]string
-	BackupConfigPath    string
-	BackupKeyPath       string
-	BrandID             string
-	BrandConfigPath     string
-	BrandAssetPaths     map[string]string
-	PolicyID            string
-	PolicyConfigPath    string
+	TargetManifestPath string
+	PortalConfigPath   string
+	TenantConfigPaths  map[string]string
+	BackupConfigPath   string
+	BackupKeyPath      string
+	BrandID            string
+	BrandConfigPath    string
+	BrandAssetPaths    map[string]string
+	PolicyID           string
+	PolicyConfigPath   string
 }
 
 type ProtectedFileEvidence struct {
@@ -50,18 +48,16 @@ type ProtectedFileEvidence struct {
 }
 
 type PreflightEvidence struct {
-	TargetManifest  ProtectedFileEvidence            `json:"target_manifest"`
-	TargetSignature ProtectedFileEvidence            `json:"target_signature"`
-	PublicKey       ProtectedFileEvidence            `json:"public_key"`
-	PortalConfig    ProtectedFileEvidence            `json:"portal_config"`
-	TenantConfigs   map[string]ProtectedFileEvidence `json:"tenant_configs"`
-	BackupConfig    ProtectedFileEvidence            `json:"backup_config"`
-	BackupKey       ProtectedFileEvidence            `json:"backup_key"`
-	BrandID         string                           `json:"brand_id"`
-	BrandConfig     ProtectedFileEvidence            `json:"brand_config"`
-	BrandAssets     map[string]ProtectedFileEvidence `json:"brand_assets"`
-	PolicyID        string                           `json:"policy_id"`
-	PolicyConfig    ProtectedFileEvidence            `json:"policy_config"`
+	TargetManifest ProtectedFileEvidence            `json:"target_manifest"`
+	PortalConfig   ProtectedFileEvidence            `json:"portal_config"`
+	TenantConfigs  map[string]ProtectedFileEvidence `json:"tenant_configs"`
+	BackupConfig   ProtectedFileEvidence            `json:"backup_config"`
+	BackupKey      ProtectedFileEvidence            `json:"backup_key"`
+	BrandID        string                           `json:"brand_id"`
+	BrandConfig    ProtectedFileEvidence            `json:"brand_config"`
+	BrandAssets    map[string]ProtectedFileEvidence `json:"brand_assets"`
+	PolicyID       string                           `json:"policy_id"`
+	PolicyConfig   ProtectedFileEvidence            `json:"policy_config"`
 }
 
 type PreflightReport struct {
@@ -87,8 +83,8 @@ var requiredBrandAssetNames = []string{"app-icon", "favicon", "logo", "logo-dark
 
 func (i PreflightInputs) Validate() error {
 	for label, path := range map[string]string{
-		"target manifest": i.TargetManifestPath, "target signature": i.TargetSignaturePath,
-		"public key": i.PublicKeyPath, "Portal config": i.PortalConfigPath,
+		"target manifest": i.TargetManifestPath,
+		"Portal config": i.PortalConfigPath,
 		"backup config": i.BackupConfigPath, "backup key": i.BackupKeyPath,
 		"brand config": i.BrandConfigPath, "policy config": i.PolicyConfigPath,
 	} {
@@ -96,8 +92,8 @@ func (i PreflightInputs) Validate() error {
 			return fmt.Errorf("preflight %s path is invalid", label)
 		}
 	}
-	if filepath.Base(i.TargetManifestPath) != "manifest.json" || i.TargetSignaturePath != filepath.Join(filepath.Dir(i.TargetManifestPath), "manifest.sig") {
-		return errors.New("preflight target manifest and signature paths are not canonical")
+	if filepath.Base(i.TargetManifestPath) != "manifest.json" {
+		return errors.New("preflight target manifest path is not canonical")
 	}
 	if !validIdentifier(i.BrandID) || !validIdentifier(i.PolicyID) {
 		return errors.New("preflight product identity is invalid")
@@ -133,7 +129,7 @@ func (e PreflightEvidence) Validate() error {
 		return errors.New("release preflight product identity evidence is invalid")
 	}
 	for _, file := range []ProtectedFileEvidence{
-		e.TargetManifest, e.TargetSignature, e.PublicKey, e.PortalConfig,
+		e.TargetManifest, e.PortalConfig,
 		e.BackupConfig, e.BackupKey, e.BrandConfig, e.PolicyConfig,
 	} {
 		if err := file.Validate(); err != nil {
@@ -181,8 +177,6 @@ func capturePreflightEvidence(inputs PreflightInputs, requireRootOwner bool) (Pr
 		set   func(ProtectedFileEvidence)
 	}{
 		{"target manifest", inputs.TargetManifestPath, func(value ProtectedFileEvidence) { evidence.TargetManifest = value }},
-		{"target signature", inputs.TargetSignaturePath, func(value ProtectedFileEvidence) { evidence.TargetSignature = value }},
-		{"public key", inputs.PublicKeyPath, func(value ProtectedFileEvidence) { evidence.PublicKey = value }},
 		{"Portal config", inputs.PortalConfigPath, func(value ProtectedFileEvidence) { evidence.PortalConfig = value }},
 		{"backup config", inputs.BackupConfigPath, func(value ProtectedFileEvidence) { evidence.BackupConfig = value }},
 		{"backup key", inputs.BackupKeyPath, func(value ProtectedFileEvidence) { evidence.BackupKey = value }},

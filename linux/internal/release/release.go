@@ -2,10 +2,7 @@ package release
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,13 +24,13 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
 )
 
-const ManifestSchemaVersion = 3
+const ManifestSchemaVersion = 4
 
 // A production runtime includes the pinned Python standard library plus the
 // AionCore Node/ACP resource trees.  Their per-file evidence remains below the
 // 10,000-entry validation limit but does not fit safely in the old 1 MiB JSON
 // envelope. Keep the manifest bounded while allowing the complete release to
-// be represented and signed without dropping files from verification.
+// be represented without dropping files from verification.
 const maxManifestBytes = 8 * 1024 * 1024
 
 const (
@@ -154,9 +151,6 @@ type Manifest struct {
 	MinimumReadableDataSchema int         `json:"minimum_readable_data_schema"`
 	MaximumReadableDataSchema int         `json:"maximum_readable_data_schema"`
 	Components                []Component `json:"components"`
-	SBOMPath                  string      `json:"sbom_path"`
-	ProvenancePath            string      `json:"provenance_path"`
-	LicenseReportPath         string      `json:"license_report_path"`
 	Files                     []File      `json:"files"`
 }
 
@@ -180,20 +174,6 @@ type Provenance struct {
 type ProvenanceMaterial struct {
 	URI      string `json:"uri"`
 	Revision string `json:"revision"`
-}
-
-type LicenseReport struct {
-	SchemaVersion int            `json:"schema_version"`
-	Approved      bool           `json:"approved"`
-	ReviewedAt    time.Time      `json:"reviewed_at"`
-	Entries       []LicenseEntry `json:"entries"`
-}
-
-type LicenseEntry struct {
-	Component      string `json:"component"`
-	SPDXExpression string `json:"spdx_expression"`
-	Copyright      string `json:"copyright"`
-	NoticePath     string `json:"notice_path,omitempty"`
 }
 
 // NewProvenance creates deterministic release provenance from the exact
@@ -254,38 +234,6 @@ func WriteProvenance(path string, value Provenance) error {
 	return atomicWrite(path, append(payload, '\n'), 0o444)
 }
 
-// NewLicenseReviewTemplate deliberately emits an unapproved, incomplete
-// document. Only an authorized reviewer may fill its fields, set reviewed_at,
-// and change approved to true before it is copied into a release.
-func NewLicenseReviewTemplate(components []Component) (LicenseReport, error) {
-	if len(components) == 0 || len(components) > 64 {
-		return LicenseReport{}, errors.New("license review template requires components")
-	}
-	ordered := append([]Component(nil), components...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
-	value := LicenseReport{SchemaVersion: 1, Approved: false}
-	seen := make(map[string]bool, len(ordered))
-	for _, component := range ordered {
-		if !validIdentifier(component.Name) || !validIdentifier(component.Version) || !validRevision(component.SourceRevision) || seen[component.Name] {
-			return LicenseReport{}, errors.New("license review template contains an invalid component")
-		}
-		seen[component.Name] = true
-		value.Entries = append(value.Entries, LicenseEntry{Component: component.Name})
-	}
-	return value, nil
-}
-
-func WriteLicenseReviewTemplate(path string, value LicenseReport) error {
-	if !cleanAbsolute(path) || value.SchemaVersion != 1 || value.Approved || !value.ReviewedAt.IsZero() || len(value.Entries) == 0 {
-		return errors.New("license review template path or state is invalid")
-	}
-	payload, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicWrite(path, append(payload, '\n'), 0o600)
-}
-
 type File struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
@@ -301,9 +249,6 @@ type VerifyOptions struct {
 	RequiredPaths            []string
 	RequiredExecutablePaths  []string
 	RequireRootOwner         bool
-	RequireSignature         bool
-	SignaturePath            string
-	PublicKeyPath            string
 	AllowedScopes            []string
 	RequiredComponents       map[string]string
 	RequireAdmissionBaseline bool
@@ -347,11 +292,8 @@ func LoadComponents(path string, requireRootOwner bool) ([]Component, error) {
 		SchemaVersion: ManifestSchemaVersion, ReleaseID: "validation", SourceRevision: strings.Repeat("0", 40), TargetOS: "linux", TargetArch: "amd64",
 		BuiltAt: time.Unix(1, 0).UTC(), BrandingVersion: "validation", PolicyVersion: "validation", ComponentScope: ScopeRuntime,
 		DataSchemaVersion: 1, MinimumReadableDataSchema: 1, MaximumReadableDataSchema: 1, Components: components,
-		SBOMPath: "sbom.json", ProvenancePath: "provenance.json", LicenseReportPath: "licenses.json",
 		Files: []File{
-			{Path: "sbom.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
 			{Path: "provenance.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
-			{Path: "licenses.json", SHA256: strings.Repeat("0", 64), Mode: "0444", UID: 0, GID: 0},
 		},
 	}
 	if err := test.Validate(); err != nil {
@@ -415,19 +357,10 @@ func (m Manifest) Validate() error {
 		}
 		componentNames[component.Name] = true
 	}
-	for name, value := range map[string]string{"SBOM": m.SBOMPath, "provenance": m.ProvenancePath, "license report": m.LicenseReportPath} {
-		if err := validRelativePath(value); err != nil {
-			return fmt.Errorf("invalid %s path: %w", name, err)
-		}
-	}
-	if m.SBOMPath == m.ProvenancePath || m.SBOMPath == m.LicenseReportPath || m.ProvenancePath == m.LicenseReportPath {
-		return errors.New("release metadata paths must be distinct")
-	}
 	if len(m.Files) == 0 || len(m.Files) > 10000 {
 		return errors.New("release file list is empty or too large")
 	}
 	seen := make(map[string]struct{}, len(m.Files))
-	requiredMetadata := map[string]bool{m.SBOMPath: false, m.ProvenancePath: false, m.LicenseReportPath: false}
 	for _, file := range m.Files {
 		if err := validRelativePath(file.Path); err != nil {
 			return fmt.Errorf("invalid release file path %q: %w", file.Path, err)
@@ -436,9 +369,6 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("duplicate release file %q", file.Path)
 		}
 		seen[file.Path] = struct{}{}
-		if _, ok := requiredMetadata[file.Path]; ok {
-			requiredMetadata[file.Path] = true
-		}
 		if len(file.SHA256) != sha256.Size*2 {
 			return fmt.Errorf("invalid SHA-256 for %q", file.Path)
 		}
@@ -451,11 +381,6 @@ func (m Manifest) Validate() error {
 		}
 		if file.Size < 0 || file.UID != 0 || file.GID != 0 {
 			return fmt.Errorf("invalid size or ownership for %q", file.Path)
-		}
-	}
-	for name, found := range requiredMetadata {
-		if !found {
-			return fmt.Errorf("release metadata file %q is not covered by the file hashes", name)
 		}
 	}
 	return nil
@@ -585,18 +510,6 @@ func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) 
 	if err := ValidateSignReadyTree(root, options.RequireRootOwner); err != nil {
 		return Verified{}, err
 	}
-	if options.RequireSignature {
-		signaturePath := options.SignaturePath
-		if signaturePath == "" {
-			signaturePath = filepath.Join(root, "manifest.sig")
-		}
-		if signaturePath != filepath.Join(root, "manifest.sig") || !filepath.IsAbs(options.PublicKeyPath) || filepath.Clean(options.PublicKeyPath) != options.PublicKeyPath {
-			return Verified{}, errors.New("release signature paths are not canonical")
-		}
-		if err := VerifyManifestSignature(manifestPath, signaturePath, options.PublicKeyPath, options.RequireRootOwner); err != nil {
-			return Verified{}, err
-		}
-	}
 	manifest, err := LoadManifest(manifestPath)
 	if err != nil {
 		return Verified{}, err
@@ -695,9 +608,6 @@ func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) 
 			return Verified{}, fmt.Errorf("required release executable %q is not canonically executable", required)
 		}
 	}
-	if err := verifyReleaseMetadata(secureRoot, manifest); err != nil {
-		return Verified{}, err
-	}
 	if err := rejectUnlisted(root, listed, options.RequireRootOwner); err != nil {
 		return Verified{}, err
 	}
@@ -705,10 +615,10 @@ func Verify(root, manifestPath string, options VerifyOptions) (Verified, error) 
 }
 
 // ResolveActive resolves an immutable release through its protected channel
-// pointer and verifies the signature and complete release contents before the
-// caller is allowed to execute anything from it.
-func ResolveActive(releasesRoot, pointerPath, publicKeyPath string, options ResolveOptions) (Verified, error) {
-	if !cleanAbsolute(releasesRoot) || !cleanAbsolute(pointerPath) || !cleanAbsolute(publicKeyPath) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") {
+// pointer and verifies the complete release contents against its SHA-256
+// manifest before the caller is allowed to execute anything from it.
+func ResolveActive(releasesRoot, pointerPath string, options ResolveOptions) (Verified, error) {
+	if !cleanAbsolute(releasesRoot) || !cleanAbsolute(pointerPath) || pointerPath != filepath.Join(filepath.Dir(releasesRoot), "current.json") {
 		return Verified{}, errors.New("release channel paths are not canonical")
 	}
 	if options.Scope != ScopePortal && options.Scope != ScopeRuntime && options.Scope != ScopeShared && options.Scope != ScopeCombined {
@@ -734,81 +644,10 @@ func ResolveActive(releasesRoot, pointerPath, publicKeyPath string, options Reso
 		RequiredPaths:            options.RequiredPaths,
 		RequiredExecutablePaths:  options.RequiredExecutablePaths,
 		RequireRootOwner:         options.RequireRootOwner,
-		RequireSignature:         true,
-		SignaturePath:            filepath.Join(releaseRoot, "manifest.sig"),
-		PublicKeyPath:            publicKeyPath,
 		AllowedScopes:            []string{options.Scope},
 		RequiredComponents:       options.RequiredComponents,
 		RequireAdmissionBaseline: options.RequireAdmissionBaseline,
 	})
-}
-
-func verifyReleaseMetadata(root *projectfs.Root, manifest Manifest) error {
-	sbomPayload, err := root.ReadFile(filepath.FromSlash(manifest.SBOMPath), 16*1024*1024)
-	if err != nil {
-		return fmt.Errorf("read release SBOM: %w", err)
-	}
-	var sbom struct {
-		SPDXVersion       string            `json:"spdxVersion"`
-		DocumentNamespace string            `json:"documentNamespace"`
-		Packages          []json.RawMessage `json:"packages"`
-	}
-	if err := json.Unmarshal(sbomPayload, &sbom); err != nil || !strings.HasPrefix(sbom.SPDXVersion, "SPDX-2.") || strings.TrimSpace(sbom.DocumentNamespace) == "" || len(sbom.Packages) == 0 {
-		return errors.New("release SBOM is not a usable SPDX document")
-	}
-	provenancePayload, err := root.ReadFile(filepath.FromSlash(manifest.ProvenancePath), 4*1024*1024)
-	if err != nil {
-		return fmt.Errorf("read release provenance: %w", err)
-	}
-	var provenance Provenance
-	if err := decodeStrictJSON(provenancePayload, &provenance); err != nil || provenance.Validate() != nil || provenance.ReleaseID != manifest.ReleaseID || provenance.SourceRevision != manifest.SourceRevision {
-		return errors.New("release provenance is invalid or does not match the manifest")
-	}
-	materialRevisions := make(map[string]bool)
-	for _, material := range provenance.Materials {
-		materialRevisions[material.Revision] = true
-	}
-	if !materialRevisions[manifest.SourceRevision] {
-		return errors.New("release provenance omits the release source revision")
-	}
-	for _, component := range manifest.Components {
-		if !materialRevisions[component.SourceRevision] {
-			return fmt.Errorf("release provenance omits component %s source revision", component.Name)
-		}
-	}
-	licensePayload, err := root.ReadFile(filepath.FromSlash(manifest.LicenseReportPath), 4*1024*1024)
-	if err != nil {
-		return fmt.Errorf("read release license report: %w", err)
-	}
-	var license LicenseReport
-	if err := decodeStrictJSON(licensePayload, &license); err != nil || license.SchemaVersion != 1 || !license.Approved || license.ReviewedAt.IsZero() || len(license.Entries) == 0 {
-		return errors.New("release license report is absent or not approved")
-	}
-	licensed := make(map[string]bool)
-	for _, entry := range license.Entries {
-		if !validIdentifier(entry.Component) || !validApprovedLicenseText(entry.SPDXExpression) || !validApprovedLicenseText(entry.Copyright) || licensed[entry.Component] {
-			return errors.New("release license report contains an invalid entry")
-		}
-		if entry.NoticePath != "" {
-			if err := validRelativePath(entry.NoticePath); err != nil {
-				return errors.New("release license notice path is invalid")
-			}
-			found := false
-			for _, file := range manifest.Files {
-				found = found || file.Path == entry.NoticePath
-			}
-			if !found {
-				return errors.New("release license notice is not covered by the manifest")
-			}
-		}
-		licensed[entry.Component] = true
-	}
-	for _, component := range manifest.Components {
-		if !licensed[component.Name] {
-			return fmt.Errorf("release license report omits component %s", component.Name)
-		}
-	}
-	return nil
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {
@@ -850,7 +689,7 @@ func rejectUnlisted(root string, listed map[string]struct{}, requireRootOwner bo
 			}
 			return nil
 		}
-		if relative == "manifest.json" || relative == "manifest.sig" {
+		if relative == "manifest.json" {
 			return nil
 		}
 		if _, ok := listed[relative]; !ok {
@@ -876,7 +715,7 @@ func BuildManifest(root string, metadata Manifest) (Manifest, error) {
 		if err != nil {
 			return err
 		}
-		if relative == "manifest.json" || relative == "manifest.sig" {
+		if relative == "manifest.json" {
 			return nil
 		}
 		info, err := entry.Info()
@@ -927,81 +766,6 @@ func WriteManifest(path string, manifest Manifest) error {
 	return atomicWrite(path, payload, 0o444)
 }
 
-func GenerateSigningKey(publicPath, privatePath string) error {
-	if !cleanAbsolute(publicPath) || !cleanAbsolute(privatePath) || publicPath == privatePath {
-		return errors.New("signing key paths must be distinct, clean, and absolute")
-	}
-	for _, path := range []string{publicPath, privatePath} {
-		if _, err := os.Lstat(path); err == nil {
-			return fmt.Errorf("refusing to overwrite signing key: %s", path)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return err
-	}
-	defer clear(privateKey)
-	privatePayload := append([]byte(base64.RawStdEncoding.EncodeToString(privateKey)), '\n')
-	defer clear(privatePayload)
-	if err := atomicWrite(privatePath, privatePayload, 0o600); err != nil {
-		return err
-	}
-	publicPayload := append([]byte(base64.RawStdEncoding.EncodeToString(publicKey)), '\n')
-	if err := atomicWrite(publicPath, publicPayload, 0o444); err != nil {
-		return fmt.Errorf("write public signing key (private key was already created): %w", err)
-	}
-	return nil
-}
-
-func SignManifest(manifestPath, signaturePath, privateKeyPath string, requireRootOwner bool) error {
-	manifest, err := readProtectedBoundedFile(manifestPath, maxManifestBytes, requireRootOwner, false)
-	if err != nil {
-		return fmt.Errorf("read manifest for signing: %w", err)
-	}
-	privatePayload, err := readProtectedBoundedFile(privateKeyPath, 1024, requireRootOwner, true)
-	if err != nil {
-		return fmt.Errorf("read release signing key: %w", err)
-	}
-	defer clear(privatePayload)
-	privateKey, err := decodeKey(privatePayload, ed25519.PrivateKeySize)
-	if err != nil {
-		return errors.New("release private signing key is invalid")
-	}
-	defer clear(privateKey)
-	signature := ed25519.Sign(ed25519.PrivateKey(privateKey), manifest)
-	payload := append([]byte(base64.RawStdEncoding.EncodeToString(signature)), '\n')
-	if err := atomicWrite(signaturePath, payload, 0o444); err != nil {
-		return fmt.Errorf("write release signature: %w", err)
-	}
-	return nil
-}
-
-func VerifyManifestSignature(manifestPath, signaturePath, publicKeyPath string, requireRootOwner bool) error {
-	manifest, err := readProtectedBoundedFile(manifestPath, maxManifestBytes, requireRootOwner, false)
-	if err != nil {
-		return err
-	}
-	signaturePayload, err := readProtectedBoundedFile(signaturePath, 1024, requireRootOwner, false)
-	if err != nil {
-		return fmt.Errorf("read release signature: %w", err)
-	}
-	publicPayload, err := readProtectedBoundedFile(publicKeyPath, 1024, requireRootOwner, false)
-	if err != nil {
-		return fmt.Errorf("read release public key: %w", err)
-	}
-	publicKey, err := decodeKey(publicPayload, ed25519.PublicKeySize)
-	if err != nil {
-		return errors.New("release public key is invalid")
-	}
-	signature, err := decodeKey(signaturePayload, ed25519.SignatureSize)
-	if err != nil || !ed25519.Verify(ed25519.PublicKey(publicKey), manifest, signature) {
-		return errors.New("release manifest signature is invalid")
-	}
-	return nil
-}
-
 func readProtectedBoundedFile(path string, maximum int64, requireRootOwner, requirePrivate bool) ([]byte, error) {
 	if !cleanAbsolute(path) {
 		return nil, errors.New("protected file path must be clean and absolute")
@@ -1021,18 +785,6 @@ func readProtectedBoundedFile(path string, maximum int64, requireRootOwner, requ
 		return nil, errors.New("protected file could not be read")
 	}
 	return payload, nil
-}
-
-func decodeKey(payload []byte, size int) ([]byte, error) {
-	value := strings.TrimSpace(string(payload))
-	decoded, err := base64.RawStdEncoding.DecodeString(value)
-	if err != nil {
-		decoded, err = base64.StdEncoding.DecodeString(value)
-	}
-	if err != nil || len(decoded) != size {
-		return nil, errors.New("encoded key has the wrong size")
-	}
-	return decoded, nil
 }
 
 func ActivateScoped(pointerPath, nextRelease, scope string, now time.Time) error {
@@ -1097,7 +849,7 @@ func rollbackUnlocked(pointerPath string, now time.Time) (Pointer, error) {
 	return next, nil
 }
 
-func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath string, options ResolveOptions, now time.Time) (Verified, error) {
+func ActivateVerified(releasesRoot, pointerPath, nextRelease string, options ResolveOptions, now time.Time) (Verified, error) {
 	contract, err := NewConsumerContract(options.RequiredPaths, options.RequiredExecutablePaths)
 	if err != nil {
 		return Verified{}, fmt.Errorf("activation consumer contract: %w", err)
@@ -1122,8 +874,8 @@ func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath stri
 		releaseRoot := filepath.Join(releasesRoot, nextRelease)
 		var err error
 		verified, err = Verify(releaseRoot, filepath.Join(releaseRoot, "manifest.json"), VerifyOptions{
-			ExpectedReleaseID: nextRelease, ExpectedSourceRevision: options.ExpectedSourceRevision, RequiredPaths: options.RequiredPaths, RequiredExecutablePaths: options.RequiredExecutablePaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-			SignaturePath: filepath.Join(releaseRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents, RequireAdmissionBaseline: options.RequireAdmissionBaseline,
+			ExpectedReleaseID: nextRelease, ExpectedSourceRevision: options.ExpectedSourceRevision, RequiredPaths: options.RequiredPaths, RequiredExecutablePaths: options.RequiredExecutablePaths, RequireRootOwner: options.RequireRootOwner,
+			AllowedScopes: []string{options.Scope}, RequiredComponents: options.RequiredComponents, RequireAdmissionBaseline: options.RequireAdmissionBaseline,
 		})
 		if err != nil {
 			return err
@@ -1131,8 +883,8 @@ func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath stri
 		if options.ExpectedCurrentRelease != "" {
 			currentRoot := filepath.Join(releasesRoot, options.ExpectedCurrentRelease)
 			current, currentErr := Verify(currentRoot, filepath.Join(currentRoot, "manifest.json"), VerifyOptions{
-				ExpectedReleaseID: options.ExpectedCurrentRelease, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-				SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope},
+				ExpectedReleaseID: options.ExpectedCurrentRelease, RequireRootOwner: options.RequireRootOwner,
+				AllowedScopes: []string{options.Scope},
 			})
 			if currentErr != nil {
 				return fmt.Errorf("verify active release before activation: %w", currentErr)
@@ -1146,7 +898,7 @@ func ActivateVerified(releasesRoot, pointerPath, nextRelease, publicKeyPath stri
 	return verified, err
 }
 
-func RollbackVerified(releasesRoot, pointerPath, publicKeyPath string, options ResolveOptions, now time.Time) (Pointer, Verified, error) {
+func RollbackVerified(releasesRoot, pointerPath string, options ResolveOptions, now time.Time) (Pointer, Verified, error) {
 	contract, err := NewConsumerContract(options.RequiredPaths, options.RequiredExecutablePaths)
 	if err != nil {
 		return Pointer{}, Verified{}, fmt.Errorf("rollback consumer contract: %w", err)
@@ -1168,16 +920,16 @@ func RollbackVerified(releasesRoot, pointerPath, publicKeyPath string, options R
 		}
 		root := filepath.Join(releasesRoot, current.Previous)
 		verified, err = Verify(root, filepath.Join(root, "manifest.json"), VerifyOptions{
-			ExpectedReleaseID: current.Previous, RequiredPaths: options.RequiredPaths, RequiredExecutablePaths: options.RequiredExecutablePaths, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-			SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope},
+			ExpectedReleaseID: current.Previous, RequiredPaths: options.RequiredPaths, RequiredExecutablePaths: options.RequiredExecutablePaths, RequireRootOwner: options.RequireRootOwner,
+			AllowedScopes: []string{options.Scope},
 		})
 		if err != nil {
 			return err
 		}
 		currentRoot := filepath.Join(releasesRoot, current.Current)
 		active, activeErr := Verify(currentRoot, filepath.Join(currentRoot, "manifest.json"), VerifyOptions{
-			ExpectedReleaseID: current.Current, RequireRootOwner: options.RequireRootOwner, RequireSignature: true,
-			SignaturePath: filepath.Join(currentRoot, "manifest.sig"), PublicKeyPath: publicKeyPath, AllowedScopes: []string{options.Scope},
+			ExpectedReleaseID: current.Current, RequireRootOwner: options.RequireRootOwner,
+			AllowedScopes: []string{options.Scope},
 		})
 		if activeErr != nil {
 			return fmt.Errorf("verify active release before rollback: %w", activeErr)
@@ -1367,34 +1119,6 @@ func validEvidenceText(value string) bool {
 	for _, character := range value {
 		if character < 0x20 || character == 0x7f {
 			return false
-		}
-	}
-	return true
-}
-
-func validApprovedLicenseText(value string) bool {
-	if !validEvidenceText(value) {
-		return false
-	}
-	lower := strings.ToLower(value)
-	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(lower)
-	switch compact {
-	case "none", "noassertion", "unknown", "todo", "tbd", "reviewrequired", "unresolved":
-		return false
-	}
-	words := strings.FieldsFunc(lower, func(character rune) bool {
-		return !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9'))
-	})
-	for index, word := range words {
-		switch word {
-		case "none", "noassertion", "unknown", "todo", "tbd", "unresolved":
-			return false
-		case "reviewrequired":
-			return false
-		case "review":
-			if index+1 < len(words) && words[index+1] == "required" {
-				return false
-			}
 		}
 	}
 	return true
