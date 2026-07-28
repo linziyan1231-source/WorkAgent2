@@ -1270,10 +1270,14 @@ func validatePreflightOutputPath(outputPath, pointerPath, maintenanceSessionPath
 		{label: "release pointer", path: pointerPath},
 		{label: "target manifest", path: inputs.TargetManifestPath},
 		{label: "Portal config", path: inputs.PortalConfigPath},
-		{label: "backup config", path: inputs.BackupConfigPath},
-		{label: "backup encryption key", path: inputs.BackupKeyPath},
 		{label: "brand config", path: inputs.BrandConfigPath},
 		{label: "policy config", path: inputs.PolicyConfigPath},
+	}
+	if inputs.BackupConfigPath != "" {
+		protected = append(protected,
+			protectedPreflightPath{label: "backup config", path: inputs.BackupConfigPath},
+			protectedPreflightPath{label: "backup encryption key", path: inputs.BackupKeyPath},
+		)
 	}
 	for tenantID, path := range inputs.TenantConfigPaths {
 		protected = append(protected, protectedPreflightPath{label: "tenant " + tenantID + " config", path: path})
