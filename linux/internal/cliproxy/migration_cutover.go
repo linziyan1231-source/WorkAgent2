@@ -1,7 +1,6 @@
 package cliproxy
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/jsonutil"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/modelbootstrap"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/winmigration"
@@ -479,16 +479,11 @@ func verifyMigrationFileIdentity(path string, before syscall.Stat_t) error {
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	decoder.UseNumber()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	err := jsonutil.DecodeStrict(payload, destination, true)
+	if errors.Is(err, jsonutil.ErrTrailingData) {
 		return errors.New("JSON contains trailing data")
 	}
-	return nil
+	return err
 }
 
 func usageStateEqual(left, right usageState) bool {

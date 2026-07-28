@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/jsonutil"
 	_ "modernc.org/sqlite"
 )
 
@@ -566,15 +567,11 @@ func readPrivateAbsoluteFile(filename string, maximum int64, expectedUID uint32)
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	err := jsonutil.DecodeStrict(payload, destination, false)
+	if errors.Is(err, jsonutil.ErrTrailingData) {
 		return errors.New("JSON has trailing data")
 	}
-	return nil
+	return err
 }
 
 func decodePrivateJSON(payload []byte, destination any) error {

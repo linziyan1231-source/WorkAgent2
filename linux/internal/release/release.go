@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/jsonutil"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
 )
 
@@ -811,16 +812,11 @@ func verifyReleaseMetadata(root *projectfs.Root, manifest Manifest) error {
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {
-	decoder := json.NewDecoder(strings.NewReader(string(payload)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
+	err := jsonutil.DecodeStrict(payload, destination, false)
+	if errors.Is(err, jsonutil.ErrTrailingData) {
 		return errors.New("JSON document contains trailing data")
 	}
-	return nil
+	return err
 }
 
 func rejectUnlisted(root string, listed map[string]struct{}, requireRootOwner bool) error {
