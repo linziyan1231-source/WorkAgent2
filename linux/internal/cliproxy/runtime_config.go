@@ -119,8 +119,11 @@ func protectedTemplate(path string) error {
 }
 
 func readRootCredential(path string) ([]byte, error) {
+	// systemd exposes LoadCredentialEncrypted files as root:root 0440 with a
+	// service-group read grant, so group readability is accepted here while
+	// any world access stays forbidden.
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() < 32 || info.Size() > 1024 || info.Mode().Perm()&0o077 != 0 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() < 32 || info.Size() > 1024 || info.Mode().Perm()&0o007 != 0 {
 		return nil, errors.New("CLIProxy management credential is missing or unsafe")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)

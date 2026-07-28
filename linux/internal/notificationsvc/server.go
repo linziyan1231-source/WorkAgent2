@@ -165,7 +165,7 @@ func loadCredential(path string) ([]byte, error) {
 		return nil, errors.New("notification credential path is invalid")
 	}
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 16 || info.Size() > 4096 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o007 != 0 || info.Size() < 16 || info.Size() > 4096 {
 		return nil, errors.New("notification credential is missing or unsafe")
 	}
 	raw, err := os.ReadFile(path)

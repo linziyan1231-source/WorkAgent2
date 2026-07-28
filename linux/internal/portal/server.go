@@ -496,7 +496,7 @@ func loadAdminMasterPasswordHash(path string) (string, error) {
 		return "", nil
 	}
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 32 || info.Size() > 1024 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o007 != 0 || info.Size() < 32 || info.Size() > 1024 {
 		return "", errors.New("administrator master-password hash credential is missing or unsafe")
 	}
 	payload, err := os.ReadFile(path)

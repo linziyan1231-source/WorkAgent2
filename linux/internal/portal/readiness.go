@@ -150,7 +150,7 @@ func (s *Server) checkTenantReadiness(ctx context.Context) error {
 
 func readProtectedCredential(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() < 16 || info.Size() > 4096 {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o007 != 0 || info.Size() < 16 || info.Size() > 4096 {
 		return nil, errors.New("credential file is missing or unsafe")
 	}
 	payload, err := os.ReadFile(path)

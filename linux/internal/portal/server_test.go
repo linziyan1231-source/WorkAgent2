@@ -233,8 +233,14 @@ func TestLoadAdministratorMasterPasswordHashRejectsUnsafeFile(t *testing.T) {
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatal(err)
 	}
+	if loaded, err := loadAdminMasterPasswordHash(path); err != nil || loaded != password {
+		t.Fatalf("systemd-style group-granted master-password hash was rejected: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := loadAdminMasterPasswordHash(path); err == nil {
-		t.Fatal("group-readable master-password hash was accepted")
+		t.Fatal("world-readable master-password hash was accepted")
 	}
 }
 

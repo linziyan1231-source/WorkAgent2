@@ -45,7 +45,7 @@ func NewManagementClient(options ManagementOptions) (*ManagementClient, error) {
 		return nil, errors.New("CLIProxy management key file must be a clean absolute path")
 	}
 	info, err := os.Lstat(options.KeyFile)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 || info.Size() < 32 || info.Size() > 1024 {
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o007 != 0 || info.Size() < 32 || info.Size() > 1024 {
 		return nil, errors.New("CLIProxy management key file must be a protected bounded regular file")
 	}
 	data, err := os.ReadFile(options.KeyFile)
