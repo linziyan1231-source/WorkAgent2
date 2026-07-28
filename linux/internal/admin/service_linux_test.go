@@ -48,7 +48,7 @@ func TestPortalServiceSandboxVerificationRejectsWritablePathExpansion(t *testing
 		"ProtectKernelTunables": "yes", "ProtectSystem": "strict", "RestrictRealtime": "yes",
 		"LockPersonality": "yes", "CapabilityBoundingSet": "", "AmbientCapabilities": "", "SystemCallArchitectures": "native",
 		"RestrictNamespaces": "yes", "MemoryDenyWriteExecute": "yes", "RestrictSUIDSGID": "yes",
-		"RestrictAddressFamilies": "AF_INET6 AF_UNIX AF_INET", "ReadWritePaths": "/run/workagent /var/lib/workagent/portal", "InaccessiblePaths": "-/srv/workagent/users",
+		"RestrictAddressFamilies": "AF_INET6 AF_UNIX AF_INET", "ReadWritePaths": "/run/workagent /var/lib/workagent/portal", "ReadOnlyPaths": "/srv/workagent/users",
 	}
 	if err := VerifyPortalService(context.Background(), portal, properties); err != nil {
 		t.Fatalf("production Portal sandbox was rejected: %v", err)

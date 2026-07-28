@@ -62,7 +62,7 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 ReadWritePaths=/var/lib/workagent/portal /run/workagent
-InaccessiblePaths=-/srv/workagent/users
+ReadOnlyPaths=/srv/workagent/users
 
 MemoryHigh=1536M
 MemoryMax=2G

@@ -47,7 +47,7 @@ func VerifyPortalService(ctx context.Context, portal config.Portal, controller s
 	hardening, err := controller.Properties(ctx, "workagent-portal.service",
 		"NoNewPrivileges", "UMask", "KillMode", "PrivateDevices", "PrivateTmp", "ProtectClock", "ProtectControlGroups", "ProtectHome", "ProtectHostname",
 		"ProtectKernelLogs", "ProtectKernelModules", "ProtectKernelTunables", "ProtectSystem", "RestrictRealtime", "LockPersonality",
-		"CapabilityBoundingSet", "AmbientCapabilities", "RestrictAddressFamilies", "SystemCallArchitectures", "ReadWritePaths", "InaccessiblePaths",
+		"CapabilityBoundingSet", "AmbientCapabilities", "RestrictAddressFamilies", "SystemCallArchitectures", "ReadWritePaths", "ReadOnlyPaths",
 		"RestrictNamespaces", "MemoryDenyWriteExecute")
 	if err != nil {
 		return fmt.Errorf("inspect Portal service sandbox: %w", err)
@@ -65,7 +65,7 @@ func VerifyPortalService(ctx context.Context, portal config.Portal, controller s
 	}
 	if !sameWords(hardening["RestrictAddressFamilies"], []string{"AF_UNIX", "AF_INET", "AF_INET6"}) ||
 		!sameWords(hardening["ReadWritePaths"], []string{portal.Paths.PortalState, "/run/workagent"}) ||
-		!sameWords(hardening["InaccessiblePaths"], []string{"-" + portal.Paths.TenantData}) {
+		!sameWords(hardening["ReadOnlyPaths"], []string{portal.Paths.TenantData}) {
 		return errors.New("Portal service network or filesystem sandbox does not match policy")
 	}
 	return nil
