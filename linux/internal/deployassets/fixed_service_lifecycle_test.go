@@ -101,7 +101,7 @@ func TestFixedRootServiceConsumersUseVersionedLifecycleSupervisor(t *testing.T) 
 	migrationOpen := "OpenFile=/run/workagent/cliproxy-migration.lock:workagent-cliproxy-migration-lock:read-only"
 	requireContains(t, cliproxy,
 		migrationOpen,
-		"ExecStartPost=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --wait 30s",
+		"ExecStartPost=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /etc/cliproxyapi/management-key --wait 30s",
 	)
 	if strings.Index(cliproxy, sharedOpen) >= strings.Index(cliproxy, migrationOpen) {
 		t.Fatal("CLIProxy migration OpenFile must follow catalog/control/shared at fd 6")

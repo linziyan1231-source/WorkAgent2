@@ -20,6 +20,7 @@ type RuntimeConfigOptions struct {
 	OutputPath            string
 	CredentialPath        string
 	StateRoot             string
+	KeyCopyPath           string
 	RequireDedicatedOwner bool
 }
 
@@ -64,6 +65,11 @@ func PrepareRuntimeConfig(options RuntimeConfigOptions) error {
 		return err
 	}
 	defer clear(credential)
+	if options.KeyCopyPath != "" {
+		if err := writeManagementKeyCopy(options.KeyCopyPath, credential, stateStat); err != nil {
+			return err
+		}
+	}
 	template, err := os.ReadFile(options.TemplatePath)
 	if err != nil {
 		return errors.New("CLIProxy config template could not be read")
@@ -81,6 +87,28 @@ func PrepareRuntimeConfig(options RuntimeConfigOptions) error {
 		return err
 	}
 	return nil
+}
+
+// writeManagementKeyCopy publishes the plaintext management key where a
+// privileged ExecStartPost on the host mount namespace can read it. systemd
+// moves LoadCredentialEncrypted material into the unit namespace once the
+// main process starts, so elevated post-start processes cannot use the
+// per-unit credentials directory. The copy is root-owned, group-readable by
+// the dedicated CLIProxy identity only.
+func writeManagementKeyCopy(path string, credential []byte, owner *syscall.Stat_t) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return errors.New("CLIProxy management key copy path must be clean and absolute")
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil || parent.Mode()&os.ModeSymlink != 0 || !parent.IsDir() || parent.Mode().Perm()&0o022 != 0 {
+		return errors.New("CLIProxy management key copy parent is unsafe")
+	}
+	return fsutil.WriteFileAtomic(path, append(append([]byte(nil), credential...), '\n'), fsutil.AtomicWriteOptions{
+		Mode:        0o440,
+		Owner:       &fsutil.AtomicOwner{UID: 0, GID: int(owner.Gid)},
+		TempPattern: ".management-key.partial-*",
+		CreateError: errors.New("create CLIProxy management key copy"),
+	})
 }
 
 func protectedDirectory(path string, mode os.FileMode) (os.FileInfo, *syscall.Stat_t, error) {

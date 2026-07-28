@@ -407,7 +407,7 @@ func TestServiceActionManagerContractsBindCLIProxyAndTimerTargets(t *testing.T) 
 	const controlVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-cliproxy --required-executable bin/workagent-release"
 	const sharedVerify = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required-executable cliproxyapi/bin/cli-proxy-api --required-executable cliproxyapi/plugins/cpa-key-policy-v0.4.5.so"
 	const prepare = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy prepare --template /etc/cliproxyapi/config.yaml --output /var/lib/cliproxyapi/config.yaml --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --state-root /var/lib/cliproxyapi"
-	const bootstrap = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /run/credentials/cliproxyapi.service/cliproxy-management-key --wait 30s"
+	const bootstrap = "/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-cliproxy bootstrap --portal-config /etc/workagent/portal.json --credential /etc/cliproxyapi/management-key --wait 30s"
 	cliproxy := map[string]string{
 		"LoadState": "loaded", "NeedDaemonReload": "no", "FragmentPath": "/usr/lib/systemd/system/cliproxyapi.service", "UnitFileState": "enabled",
 		"Type": "exec", "User": "cliproxyapi", "Group": "cliproxyapi",

@@ -96,16 +96,17 @@ func prepare(arguments []string) error {
 	template := flags.String("template", "/etc/cliproxyapi/config.yaml", "root-owned non-secret template")
 	output := flags.String("output", "/var/lib/cliproxyapi/config.yaml", "dedicated-user runtime config")
 	credential := flags.String("credential", "/run/credentials/cliproxyapi.service/cliproxy-management-key", "systemd management credential")
+	keyCopy := flags.String("key-copy", "/etc/cliproxyapi/management-key", "host-namespace management key copy for post-start privileged consumers")
 	stateRoot := flags.String("state-root", "/var/lib/cliproxyapi", "dedicated-user state root")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
-		return errors.New("usage: workagent-cliproxy prepare [--template PATH --output PATH --credential PATH --state-root PATH]")
+		return errors.New("usage: workagent-cliproxy prepare [--template PATH --output PATH --credential PATH --key-copy PATH --state-root PATH]")
 	}
 	if os.Geteuid() != 0 {
 		return errors.New("CLIProxy runtime config preparation must run as root")
 	}
 	if err := cliproxy.PrepareRuntimeConfig(cliproxy.RuntimeConfigOptions{
 		TemplatePath: *template, OutputPath: *output, CredentialPath: *credential,
-		StateRoot: *stateRoot, RequireDedicatedOwner: true,
+		StateRoot: *stateRoot, KeyCopyPath: *keyCopy, RequireDedicatedOwner: true,
 	}); err != nil {
 		return err
 	}
