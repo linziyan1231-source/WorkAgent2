@@ -687,6 +687,11 @@ func verifyLoadedTenantUnitCatalog(ctx context.Context, controller systemdctl.Co
 	if err != nil {
 		return 0, fmt.Errorf("enumerate loaded tenant units after reconciliation: %w", err)
 	}
+	// systemd only keeps instances in memory after their first start job; a
+	// freshly provisioned but never-started tenant is absent from this list.
+	// The loadability of every expected unit was proved above, so the
+	// enumeration only has to reject loaded units without protected
+	// configuration.
 	seen := make(map[string]bool, len(units))
 	for _, unit := range units {
 		if seen[unit] {
@@ -696,9 +701,6 @@ func verifyLoadedTenantUnitCatalog(ctx context.Context, controller systemdctl.Co
 		if _, ok := tenantIDFromLoadedUnit(unit); !ok || !expected[unit] {
 			return 0, fmt.Errorf("loaded tenant unit %s has no protected tenant configuration", unit)
 		}
-	}
-	if len(seen) != len(expected) {
-		return 0, errors.New("loaded tenant unit enumeration omitted an expected service or socket")
 	}
 	return len(units), nil
 }

@@ -5,10 +5,46 @@ package store
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
+
+// assignPortalSQLiteFileSetToStateOwner repairs the owner of a database file
+// set that a root-run administrative tool just created inside the Portal
+// state directory. Only root-owned files are reassigned to the state
+// directory owner; any other foreign owner is left for
+// protectPortalSQLiteFileSet to reject.
+func assignPortalSQLiteFileSetToStateOwner(databasePath string, expectedUID, expectedGID uint32) error {
+	if os.Geteuid() != 0 || expectedUID == 0 {
+		return nil
+	}
+	parentFD, err := unix.Open(filepath.Dir(databasePath), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open Portal database directory for ownership repair: %w", err)
+	}
+	defer unix.Close(parentFD)
+	base := filepath.Base(databasePath)
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		name := base + suffix
+		var named unix.Stat_t
+		err := unix.Fstatat(parentFD, name, &named, unix.AT_SYMLINK_NOFOLLOW)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect Portal database%s ownership: %w", suffix, err)
+		}
+		if named.Uid != 0 {
+			continue
+		}
+		if err := unix.Fchownat(parentFD, name, int(expectedUID), int(expectedGID), unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			return fmt.Errorf("assign Portal database%s to the Portal identity: %w", suffix, err)
+		}
+	}
+	return nil
+}
 
 // protectPortalSQLiteFileSet closes the gap between SQLite file creation and
 // an inherited administrative umask. The state directory is private, so these

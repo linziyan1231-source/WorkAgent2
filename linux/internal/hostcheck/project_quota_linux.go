@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -85,7 +86,9 @@ func AssignTenantQuota(path string, expectedProjectID uint32, expectedHardLimit 
 	revert := func() {
 		_, _, _ = unix.Syscall(unix.SYS_IOCTL, file.Fd(), fsIOCFSSetXAttr, uintptr(unsafe.Pointer(&original)))
 	}
-	special, err := unix.BytePtrFromString(selected.point)
+	// quotactl needs the backing block device (e.g. /dev/loopN for a loop
+	// image); the mount point alone is rejected with ENOTBLK.
+	special, err := unix.BytePtrFromString(quotaSpecialPath(selected))
 	if err != nil {
 		revert()
 		return ProjectQuotaStatus{}, err
@@ -97,11 +100,20 @@ func AssignTenantQuota(path string, expectedProjectID uint32, expectedHardLimit 
 		revert()
 		return ProjectQuotaStatus{}, fmt.Errorf("set XFS project quota: %w", errno)
 	}
-	status, err := VerifyProjectQuota(path, selected.point, expectedProjectID, expectedHardLimit)
+	status, err := VerifyProjectQuota(path, quotaSpecialPath(selected), expectedProjectID, expectedHardLimit)
 	if err != nil {
 		return ProjectQuotaStatus{}, fmt.Errorf("verify assigned XFS project quota: %w", err)
 	}
 	return status, nil
+}
+
+// quotaSpecialPath returns the block device quotactl requires for an XFS
+// mount, falling back to the mount point when no device source is known.
+func quotaSpecialPath(selected mount) string {
+	if strings.HasPrefix(selected.source, "/dev/") {
+		return selected.source
+	}
+	return selected.point
 }
 
 type xfsDiskQuota struct {
@@ -196,5 +208,5 @@ func VerifyTenantQuota(path string, expectedProjectID uint32, expectedHardLimit 
 	if !projectQuota {
 		return ProjectQuotaStatus{}, errors.New("XFS project quota accounting is not enabled")
 	}
-	return VerifyProjectQuota(path, selected.point, expectedProjectID, expectedHardLimit)
+	return VerifyProjectQuota(path, quotaSpecialPath(selected), expectedProjectID, expectedHardLimit)
 }

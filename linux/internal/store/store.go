@@ -131,6 +131,11 @@ func Open(path, auditPath string) (*Store, error) {
 		runtimeLock.Close()
 		return nil, err
 	}
+	if err := assignPortalSQLiteFileSetToStateOwner(path, stateStat.Uid, stateStat.Gid); err != nil {
+		database.Close()
+		runtimeLock.Close()
+		return nil, err
+	}
 	if err := protectPortalSQLiteFileSet(path, stateStat.Uid, stateStat.Gid); err != nil {
 		database.Close()
 		runtimeLock.Close()

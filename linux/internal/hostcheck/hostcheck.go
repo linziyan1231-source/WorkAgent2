@@ -25,6 +25,7 @@ type Report struct {
 
 type mount struct {
 	point      string
+	source     string
 	filesystem string
 	options    map[string]struct{}
 }
@@ -107,7 +108,7 @@ func parseMountInfo(payload string) ([]mount, error) {
 				options[value] = struct{}{}
 			}
 		}
-		result = append(result, mount{point: point, filesystem: fields[separator+1], options: options})
+		result = append(result, mount{point: point, source: unescapeMount(fields[separator+2]), filesystem: fields[separator+1], options: options})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
