@@ -16,7 +16,7 @@ import (
 // state directory. Only root-owned files are reassigned to the state
 // directory owner; any other foreign owner is left for
 // protectPortalSQLiteFileSet to reject.
-func assignPortalSQLiteFileSetToStateOwner(databasePath string, expectedUID, expectedGID uint32) error {
+func assignPortalSQLiteFileSetToStateOwner(databasePath, auditPath string, expectedUID, expectedGID uint32) error {
 	if os.Geteuid() != 0 || expectedUID == 0 {
 		return nil
 	}
@@ -26,21 +26,24 @@ func assignPortalSQLiteFileSetToStateOwner(databasePath string, expectedUID, exp
 	}
 	defer unix.Close(parentFD)
 	base := filepath.Base(databasePath)
-	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-		name := base + suffix
+	names := []string{base, base + "-wal", base + "-shm", base + "-journal"}
+	if auditDir := filepath.Dir(auditPath); auditDir == filepath.Dir(databasePath) {
+		names = append(names, filepath.Base(auditPath))
+	}
+	for _, name := range names {
 		var named unix.Stat_t
 		err := unix.Fstatat(parentFD, name, &named, unix.AT_SYMLINK_NOFOLLOW)
 		if errors.Is(err, unix.ENOENT) {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("inspect Portal database%s ownership: %w", suffix, err)
+			return fmt.Errorf("inspect Portal state file %s ownership: %w", name, err)
 		}
 		if named.Uid != 0 {
 			continue
 		}
 		if err := unix.Fchownat(parentFD, name, int(expectedUID), int(expectedGID), unix.AT_SYMLINK_NOFOLLOW); err != nil {
-			return fmt.Errorf("assign Portal database%s to the Portal identity: %w", suffix, err)
+			return fmt.Errorf("assign Portal state file %s to the Portal identity: %w", name, err)
 		}
 	}
 	return nil
