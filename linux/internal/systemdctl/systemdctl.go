@@ -57,8 +57,10 @@ func (c Client) Properties(ctx context.Context, unit string, names ...string) (m
 		properties[name] = value
 	}
 	for _, name := range names {
+		// systemd omits unset properties from the output; an omitted
+		// property is an empty one (D-Bus returns the same empty default).
 		if _, ok := properties[name]; !ok {
-			return nil, fmt.Errorf("systemd omitted property %s", name)
+			properties[name] = ""
 		}
 	}
 	return properties, nil
