@@ -8,14 +8,13 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 
 	"golang.org/x/crypto/hkdf"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 )
 
 const (
@@ -342,47 +341,18 @@ func atomicWriteNoReplace(path string, payload []byte, mode os.FileMode) error {
 }
 
 func atomicWriteWithPublication(path string, payload []byte, mode os.FileMode, noReplace bool) error {
-	parent := filepath.Dir(path)
-	info, err := os.Lstat(parent)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+	if noReplace && !cleanAbsolute(path) {
+		return errors.New("no-replace publication path is invalid")
+	}
+	err := fsutil.WriteFileAtomic(path, payload, fsutil.AtomicWriteOptions{
+		Mode: mode, NoReplace: noReplace, TempPattern: ".workagent-backup-*",
+		CheckParent: true, SafeParent: true, WrapDirSync: true,
+	})
+	if errors.Is(err, fsutil.ErrUnsafeParent) {
 		return errors.New("atomic-write parent is missing or unsafe")
 	}
-	temporary, err := os.CreateTemp(parent, ".workagent-backup-*")
-	if err != nil {
-		return err
+	if errors.Is(err, fsutil.ErrTargetExists) {
+		return errors.New("refusing to overwrite existing state")
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(payload); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if noReplace {
-		err = renameNoReplace(temporaryPath, path)
-	} else {
-		err = os.Rename(temporaryPath, path)
-	}
-	if err != nil {
-		return err
-	}
-	directory, err := os.Open(parent)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync atomic-write directory: %w", err)
-	}
-	return nil
+	return err
 }

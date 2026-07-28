@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 )
 
 type RuntimeConfigOptions struct {
@@ -252,40 +253,11 @@ func verifyExistingRuntimeConfig(path string, owner *syscall.Stat_t) error {
 	return nil
 }
 
-func atomicWriteRuntimeConfig(path string, payload []byte, owner *syscall.Stat_t) (returnErr error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".config.yaml.partial-*")
-	if err != nil {
-		return errors.New("create CLIProxy runtime config")
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		if returnErr != nil {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if err := temporary.Chown(int(owner.Uid), int(owner.Gid)); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(payload); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return err
-	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+func atomicWriteRuntimeConfig(path string, payload []byte, owner *syscall.Stat_t) error {
+	return fsutil.WriteFileAtomic(path, payload, fsutil.AtomicWriteOptions{
+		Mode:        0o600,
+		Owner:       &fsutil.AtomicOwner{UID: int(owner.Uid), GID: int(owner.Gid)},
+		TempPattern: ".config.yaml.partial-*",
+		CreateError: errors.New("create CLIProxy runtime config"),
+	})
 }

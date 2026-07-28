@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/fsutil"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
 )
 
@@ -1315,54 +1316,16 @@ func atomicWriteExclusive(path string, payload []byte, mode os.FileMode) error {
 }
 
 func atomicWriteMode(path string, payload []byte, mode os.FileMode, noReplace bool) error {
-	parent := filepath.Dir(path)
-	info, err := os.Lstat(parent)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	err := fsutil.WriteFileAtomic(path, payload, fsutil.AtomicWriteOptions{
+		Mode: mode, NoReplace: noReplace, TempPattern: ".workagent-*", CheckParent: true,
+	})
+	if errors.Is(err, fsutil.ErrUnsafeParent) {
 		return errors.New("atomic write parent is not a real directory")
 	}
-	temporary, err := os.CreateTemp(parent, ".workagent-*")
-	if err != nil {
-		return err
+	if errors.Is(err, fsutil.ErrTargetExists) {
+		return errors.New("atomic write target already exists")
 	}
-	temporaryPath := temporary.Name()
-	cleanup := func() {
-		temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}
-	if err := temporary.Chmod(mode); err != nil {
-		cleanup()
-		return err
-	}
-	if _, err := temporary.Write(payload); err != nil {
-		cleanup()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return err
-	}
-	if noReplace {
-		err = unix.Renameat2(unix.AT_FDCWD, temporaryPath, unix.AT_FDCWD, path, unix.RENAME_NOREPLACE)
-	} else {
-		err = os.Rename(temporaryPath, path)
-	}
-	if err != nil {
-		_ = os.Remove(temporaryPath)
-		if noReplace && errors.Is(err, unix.EEXIST) {
-			return errors.New("atomic write target already exists")
-		}
-		return err
-	}
-	directory, err := os.Open(parent)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return err
 }
 
 func parseMode(value string) (os.FileMode, error) {
