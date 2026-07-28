@@ -43,3 +43,4 @@ id_ed25519
 *.sqlite3-shm
 *.sqlite3-wal
 *.log
+/workagent-release

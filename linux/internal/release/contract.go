@@ -31,6 +31,9 @@ func NewConsumerContract(requiredPaths, requiredExecutablePaths []string) (Consu
 }
 
 func (c ConsumerContract) Validate() error {
+	// append([]string{}, nil...) yields a non-nil empty slice; only a
+	// hand-built contract can still carry nil. Both lists may individually be
+	// empty as long as the contract asserts at least one path.
 	if c.RequiredPaths == nil || c.RequiredExecutablePaths == nil ||
 		len(c.RequiredPaths)+len(c.RequiredExecutablePaths) == 0 ||
 		len(c.RequiredPaths)+len(c.RequiredExecutablePaths) > maxConsumerContractPaths {

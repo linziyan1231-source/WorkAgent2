@@ -857,3 +857,14 @@ func TestLoadOptionalBackupConfigDefersOnlyWhenAbsent(t *testing.T) {
 		t.Fatalf("present but unsafe backup config: deferred=%t err=%v", deferred, err)
 	}
 }
+
+func TestAddVerificationFlagsCapturesRepeatedRequirements(t *testing.T) {
+	flags := commandFlags("verify")
+	values := addVerificationFlags(flags, true)
+	if err := flags.Parse([]string{"--root", "/x", "--scope", "portal", "--required", "a/b", "--required-executable", "bin/x", "--required-executable", "bin/y"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(values.required) != 1 || values.required[0] != "a/b" || len(values.requiredExecutable) != 2 || values.requiredExecutable[0] != "bin/x" || values.requiredExecutable[1] != "bin/y" {
+		t.Fatalf("repeated requirement flags were not captured: %+v", values)
+	}
+}

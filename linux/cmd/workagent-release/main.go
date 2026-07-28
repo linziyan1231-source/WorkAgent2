@@ -254,7 +254,7 @@ type verificationFlags struct {
 	components         map[string]string
 }
 
-func addVerificationFlags(flags *flag.FlagSet, includeRoot bool) verificationFlags {
+func addVerificationFlags(flags *flag.FlagSet, includeRoot bool) *verificationFlags {
 	values := verificationFlags{}
 	if includeRoot {
 		values.root = flags.String("root", "", "immutable release root")
@@ -263,7 +263,7 @@ func addVerificationFlags(flags *flag.FlagSet, includeRoot bool) verificationFla
 	values.scope = flags.String("scope", "", "expected component scope")
 	flags.Var(&values.required, "required", "required relative release file; repeat as needed")
 	flags.Var(&values.requiredExecutable, "required-executable", "required canonically executable release file; repeat as needed")
-	return values
+	return &values
 }
 
 func verify(arguments []string) error {
