@@ -335,7 +335,6 @@ func TestConfiguredRuntimeConsumerContractMatchesProductionExamples(t *testing.T
 		map[string]string{"11111111-1111-4111-8111-111111111111": tenantPath},
 		portal.Renderer.ReleasesRoot,
 		portal.Renderer.PointerFile,
-		portal.Renderer.PublicKeyFile,
 		portal.Renderer.Scope,
 	)
 	if err != nil {
@@ -352,10 +351,7 @@ func TestConfiguredRuntimeConsumerContractMatchesProductionExamples(t *testing.T
 	if !slices.Equal(contract.RequiredPaths, wantData) || !slices.Equal(contract.RequiredExecutablePaths, wantExecutables) {
 		t.Fatalf("production runtime consumer contract drifted:\ngot  %#v / %#v\nwant %#v / %#v", contract.RequiredPaths, contract.RequiredExecutablePaths, wantData, wantExecutables)
 	}
-	if _, err := deriveChannelConsumerContract(portal, map[string]string{"11111111-1111-4111-8111-111111111111": tenantPath}, portal.Renderer.ReleasesRoot, portal.Renderer.PointerFile, filepath.Join(filepath.Dir(portal.Renderer.PublicKeyFile), "wrong.pub"), portal.Renderer.Scope); err == nil {
-		t.Fatal("activation with a CLI-supplied foreign trust root was accepted")
-	}
-	if _, err := deriveChannelConsumerContract(portal, map[string]string{"11111111-1111-4111-8111-111111111111": tenantPath}, portal.Renderer.ReleasesRoot, portal.Renderer.PointerFile, portal.Renderer.PublicKeyFile, release.ScopeCombined); err == nil {
+	if _, err := deriveChannelConsumerContract(portal, map[string]string{"11111111-1111-4111-8111-111111111111": tenantPath}, portal.Renderer.ReleasesRoot, portal.Renderer.PointerFile, release.ScopeCombined); err == nil {
 		t.Fatal("combined-scope mutable release activation was accepted")
 	}
 }
@@ -434,9 +430,6 @@ func TestFixedRootConsumerContractsMatchProductionEvidence(t *testing.T) {
 	}
 	if _, err := productionFixedRootSpec("/opt/workagent/other"); err == nil {
 		t.Fatal("non-production fixed-root destination was accepted")
-	}
-	if _, _, err := fixedRootCallbacks(fixedroot.ControlPath, "/tmp/foreign-release.pub", "/etc/workagent/portal.json", true, releaseSystemd{}); err == nil {
-		t.Fatal("foreign fixed-root trust key was accepted")
 	}
 }
 
@@ -526,7 +519,7 @@ func TestFixedRootDrainRejectsActiveSharedConsumerAndUnknownInitialTenant(t *tes
 		t.Fatal("initial fixed-root drain hid a loaded tenant instance behind an empty config set")
 	}
 	initial.loaded = []string{}
-	_, drain, err := fixedRootCallbacks(fixedroot.ControlPath, productionReleasePublicKey, "/missing/bootstrap-portal.json", true, initial)
+	_, drain, err := fixedRootCallbacks(fixedroot.ControlPath, "/missing/bootstrap-portal.json", true, initial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,18 +533,17 @@ func TestFixedRootDrainRejectsActiveSharedConsumerAndUnknownInitialTenant(t *tes
 
 func TestStandaloneVerifyAllowsManifestReleaseIDButRequiresAConsumer(t *testing.T) {
 	missingRoot := filepath.Join(t.TempDir(), "missing-release")
-	publicKey := filepath.Join(t.TempDir(), "release.pub")
-	_, err := verifyRelease(missingRoot, "", publicKey, release.ScopePortal, nil, []string{"bin/workagent-release"}, false)
+	_, err := verifyRelease(missingRoot, "", release.ScopePortal, nil, []string{"bin/workagent-release"}, false)
 	if err == nil || strings.Contains(err.Error(), "release-id") {
-		t.Fatalf("standalone signed-root verification still requires a release ID: %v", err)
+		t.Fatalf("standalone root verification still requires a release ID: %v", err)
 	}
-	_, err = verifyRelease(missingRoot, "", publicKey, release.ScopePortal, nil, nil, false)
+	_, err = verifyRelease(missingRoot, "", release.ScopePortal, nil, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "consumer contract") {
 		t.Fatalf("standalone verification without a consumer contract was accepted: %v", err)
 	}
 }
 
-func TestStandaloneVerifyAcceptsSignedFixedRootWithoutReleaseIDFlag(t *testing.T) {
+func TestStandaloneVerifyAcceptsFixedRootWithoutReleaseIDFlag(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("fixed-root verification requires root-owned release evidence")
 	}
@@ -567,9 +559,7 @@ func TestStandaloneVerifyAcceptsSignedFixedRootWithoutReleaseIDFlag(t *testing.T
 		mode    os.FileMode
 	}{
 		"bin/workagent-release": {payload: "fixed verifier", mode: 0o555},
-		"sbom.spdx.json":        {payload: `{"spdxVersion":"SPDX-2.3","documentNamespace":"https://workagent.example.test/spdx/control-20260727","packages":[{"name":"workagent-control"}]}`, mode: 0o444},
 		"provenance.json":       {payload: `{"schema_version":1,"release_id":"` + releaseID + `","source_revision":"` + sourceRevision + `","builder_id":"approved-builder","build_type":"production-build","invocation_id":"invocation-one","reproducible":true,"materials":[{"uri":"source:workagent","revision":"` + sourceRevision + `"},{"uri":"component:workagent-control@git-111111111111","revision":"` + sourceRevision + `"}]}`, mode: 0o444},
-		"licenses.json":         {payload: `{"schema_version":1,"approved":true,"reviewed_at":"2026-07-27T00:00:00Z","entries":[{"component":"workagent-control","spdx_expression":"Apache-2.0","copyright":"Copyright WorkAgent2"}]}`, mode: 0o444},
 	}
 	for relative, file := range files {
 		path := filepath.Join(root, filepath.FromSlash(relative))
@@ -584,7 +574,6 @@ func TestStandaloneVerifyAcceptsSignedFixedRootWithoutReleaseIDFlag(t *testing.T
 		ReleaseID: releaseID, SourceRevision: sourceRevision, BuiltAt: time.Now().UTC(), BrandingVersion: "brand-one", PolicyVersion: "policy-one",
 		ComponentScope: release.ScopePortal, DataSchemaVersion: 1, MinimumReadableDataSchema: 1, MaximumReadableDataSchema: 1,
 		Components: []release.Component{{Name: "workagent-control", Version: "git-111111111111", SourceRevision: sourceRevision}},
-		SBOMPath:   "sbom.spdx.json", ProvenancePath: "provenance.json", LicenseReportPath: "licenses.json",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -593,20 +582,12 @@ func TestStandaloneVerifyAcceptsSignedFixedRootWithoutReleaseIDFlag(t *testing.T
 	if err := release.WriteManifest(manifestPath, manifestValue); err != nil {
 		t.Fatal(err)
 	}
-	keyRoot := t.TempDir()
-	publicKey, privateKey := filepath.Join(keyRoot, "release.pub"), filepath.Join(keyRoot, "release.key")
-	if err := release.GenerateSigningKey(publicKey, privateKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := release.SignManifest(manifestPath, filepath.Join(root, "manifest.sig"), privateKey, true); err != nil {
-		t.Fatal(err)
-	}
 	for _, directory := range []string{filepath.Join(root, "bin"), root} {
 		if err := os.Chmod(directory, 0o555); err != nil {
 			t.Fatal(err)
 		}
 	}
-	verified, err := verifyRelease(root, "", publicKey, release.ScopePortal, nil, []string{"bin/workagent-release"}, true)
+	verified, err := verifyRelease(root, "", release.ScopePortal, nil, []string{"bin/workagent-release"}, true)
 	if err != nil {
 		t.Fatalf("valid fixed root was rejected without --release-id: %v", err)
 	}
@@ -614,12 +595,12 @@ func TestStandaloneVerifyAcceptsSignedFixedRootWithoutReleaseIDFlag(t *testing.T
 		t.Fatalf("verified release ID %q, want %q", verified.Manifest.ReleaseID, releaseID)
 	}
 	trustedExecutingSourceRevision = func() (string, error) { return strings.Repeat("2", 40), nil }
-	if _, err := verifyRelease(root, "", publicKey, release.ScopePortal, nil, []string{"bin/workagent-release"}, true); err == nil || !strings.Contains(err.Error(), "trusted admission executable") {
-		t.Fatalf("candidate signed by a different source revision was accepted: %v", err)
+	if _, err := verifyRelease(root, "", release.ScopePortal, nil, []string{"bin/workagent-release"}, true); err == nil || !strings.Contains(err.Error(), "trusted admission executable") {
+		t.Fatalf("candidate from a different source revision was accepted: %v", err)
 	}
 }
 
-func TestManifestRejectsComponentBaselineBeforeCreatingSigningOutputs(t *testing.T) {
+func TestManifestRejectsComponentBaselineBeforeCreatingManifest(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("manifest admission requires root-owned release evidence")
 	}
@@ -648,16 +629,12 @@ func TestManifestRejectsComponentBaselineBeforeCreatingSigningOutputs(t *testing
 		"--maximum-readable-data-schema", "1",
 		"--components", componentsPath,
 		"--required-executable", "bin/aioncore",
-		"--private-key", filepath.Join(t.TempDir(), "private.key"),
-		"--public-key", filepath.Join(t.TempDir(), "public.key"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "component baseline") {
-		t.Fatalf("unapproved component baseline was not rejected before signing: %v", err)
+		t.Fatalf("unapproved component baseline was not rejected before manifest creation: %v", err)
 	}
-	for _, name := range []string{"manifest.json", "manifest.sig"} {
-		if _, err := os.Lstat(filepath.Join(releaseRoot, name)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("failed manifest admission created %s: %v", name, err)
-		}
+	if _, err := os.Lstat(filepath.Join(releaseRoot, "manifest.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed manifest admission created manifest.json: %v", err)
 	}
 }
 
@@ -683,10 +660,8 @@ func TestManifestRejectsSourceRevisionDifferentFromAdmissionExecutable(t *testin
 	if err == nil || !strings.Contains(err.Error(), "trusted admission executable") {
 		t.Fatalf("foreign manifest source revision was accepted: %v", err)
 	}
-	for _, name := range []string{"manifest.json", "manifest.sig"} {
-		if _, statErr := os.Lstat(filepath.Join(releaseRoot, name)); !errors.Is(statErr, os.ErrNotExist) {
-			t.Fatalf("failed source admission created %s: %v", name, statErr)
-		}
+	if _, statErr := os.Lstat(filepath.Join(releaseRoot, "manifest.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed source admission created manifest.json: %v", statErr)
 	}
 }
 
@@ -725,10 +700,8 @@ func TestPreflightOutputRejectsEveryProtectedInputPath(t *testing.T) {
 	pointerPath := write("channel/current.json")
 	maintenanceSessionPath := write("secrets/maintenance-session")
 	inputs := release.PreflightInputs{
-		TargetManifestPath:  write("channel/releases/release-one/manifest.json"),
-		TargetSignaturePath: write("channel/releases/release-one/manifest.sig"),
-		PublicKeyPath:       write("keys/release.pub"),
-		PortalConfigPath:    write("config/portal.json"),
+		TargetManifestPath: write("channel/releases/release-one/manifest.json"),
+		PortalConfigPath:   write("config/portal.json"),
 		TenantConfigPaths: map[string]string{
 			"11111111-1111-4111-8111-111111111111": write("config/users/11111111-1111-4111-8111-111111111111.json"),
 		},
@@ -748,8 +721,6 @@ func TestPreflightOutputRejectsEveryProtectedInputPath(t *testing.T) {
 	protected := []string{
 		pointerPath,
 		inputs.TargetManifestPath,
-		inputs.TargetSignaturePath,
-		inputs.PublicKeyPath,
 		inputs.PortalConfigPath,
 		inputs.TenantConfigPaths["11111111-1111-4111-8111-111111111111"],
 		inputs.BackupConfigPath,
@@ -800,10 +771,8 @@ func TestPreflightOutputRejectsSymlinkHardlinkAndCanonicalAliases(t *testing.T) 
 	}
 	pointerPath := filepath.Join(channelDirectory, "current.json")
 	inputs := release.PreflightInputs{
-		TargetManifestPath:  write("channel/releases/release-one/manifest.json"),
-		TargetSignaturePath: write("channel/releases/release-one/manifest.sig"),
-		PublicKeyPath:       write("keys/release.pub"),
-		PortalConfigPath:    write("config/portal.json"),
+		TargetManifestPath: write("channel/releases/release-one/manifest.json"),
+		PortalConfigPath:   write("config/portal.json"),
 		TenantConfigPaths: map[string]string{
 			"11111111-1111-4111-8111-111111111111": write("config/users/11111111-1111-4111-8111-111111111111.json"),
 		},

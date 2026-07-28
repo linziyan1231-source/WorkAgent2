@@ -48,16 +48,12 @@ func (values *repeatedFlag) Set(value string) error {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: workagent-release <keygen|provenance|license-template|validate-layout|manifest|verify|preflight|activate|rollback|fixed-install|fixed-rollback|fixed-reconcile> [options]")
+		fatal("usage: workagent-release <provenance|validate-layout|manifest|verify|preflight|activate|rollback|fixed-install|fixed-rollback|fixed-reconcile> [options]")
 	}
 	var err error
 	switch os.Args[1] {
-	case "keygen":
-		err = keygen(os.Args[2:])
 	case "provenance":
 		err = provenance(os.Args[2:])
-	case "license-template":
-		err = licenseTemplate(os.Args[2:])
 	case "validate-layout":
 		err = validateLayout(os.Args[2:])
 	case "manifest":
@@ -131,30 +127,6 @@ func provenance(arguments []string) error {
 	return output(map[string]any{"created": true, "reproducible": true, "release_id": value.ReleaseID, "materials": len(value.Materials), "provenance": *outputPath})
 }
 
-func licenseTemplate(arguments []string) error {
-	flags := commandFlags("license-template")
-	componentsPath := flags.String("components", "", "JSON component-list path")
-	outputPath := flags.String("output", "", "absolute private review-template output path")
-	if err := flags.Parse(arguments); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 || !cleanAbsolute(*outputPath) {
-		return errors.New("license-template requires a clean absolute --output and no positional arguments")
-	}
-	components, err := release.LoadComponents(*componentsPath, false)
-	if err != nil {
-		return err
-	}
-	value, err := release.NewLicenseReviewTemplate(components)
-	if err != nil {
-		return err
-	}
-	if err := release.WriteLicenseReviewTemplate(*outputPath, value); err != nil {
-		return err
-	}
-	return output(map[string]any{"approved": false, "components": len(value.Entries), "created": true, "template": *outputPath})
-}
-
 func commandFlags(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -195,19 +167,6 @@ func sourceRevisionFromBuildInfo(build *debug.BuildInfo, ok bool) (string, error
 	return revision, nil
 }
 
-func keygen(arguments []string) error {
-	flags := commandFlags("keygen")
-	publicKey := flags.String("public-key", "", "absolute public verification key path")
-	privateKey := flags.String("private-key", "", "absolute private signing key path")
-	if err := flags.Parse(arguments); err != nil {
-		return err
-	}
-	if err := release.GenerateSigningKey(*publicKey, *privateKey); err != nil {
-		return err
-	}
-	return output(map[string]any{"created": true, "public_key": *publicKey, "private_key": *privateKey})
-}
-
 func manifest(arguments []string) error {
 	flags := commandFlags("manifest")
 	root := flags.String("root", "", "immutable release root")
@@ -220,11 +179,6 @@ func manifest(arguments []string) error {
 	minimumReadableDataSchema := flags.Int("minimum-readable-data-schema", 0, "oldest data schema readable by this release")
 	maximumReadableDataSchema := flags.Int("maximum-readable-data-schema", 0, "newest data schema readable by this release")
 	componentsPath := flags.String("components", "", "protected JSON component-list path")
-	sbom := flags.String("sbom", "sbom.spdx.json", "relative SBOM path")
-	provenance := flags.String("provenance", "provenance.json", "relative provenance path")
-	licenses := flags.String("licenses", "licenses.json", "relative approved license-report path")
-	privateKey := flags.String("private-key", "", "protected private signing key path")
-	publicKey := flags.String("public-key", "", "trusted public verification key path")
 	var required repeatedFlag
 	flags.Var(&required, "required", "required canonical non-executable consumer file; repeat as needed")
 	var requiredExecutable repeatedFlag
@@ -245,12 +199,10 @@ func manifest(arguments []string) error {
 	if err := release.ValidateSignReadyTree(*root, true); err != nil {
 		return fmt.Errorf("release tree is not sign-ready: %w", err)
 	}
-	for _, name := range []string{"manifest.json", "manifest.sig"} {
-		if _, err := os.Lstat(filepath.Join(*root, name)); err == nil {
-			return fmt.Errorf("release signing output %s already exists", name)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	if _, err := os.Lstat(filepath.Join(*root, "manifest.json")); err == nil {
+		return errors.New("release manifest output manifest.json already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	consumerContract, err := release.NewConsumerContract(required, requiredExecutable)
 	if err != nil {
@@ -266,7 +218,7 @@ func manifest(arguments []string) error {
 	value, err := release.BuildManifest(*root, release.Manifest{
 		ReleaseID: *releaseID, SourceRevision: *revision, BuiltAt: time.Now().UTC(), BrandingVersion: *branding, PolicyVersion: *policy,
 		ComponentScope: *scope, DataSchemaVersion: *dataSchema, MinimumReadableDataSchema: *minimumReadableDataSchema, MaximumReadableDataSchema: *maximumReadableDataSchema,
-		Components: components, SBOMPath: *sbom, ProvenancePath: *provenance, LicenseReportPath: *licenses,
+		Components: components,
 	})
 	if err != nil {
 		return err
@@ -275,28 +227,23 @@ func manifest(arguments []string) error {
 		return err
 	}
 	manifestPath := filepath.Join(*root, "manifest.json")
-	signaturePath := filepath.Join(*root, "manifest.sig")
 	if err := release.WriteManifest(manifestPath, value); err != nil {
 		return err
 	}
-	if err := release.SignManifest(manifestPath, signaturePath, *privateKey, true); err != nil {
-		return err
-	}
 	verified, err := release.Verify(*root, manifestPath, release.VerifyOptions{
-		ExpectedReleaseID: *releaseID, ExpectedSourceRevision: executableRevision, RequireRootOwner: true, RequireSignature: true, SignaturePath: signaturePath, PublicKeyPath: *publicKey,
+		ExpectedReleaseID: *releaseID, ExpectedSourceRevision: executableRevision, RequireRootOwner: true,
 		AllowedScopes: []string{*scope}, RequireAdmissionBaseline: true,
 		RequiredPaths: consumerContract.RequiredPaths, RequiredExecutablePaths: consumerContract.RequiredExecutablePaths,
 	})
 	if err != nil {
 		return err
 	}
-	return output(map[string]any{"created": true, "signed": true, "release_id": verified.Manifest.ReleaseID, "scope": verified.Manifest.ComponentScope, "files": len(verified.Manifest.Files)})
+	return output(map[string]any{"created": true, "release_id": verified.Manifest.ReleaseID, "scope": verified.Manifest.ComponentScope, "files": len(verified.Manifest.Files)})
 }
 
 type verificationFlags struct {
 	root               *string
 	releaseID          *string
-	publicKey          *string
 	scope              *string
 	required           repeatedFlag
 	requiredExecutable repeatedFlag
@@ -307,13 +254,21 @@ type verificationFlags struct {
 	components         map[string]string
 }
 
+// ignoredPublicKeyFlag keeps the retired --public-key flag parseable while the
+// pinned systemd and deploy contract strings that still pass it are updated.
+// The value is accepted and ignored; unsigned SHA-256 manifest verification no
+// longer consumes any trust key. Remove together with the contract strings.
+func ignoredPublicKeyFlag(flags *flag.FlagSet) {
+	_ = flags.String("public-key", "", "retired and ignored: unsigned release verification uses no trust key")
+}
+
 func addVerificationFlags(flags *flag.FlagSet, includeRoot bool) verificationFlags {
 	values := verificationFlags{}
 	if includeRoot {
 		values.root = flags.String("root", "", "immutable release root")
 	}
 	values.releaseID = flags.String("release-id", "", "expected release identifier")
-	values.publicKey = flags.String("public-key", "", "trusted public verification key path")
+	ignoredPublicKeyFlag(flags)
 	values.scope = flags.String("scope", "", "expected component scope")
 	flags.Var(&values.required, "required", "required relative release file; repeat as needed")
 	flags.Var(&values.requiredExecutable, "required-executable", "required canonically executable release file; repeat as needed")
@@ -330,14 +285,12 @@ func verify(arguments []string) error {
 	if !cleanAbsolute(*values.root) {
 		return errors.New("--root must be a clean absolute path")
 	}
-	verified, err := verifyRelease(*values.root, *values.releaseID, *values.publicKey, *values.scope, values.required, values.requiredExecutable, *admissionBaseline)
+	verified, err := verifyRelease(*values.root, *values.releaseID, *values.scope, values.required, values.requiredExecutable, *admissionBaseline)
 	if err != nil {
 		return err
 	}
 	return output(map[string]any{"verified": true, "release_id": verified.Manifest.ReleaseID, "scope": verified.Manifest.ComponentScope, "files": len(verified.Manifest.Files)})
 }
-
-const productionReleasePublicKey = "/etc/workagent/trust/release-signing.pub"
 
 type fixedRootSpec struct {
 	scope    string
@@ -425,9 +378,9 @@ func productionFixedRootSpec(destination string) (fixedRootSpec, error) {
 func fixedInstall(arguments []string) error {
 	flags := commandFlags("fixed-install")
 	destination := flags.String("destination", "", "exact fixed-root destination")
-	stagedRoot := flags.String("staged-root", "", "complete signed sibling stage")
+	stagedRoot := flags.String("staged-root", "", "complete verified sibling stage")
 	expectedCurrent := flags.String("expected-current-release", "", "exact current release ID; omit only for first install")
-	publicKey := flags.String("public-key", productionReleasePublicKey, "trusted public verification key path")
+	ignoredPublicKeyFlag(flags)
 	portalConfig := flags.String("portal-config", "/etc/workagent/portal.json", "protected Portal configuration path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -435,7 +388,7 @@ func fixedInstall(arguments []string) error {
 	if flags.NArg() != 0 {
 		return errors.New("fixed-install does not accept positional arguments")
 	}
-	verify, drain, err := fixedRootCallbacks(*destination, *publicKey, *portalConfig, *expectedCurrent == "", systemdctl.Default())
+	verify, drain, err := fixedRootCallbacks(*destination, *portalConfig, *expectedCurrent == "", systemdctl.Default())
 	if err != nil {
 		return err
 	}
@@ -460,7 +413,7 @@ func fixedRollback(arguments []string) error {
 	destination := flags.String("destination", "", "exact fixed-root destination")
 	expectedCurrent := flags.String("expected-current-release", "", "exact current release ID")
 	expectedPrevious := flags.String("expected-previous-release", "", "exact previous release ID")
-	publicKey := flags.String("public-key", productionReleasePublicKey, "trusted public verification key path")
+	ignoredPublicKeyFlag(flags)
 	portalConfig := flags.String("portal-config", "/etc/workagent/portal.json", "protected Portal configuration path")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -468,7 +421,7 @@ func fixedRollback(arguments []string) error {
 	if flags.NArg() != 0 {
 		return errors.New("fixed-rollback does not accept positional arguments")
 	}
-	verify, drain, err := fixedRootCallbacks(*destination, *publicKey, *portalConfig, false, systemdctl.Default())
+	verify, drain, err := fixedRootCallbacks(*destination, *portalConfig, false, systemdctl.Default())
 	if err != nil {
 		return err
 	}
@@ -491,7 +444,7 @@ func fixedRollback(arguments []string) error {
 func fixedReconcile(arguments []string) error {
 	flags := commandFlags("fixed-reconcile")
 	destination := flags.String("destination", "", "exact fixed-root destination")
-	publicKey := flags.String("public-key", productionReleasePublicKey, "trusted public verification key path")
+	ignoredPublicKeyFlag(flags)
 	portalConfig := flags.String("portal-config", "/etc/workagent/portal.json", "protected Portal configuration path")
 	initial := flags.Bool("initial", false, "recover only a pending first control-root install before tenant configuration exists")
 	if err := flags.Parse(arguments); err != nil {
@@ -503,7 +456,7 @@ func fixedReconcile(arguments []string) error {
 	if *initial && *destination != fixedroot.ControlPath {
 		return errors.New("fixed-reconcile --initial is restricted to /opt/workagent/control")
 	}
-	verify, drain, err := fixedRootCallbacks(*destination, *publicKey, *portalConfig, *initial, systemdctl.Default())
+	verify, drain, err := fixedRootCallbacks(*destination, *portalConfig, *initial, systemdctl.Default())
 	if err != nil {
 		return err
 	}
@@ -526,13 +479,10 @@ func fixedReconcile(arguments []string) error {
 	return output(result)
 }
 
-func fixedRootCallbacks(destination, publicKey, portalConfigPath string, initialFleet bool, controller systemdctl.Controller) (fixedroot.VerifyFunc, fixedroot.DrainFunc, error) {
+func fixedRootCallbacks(destination, portalConfigPath string, initialFleet bool, controller systemdctl.Controller) (fixedroot.VerifyFunc, fixedroot.DrainFunc, error) {
 	spec, err := productionFixedRootSpec(destination)
 	if err != nil {
 		return nil, nil, err
-	}
-	if publicKey != productionReleasePublicKey {
-		return nil, nil, errors.New("fixed-root operations require the exact production release trust key")
 	}
 	if controller == nil {
 		return nil, nil, errors.New("fixed-root operations require a systemd controller")
@@ -544,7 +494,7 @@ func fixedRootCallbacks(destination, publicKey, portalConfigPath string, initial
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		verified, err := verifyRelease(root, "", publicKey, spec.scope, spec.contract.RequiredPaths, spec.contract.RequiredExecutablePaths, candidate)
+		verified, err := verifyRelease(root, "", spec.scope, spec.contract.RequiredPaths, spec.contract.RequiredExecutablePaths, candidate)
 		if err != nil {
 			return "", err
 		}
@@ -597,7 +547,7 @@ func preflight(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	consumerContract, err := deriveChannelConsumerContract(portal, tenantConfigs, *releasesRoot, *pointerPath, *values.publicKey, *values.scope)
+	consumerContract, err := deriveChannelConsumerContract(portal, tenantConfigs, *releasesRoot, *pointerPath, *values.scope)
 	if err != nil {
 		return err
 	}
@@ -617,7 +567,7 @@ func preflight(arguments []string) error {
 		return fmt.Errorf("preflight host check: %w", errors.Join(err, host.Error()))
 	}
 	targetRoot := filepath.Join(*releasesRoot, *values.releaseID)
-	target, err := verifyRelease(targetRoot, *values.releaseID, *values.publicKey, *values.scope, consumerContract.RequiredPaths, consumerContract.RequiredExecutablePaths, true)
+	target, err := verifyRelease(targetRoot, *values.releaseID, *values.scope, consumerContract.RequiredPaths, consumerContract.RequiredExecutablePaths, true)
 	if err != nil {
 		return fmt.Errorf("preflight target release check: %w", err)
 	}
@@ -675,7 +625,7 @@ func preflight(arguments []string) error {
 	if err := backup.VerifyEnvironment(backupConfiguration, true); err != nil {
 		return fmt.Errorf("preflight backup destination check: %w", err)
 	}
-	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, *backupConfigPath, backupConfiguration, targetRoot, *values.publicKey, brand, policy)
+	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, *backupConfigPath, backupConfiguration, targetRoot, brand, policy)
 	if err != nil {
 		return err
 	}
@@ -778,7 +728,7 @@ func activate(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	consumerContract, err := deriveChannelConsumerContract(portal, tenantConfigs, *releasesRoot, *pointer, *values.publicKey, *values.scope)
+	consumerContract, err := deriveChannelConsumerContract(portal, tenantConfigs, *releasesRoot, *pointer, *values.scope)
 	if err != nil {
 		return err
 	}
@@ -801,7 +751,7 @@ func activate(arguments []string) error {
 		return fmt.Errorf("activation backup destination check: %w", err)
 	}
 	targetRoot := filepath.Join(*releasesRoot, *values.releaseID)
-	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, *backupConfigPath, backupConfiguration, targetRoot, *values.publicKey, brand, policy)
+	inputs, err := newPreflightInputs(portal, *portalConfigPath, tenantConfigs, *backupConfigPath, backupConfiguration, targetRoot, brand, policy)
 	if err != nil {
 		return err
 	}
@@ -838,7 +788,7 @@ func activate(arguments []string) error {
 	if err != nil {
 		return fmt.Errorf("activation admission executable: %w", err)
 	}
-	verified, err := release.ActivateVerified(*releasesRoot, *pointer, *values.releaseID, *values.publicKey, release.ResolveOptions{
+	verified, err := release.ActivateVerified(*releasesRoot, *pointer, *values.releaseID, release.ResolveOptions{
 		Scope: *values.scope, ExpectedSourceRevision: executableRevision, RequiredPaths: consumerContract.RequiredPaths, RequiredExecutablePaths: consumerContract.RequiredExecutablePaths, RequireRootOwner: true, RequireAdmissionBaseline: true, RequireCurrentMatch: true, ExpectedCurrentRelease: currentRelease,
 	}, time.Now().UTC())
 	if err != nil {
@@ -851,7 +801,7 @@ func rollback(arguments []string) error {
 	flags := commandFlags("rollback")
 	pointerPath := flags.String("pointer", "", "absolute current pointer path")
 	releasesRoot := flags.String("releases-root", "", "root containing immutable releases")
-	publicKey := flags.String("public-key", "", "trusted public verification key path")
+	ignoredPublicKeyFlag(flags)
 	scope := flags.String("scope", "", "expected component scope")
 	portalConfigPath := flags.String("portal-config", "/etc/workagent/portal.json", "Portal configuration path")
 	var required repeatedFlag
@@ -878,7 +828,7 @@ func rollback(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	consumerContract, err := deriveChannelConsumerContract(portal, tenantConfigs, *releasesRoot, *pointerPath, *publicKey, *scope)
+	consumerContract, err := deriveChannelConsumerContract(portal, tenantConfigs, *releasesRoot, *pointerPath, *scope)
 	if err != nil {
 		return err
 	}
@@ -888,7 +838,7 @@ func rollback(arguments []string) error {
 	if err := ensureReleaseFleetStopped(context.Background(), portal, tenantConfigs, *scope, systemdctl.Default()); err != nil {
 		return fmt.Errorf("rollback drain gate failed: %w", err)
 	}
-	next, _, err := release.RollbackVerified(*releasesRoot, *pointerPath, *publicKey, release.ResolveOptions{
+	next, _, err := release.RollbackVerified(*releasesRoot, *pointerPath, release.ResolveOptions{
 		Scope: *scope, RequiredPaths: consumerContract.RequiredPaths, RequiredExecutablePaths: consumerContract.RequiredExecutablePaths, RequireRootOwner: true,
 	}, time.Now().UTC())
 	if err != nil {
@@ -1116,9 +1066,9 @@ func ensureExactLoadedTenantUnits(ctx context.Context, tenantUnits []string, con
 	return nil
 }
 
-func verifyRelease(root, releaseID, publicKey, scope string, required, requiredExecutable []string, admissionBaseline bool) (release.Verified, error) {
-	if scope == "" || !cleanAbsolute(publicKey) {
-		return release.Verified{}, errors.New("--scope and a clean absolute --public-key are required")
+func verifyRelease(root, releaseID, scope string, required, requiredExecutable []string, admissionBaseline bool) (release.Verified, error) {
+	if scope == "" {
+		return release.Verified{}, errors.New("--scope is required")
 	}
 	expectedSourceRevision := ""
 	if admissionBaseline {
@@ -1133,17 +1083,14 @@ func verifyRelease(root, releaseID, publicKey, scope string, required, requiredE
 		return release.Verified{}, fmt.Errorf("release verification consumer contract: %w", err)
 	}
 	return release.Verify(root, filepath.Join(root, "manifest.json"), release.VerifyOptions{
-		ExpectedReleaseID: releaseID, ExpectedSourceRevision: expectedSourceRevision, RequiredPaths: contract.RequiredPaths, RequiredExecutablePaths: contract.RequiredExecutablePaths, RequireRootOwner: true, RequireSignature: true,
-		SignaturePath: filepath.Join(root, "manifest.sig"), PublicKeyPath: publicKey, AllowedScopes: []string{scope}, RequireAdmissionBaseline: admissionBaseline,
+		ExpectedReleaseID: releaseID, ExpectedSourceRevision: expectedSourceRevision, RequiredPaths: contract.RequiredPaths, RequiredExecutablePaths: contract.RequiredExecutablePaths, RequireRootOwner: true,
+		AllowedScopes: []string{scope}, RequireAdmissionBaseline: admissionBaseline,
 	})
 }
 
-func deriveChannelConsumerContract(portal config.Portal, tenantConfigs map[string]string, releasesRoot, pointerPath, publicKeyPath, scope string) (release.ConsumerContract, error) {
+func deriveChannelConsumerContract(portal config.Portal, tenantConfigs map[string]string, releasesRoot, pointerPath, scope string) (release.ConsumerContract, error) {
 	if err := validateChannelPaths(releasesRoot, pointerPath); err != nil {
 		return release.ConsumerContract{}, err
-	}
-	if !cleanAbsolute(publicKeyPath) {
-		return release.ConsumerContract{}, errors.New("release public key path is not canonical")
 	}
 	if scope != release.ScopeRuntime {
 		return release.ConsumerContract{}, errors.New("the configured mutable release pointer is restricted to runtime scope")
@@ -1153,7 +1100,7 @@ func deriveChannelConsumerContract(portal config.Portal, tenantConfigs map[strin
 	addRequired := func(path string) { required[filepath.ToSlash(path)] = true }
 	addExecutable := func(path string) { requiredExecutables[filepath.ToSlash(path)] = true }
 
-	if !portal.Renderer.Configured() || portal.Renderer.ReleasesRoot != releasesRoot || portal.Renderer.PointerFile != pointerPath || portal.Renderer.PublicKeyFile != publicKeyPath || portal.Renderer.Scope != scope {
+	if !portal.Renderer.Configured() || portal.Renderer.ReleasesRoot != releasesRoot || portal.Renderer.PointerFile != pointerPath || portal.Renderer.Scope != scope {
 		return release.ConsumerContract{}, errors.New("activation channel does not exactly match the protected Portal Renderer channel")
 	}
 	addRequired(filepath.Join(portal.Renderer.RelativeRoot, "index.html"))
@@ -1265,7 +1212,7 @@ func verifyReleaseTenantCatalogAdmission(
 	return nil
 }
 
-func newPreflightInputs(portal config.Portal, portalConfigPath string, tenantConfigs map[string]string, backupConfigPath string, backupConfiguration backup.Config, targetRoot, publicKeyPath string, brand productconfig.Brand, policy productconfig.Policy) (release.PreflightInputs, error) {
+func newPreflightInputs(portal config.Portal, portalConfigPath string, tenantConfigs map[string]string, backupConfigPath string, backupConfiguration backup.Config, targetRoot string, brand productconfig.Brand, policy productconfig.Policy) (release.PreflightInputs, error) {
 	assets := make(map[string]string, 4)
 	for _, name := range []string{"app-icon", "favicon", "logo", "logo-dark"} {
 		path, ok := brand.AssetPath(name)
@@ -1275,18 +1222,16 @@ func newPreflightInputs(portal config.Portal, portalConfigPath string, tenantCon
 		assets[name] = path
 	}
 	inputs := release.PreflightInputs{
-		TargetManifestPath:  filepath.Join(targetRoot, "manifest.json"),
-		TargetSignaturePath: filepath.Join(targetRoot, "manifest.sig"),
-		PublicKeyPath:       publicKeyPath,
-		PortalConfigPath:    portalConfigPath,
-		TenantConfigPaths:   tenantConfigs,
-		BackupConfigPath:    backupConfigPath,
-		BackupKeyPath:       backupConfiguration.EncryptionKey,
-		BrandID:             brand.BrandID,
-		BrandConfigPath:     portal.BrandFile,
-		BrandAssetPaths:     assets,
-		PolicyID:            policy.PolicyID,
-		PolicyConfigPath:    portal.PolicyFile,
+		TargetManifestPath: filepath.Join(targetRoot, "manifest.json"),
+		PortalConfigPath:   portalConfigPath,
+		TenantConfigPaths:  tenantConfigs,
+		BackupConfigPath:   backupConfigPath,
+		BackupKeyPath:      backupConfiguration.EncryptionKey,
+		BrandID:            brand.BrandID,
+		BrandConfigPath:    portal.BrandFile,
+		BrandAssetPaths:    assets,
+		PolicyID:           policy.PolicyID,
+		PolicyConfigPath:   portal.PolicyFile,
 	}
 	if err := inputs.Validate(); err != nil {
 		return release.PreflightInputs{}, err
@@ -1313,8 +1258,6 @@ func validatePreflightOutputPath(outputPath, pointerPath, maintenanceSessionPath
 	protected := []protectedPreflightPath{
 		{label: "release pointer", path: pointerPath},
 		{label: "target manifest", path: inputs.TargetManifestPath},
-		{label: "target signature", path: inputs.TargetSignaturePath},
-		{label: "public key", path: inputs.PublicKeyPath},
 		{label: "Portal config", path: inputs.PortalConfigPath},
 		{label: "backup config", path: inputs.BackupConfigPath},
 		{label: "backup encryption key", path: inputs.BackupKeyPath},
