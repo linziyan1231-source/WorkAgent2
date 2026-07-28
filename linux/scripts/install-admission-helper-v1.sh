@@ -3,18 +3,37 @@ set -euo pipefail
 export LC_ALL=C
 export PATH=/usr/bin:/bin
 
-readonly destination=/usr/libexec/workagent-core-activation-admission-v1
-readonly install_lock=/run/workagent/fixed-root-exec-v1-install.lock
-script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
-readonly source_file=$script_directory/../share/deploy/libexec/workagent-core-activation-admission-v1
-readonly stage_prefix=/usr/libexec/.workagent-core-activation-admission-v1.
-temporary=
-temporary_durable=false
-
 fail() {
-  printf 'install-core-activation-admission-v1: %s\n' "$*" >&2
+  printf 'install-admission-helper-v1: %s\n' "$*" >&2
   exit 1
 }
+
+if (( $# > 1 )); then
+  fail "usage: install-admission-helper-v1.sh HELPER"
+fi
+if (( $# == 1 )); then
+  helper_slug=$1
+else
+  # Installed copies are named install-HELPER-admission-v1 and accept no arguments.
+  invoked_name=$(basename -- "$0")
+  helper_slug=${invoked_name#install-}
+  helper_slug=${helper_slug%-admission-v1}
+fi
+case $helper_slug in
+  core-activation | edge-publication | recovery-activation) ;;
+  *) fail "unknown admission helper: $helper_slug" ;;
+esac
+readonly helper_slug
+readonly helper_name=workagent-$helper_slug-admission-v1
+readonly helper_label="${helper_slug//-/ } admission helper"
+
+readonly destination=/usr/libexec/$helper_name
+readonly install_lock=/run/workagent/fixed-root-exec-v1-install.lock
+script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+readonly source_file=$script_directory/../share/deploy/libexec/$helper_name
+readonly stage_prefix=/usr/libexec/.$helper_name.
+temporary=
+temporary_durable=false
 
 valid_stage_name() {
   local staged=$1 suffix
@@ -40,14 +59,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if (( $# != 0 )); then
-  fail "this installer accepts no arguments"
-fi
 if (( EUID != 0 )); then
   fail "root is required"
 fi
 if [[ ! -f $source_file || -L $source_file || $(stat -Lc '%U:%G:%a:%h' -- "$source_file" 2>/dev/null || true) != root:root:555:1 ]]; then
-  fail "the immutable core activation admission helper is absent from final source-gate evidence"
+  fail "the immutable $helper_label is absent from final source-gate evidence"
 fi
 for directory in /usr /usr/libexec; do
   if [[ -L $directory || ! -d $directory || $(readlink -f -- "$directory" 2>/dev/null || true) != "$directory" ]]; then
@@ -119,7 +135,7 @@ publish_staged_copy() {
 
 create_staged_copy() {
   local source_size staged_size
-  temporary=$(mktemp --tmpdir=/usr/libexec .workagent-core-activation-admission-v1.XXXXXXXX)
+  temporary=$(mktemp --tmpdir=/usr/libexec ".$helper_name.XXXXXXXX")
   valid_stage_name "$temporary" || fail "mktemp returned an unexpected admission-helper stage name"
   [[ $(stat -Lc '%u:%g:%a:%h:%s' -- "$temporary" 2>/dev/null || true) == 0:0:600:1:0 ]] ||
     fail "mktemp created an unsafe admission-helper stage"
@@ -158,14 +174,14 @@ if [[ -n $temporary && $destination_present == true ]]; then
   destination_inode=$(stat -Lc '%d:%i' -- "$destination" 2>/dev/null || true)
   if verify_copy "$temporary" 2 && verify_copy "$destination" 2 && [[ -n $temporary_inode && $temporary_inode == "$destination_inode" ]]; then
     finish_linked_copy "$temporary"
-    printf 'reconciled linked immutable core activation admission helper v1\n'
+    printf 'reconciled linked immutable %s v1\n' "$helper_label"
     exit 0
   fi
   fail "the interrupted admission-helper state is ambiguous or conflicting"
 elif [[ -n $temporary ]]; then
   if verify_copy "$temporary" 1; then
     publish_staged_copy "$temporary"
-    printf 'resumed immutable core activation admission helper v1 installation\n'
+    printf 'resumed immutable %s v1 installation\n' "$helper_label"
     exit 0
   elif discard_work_stage "$temporary"; then
     printf 'discarded interrupted admission-helper work stage before retry\n'
@@ -174,10 +190,10 @@ elif [[ -n $temporary ]]; then
   fi
 elif [[ $destination_present == true ]]; then
   verify_installed || fail "the versioned admission-helper destination exists with conflicting bytes or metadata"
-  printf 'core activation admission helper v1 is already installed and verified\n'
+  printf '%s v1 is already installed and verified\n' "$helper_label"
   exit 0
 fi
 
 create_staged_copy
 publish_staged_copy "$temporary"
-printf 'installed immutable core activation admission helper v1\n'
+printf 'installed immutable %s v1\n' "$helper_label"

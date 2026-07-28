@@ -58,7 +58,7 @@ func newEdgeAdmissionInstallerFixture(t *testing.T) edgeAdmissionInstallerFixtur
 	if err := os.Chmod(installLock, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	installer := repositoryFile(t, "scripts/install-edge-publication-admission-v1.sh")
+	installer := repositoryFile(t, "scripts/install-admission-helper-v1.sh")
 	installer = strings.ReplaceAll(installer, "/usr/libexec", libexecDir)
 	installer = strings.ReplaceAll(installer, "/run/workagent", runDir)
 	if err := os.WriteFile(fixture.installer, []byte(installer), 0o700); err != nil {

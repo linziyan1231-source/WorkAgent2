@@ -123,12 +123,13 @@ func TestEdgePublicationDirectoriesAndEvidenceAbsenceAreProvisioned(t *testing.T
 }
 
 func TestEdgePublicationAdmissionHelperIsPackagedAndNoReplaceInstalled(t *testing.T) {
-	requireRepositoryExecutable(t, "scripts/install-edge-publication-admission-v1.sh")
-	installer := repositoryFile(t, "scripts/install-edge-publication-admission-v1.sh")
+	requireRepositoryExecutable(t, "scripts/install-admission-helper-v1.sh")
+	installer := repositoryFile(t, "scripts/install-admission-helper-v1.sh")
 	requireContains(t, installer,
-		"readonly destination=/usr/libexec/workagent-edge-publication-admission-v1",
-		"readonly source_file=$script_directory/../share/deploy/libexec/workagent-edge-publication-admission-v1",
-		"readonly stage_prefix=/usr/libexec/.workagent-edge-publication-admission-v1.",
+		"core-activation | edge-publication | recovery-activation",
+		"readonly destination=/usr/libexec/$helper_name",
+		"readonly source_file=$script_directory/../share/deploy/libexec/$helper_name",
+		"readonly stage_prefix=/usr/libexec/.$helper_name.",
 		`ln -T -- "$staged" "$destination"`,
 		`verify_copy "$temporary" 1`,
 		`chmod 0555 -- "$temporary"`,
@@ -137,7 +138,7 @@ func TestEdgePublicationAdmissionHelperIsPackagedAndNoReplaceInstalled(t *testin
 	sourceGate := repositoryFile(t, "scripts/source-gate.sh")
 	requireContains(t, sourceGate,
 		`'deploy/libexec/workagent-edge-publication-admission-v1' \`,
-		`install -m 0555 scripts/install-edge-publication-admission-v1.sh "$administration_directory/install-edge-publication-admission-v1"`,
+		`install -m 0555 scripts/install-admission-helper-v1.sh "$administration_directory/install-edge-publication-admission-v1"`,
 		"admin/install-edge-publication-admission-v1",
 		"share/deploy/libexec/workagent-edge-publication-admission-v1",
 	)

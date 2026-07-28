@@ -848,10 +848,10 @@ done
 install -m 0555 scripts/production-healthcheck.sh "$binary_directory/workagent-healthcheck"
 administration_directory=$artifact_directory/control-plane/admin
 mkdir -p "$administration_directory"
-install -m 0555 scripts/install-edge-publication-admission-v1.sh "$administration_directory/install-edge-publication-admission-v1"
-install -m 0555 scripts/install-core-activation-admission-v1.sh "$administration_directory/install-core-activation-admission-v1"
+install -m 0555 scripts/install-admission-helper-v1.sh "$administration_directory/install-core-activation-admission-v1"
+install -m 0555 scripts/install-admission-helper-v1.sh "$administration_directory/install-edge-publication-admission-v1"
+install -m 0555 scripts/install-admission-helper-v1.sh "$administration_directory/install-recovery-activation-admission-v1"
 install -m 0555 scripts/install-fixed-root-exec-v1.sh "$administration_directory/install-fixed-root-exec-v1"
-install -m 0555 scripts/install-recovery-activation-admission-v1.sh "$administration_directory/install-recovery-activation-admission-v1"
 install -m 0555 scripts/production-host-prepare.sh "$administration_directory/production-host-prepare"
 install -m 0555 scripts/production-preflight.sh "$administration_directory/production-preflight"
 install -m 0555 scripts/smoke-chatforward-browser-sandbox.sh "$administration_directory/smoke-chatforward-browser-sandbox"
