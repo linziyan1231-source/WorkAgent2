@@ -646,13 +646,17 @@ func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testi
 		"workagent.example.invalid",
 		"admin unix//run/caddy-admin/admin.sock",
 		"auto_https disable_redirects",
-		"disable_http_challenge",
 		"request>uri delete",
 		"request>headers delete",
 		"roll_size 100MiB",
 	)
-	if strings.Contains(caddy, "sslip.io") || strings.Contains(caddy, "tls internal") {
-		t.Fatal("Caddy contains a stale hostname or untrusted TLS fallback")
+	// Interim state approved by the owner: the cloud middlebox kills
+	// TLS-ALPN-01 handshakes and port 80 is occupied by an unrelated workload,
+	// so no public ACME path exists on this host. The edge serves the Caddy
+	// internal CA until a publicly verifiable certificate path is restored.
+	requireContains(t, caddy, "tls internal")
+	if strings.Contains(caddy, "sslip.io") || strings.Contains(caddy, "issuer acme") {
+		t.Fatal("Caddy contains a stale hostname or a broken ACME fallback")
 	}
 	if strings.Contains(caddy, "admin 127.0.0.1") {
 		t.Fatal("Caddy administrative API is exposed to tenant-reachable loopback TCP")
