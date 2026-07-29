@@ -2,7 +2,7 @@
 	# Tenant runtimes can reach loopback TCP. Keep the administrative API behind
 	# a caddy-owned mode-0700 RuntimeDirectory instead.
 	admin unix//run/caddy-admin/admin.sock
-	auto_https disable_redirects
+	auto_https off
 	servers {
 		protocols h1 h2
 	}
@@ -14,7 +14,7 @@
 # verifiable certificate path, the edge serves cleartext HTTP on the public
 # IP. Passwords and session credentials cross the network unencrypted; this is
 # accepted only as a temporary state.
-http://:443 {
+:443 {
 	encode zstd gzip
 	log {
 		output file /var/log/caddy/workagent-access.log {
