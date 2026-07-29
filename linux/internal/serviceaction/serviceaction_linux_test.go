@@ -789,7 +789,7 @@ func TestCaddyLiveConfigMatchesRunningAdminAPI(t *testing.T) {
 				http.Error(writer, "invalid adapt request", http.StatusBadRequest)
 				return
 			}
-			_, _ = writer.Write([]byte(`{"admin":{"listen":"unix//admin.sock"},"apps":{"http":{"servers":{"edge":{"listen":[":443"]}}}}}`))
+			_, _ = writer.Write([]byte(`{"result":{"admin":{"listen":"unix//admin.sock"},"apps":{"http":{"servers":{"edge":{"listen":[":443"]}}}}}}`))
 		case "/config/":
 			_, _ = writer.Write([]byte(live.Load().(string)))
 		default:
