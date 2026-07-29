@@ -1165,8 +1165,13 @@ func requireTenantCatalogReady(ctx context.Context, controller systemdctl.Contro
 	if properties["LoadState"] != "loaded" || properties["UnitFileState"] != "static" {
 		return errors.New("tenant catalog readiness target is not loaded and static")
 	}
-	if err := controller.Action(ctx, "start", tenantCatalogReadyTarget); err != nil {
-		return fmt.Errorf("start tenant catalog readiness target: %w", err)
+	if properties["ActiveState"] != "active" {
+		// Starting the target re-runs its Required crash-reconciliation oneshot,
+		// whose offline Portal identity inspection is only possible while the
+		// Portal is stopped. An already-active target must never be restarted.
+		if err := controller.Action(ctx, "start", tenantCatalogReadyTarget); err != nil {
+			return fmt.Errorf("start tenant catalog readiness target: %w", err)
+		}
 	}
 	properties, err = controller.Properties(ctx, tenantCatalogReadyTarget, "LoadState", "ActiveState", "UnitFileState")
 	if err != nil {
