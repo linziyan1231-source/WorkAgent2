@@ -8,7 +8,7 @@ import (
 
 const (
 	productionPortalAddress      = "127.0.0.1:42580"
-	productionPortalPublicOrigin = "https://workagent.example.invalid"
+	productionPortalPublicOrigin = "http://192.0.2.1:443"
 )
 
 // ValidateProductionPortalEdgeBinding proves the Portal listener and public

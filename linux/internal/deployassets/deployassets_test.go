@@ -97,7 +97,7 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 	if err := portal.ValidateProductionLayout("/etc/workagent/portal.json"); err != nil {
 		t.Fatal(err)
 	}
-	if portal.Listener.PublicOrigin != "https://workagent.example.invalid" || portal.OutboundProxyURL != "http://127.0.0.1:8118" || portal.Runtime.MaxConcurrentInstances != 20 || portal.Runtime.IdleReapSeconds != 1800 || portal.Notifications.Endpoint != "http://127.0.0.1:25888/notification" || portal.Renderer.RelativeRoot != "static" {
+	if portal.Listener.PublicOrigin != "http://192.0.2.1:443" || portal.OutboundProxyURL != "http://127.0.0.1:8118" || portal.Runtime.MaxConcurrentInstances != 20 || portal.Runtime.IdleReapSeconds != 1800 || portal.Notifications.Endpoint != "http://127.0.0.1:25888/notification" || portal.Renderer.RelativeRoot != "static" {
 		t.Fatalf("Portal production contract drifted: %#v", portal)
 	}
 
@@ -116,7 +116,7 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 	chat := repositoryFile(t, "config/chatforward.example.env")
 	requireContains(t, chat,
 		"CHATFORWARD_PORTAL_URL=http://127.0.0.1:42580",
-		"CHATFORWARD_MIRROR_URL=https://workagent.example.invalid/chatgpt/",
+		"CHATFORWARD_MIRROR_URL=http://192.0.2.1:443/chatgpt/",
 		"CHATFORWARD_CHROMIUM_BIN=/usr/bin/google-chrome-stable",
 		"CHATFORWARD_OUTBOUND_PROXY_URL=http://127.0.0.1:8118",
 	)
@@ -643,7 +643,7 @@ func TestSourceGatePackagesTheControlPlaneCommands(t *testing.T) {
 func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testing.T) {
 	caddy := repositoryFile(t, "deploy/caddy/Caddyfile")
 	requireContains(t, caddy,
-		"workagent.example.invalid",
+		"http://:443",
 		"admin unix//run/caddy-admin/admin.sock",
 		"auto_https disable_redirects",
 		"request>uri delete",
@@ -652,11 +652,12 @@ func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testi
 	)
 	// Interim state approved by the owner: the cloud middlebox kills
 	// TLS-ALPN-01 handshakes and port 80 is occupied by an unrelated workload,
-	// so no public ACME path exists on this host. The edge serves the Caddy
-	// internal CA until a publicly verifiable certificate path is restored.
-	requireContains(t, caddy, "tls internal")
-	if strings.Contains(caddy, "sslip.io") || strings.Contains(caddy, "issuer acme") {
-		t.Fatal("Caddy contains a stale hostname or a broken ACME fallback")
+	// so no public ACME path exists on this host. Until the owner brings a
+	// real domain with a verifiable certificate path, the edge serves
+	// cleartext HTTP on the public IP.
+	requireContains(t, caddy, "http://:443")
+	if strings.Contains(caddy, "sslip.io") || strings.Contains(caddy, "tls internal") || strings.Contains(caddy, "issuer acme") || strings.Contains(caddy, "Strict-Transport-Security") {
+		t.Fatal("Caddy contains a stale hostname, an untrusted TLS fallback, or HTTPS-only headers on the plain-HTTP edge")
 	}
 	if strings.Contains(caddy, "admin 127.0.0.1") {
 		t.Fatal("Caddy administrative API is exposed to tenant-reachable loopback TCP")

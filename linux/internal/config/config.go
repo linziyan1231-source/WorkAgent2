@@ -366,8 +366,14 @@ func (p Portal) ValidateProductionLayout(configPath string) error {
 	if !p.Runtime.RequireDedicatedUID || !p.Runtime.RequireProjectQuota || !p.Runtime.RequireReleaseHashes {
 		return errors.New("Portal production isolation requirements must all be enabled")
 	}
-	if p.Listener.Network != "tcp" || p.Listener.AllowInsecureLoopback || !p.Listener.RequireForwardedHTTPS || p.Listener.TLSCertificateFile != "" || p.Listener.TLSPrivateKeyFile != "" {
-		return errors.New("Portal production traffic must use the shared HTTPS proxy and a cleartext loopback TCP listener with forwarded-HTTPS attestation")
+	if p.Listener.Network != "tcp" || p.Listener.AllowInsecureLoopback || p.Listener.TLSCertificateFile != "" || p.Listener.TLSPrivateKeyFile != "" {
+		return errors.New("Portal production traffic must use the shared edge proxy and a cleartext loopback TCP listener")
+	}
+	// Two coherent edge modes are admitted: forwarded-HTTPS attestation behind
+	// a TLS edge, or the owner-approved interim plain-HTTP edge used while no
+	// public certificate path exists on this host.
+	if p.Listener.RequireForwardedHTTPS && p.Listener.PublicOrigin != "" && !strings.HasPrefix(p.Listener.PublicOrigin, "https://") {
+		return errors.New("Portal production forwarded-HTTPS mode requires an HTTPS public origin")
 	}
 	for _, value := range p.Listener.TrustedProxyCIDRs {
 		prefix, err := netip.ParsePrefix(value)
@@ -528,10 +534,11 @@ func (l Listener) validate() error {
 	if err != nil || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") {
 		return errors.New("listener.public_origin must be an origin without credentials, path, query, or fragment")
 	}
-	if origin.Scheme != "https" {
-		if !l.AllowInsecureLoopback || origin.Scheme != "http" || !originIsLoopback(origin) {
-			return errors.New("listener.public_origin must use HTTPS")
-		}
+	if origin.Scheme != "https" && origin.Scheme != "http" {
+		return errors.New("listener.public_origin must use HTTPS or HTTP")
+	}
+	if origin.Scheme == "http" && !originIsLoopback(origin) && !l.AllowInsecureLoopback && l.RequireForwardedHTTPS {
+		return errors.New("listener.public_origin must use HTTPS")
 	}
 	if len(l.TrustedProxyCIDRs) == 0 {
 		return errors.New("listener.trusted_proxy_cidrs must not be empty")
@@ -556,11 +563,16 @@ func (l Listener) validate() error {
 }
 
 func (s SessionPolicy) validate() error {
-	if !strings.HasPrefix(s.CookieName, "__Host-") || strings.ContainsAny(s.CookieName, " ;,\t\r\n") {
-		return errors.New("session.cookie_name must be a valid __Host- cookie name")
+	if strings.ContainsAny(s.CookieName, " ;,\t\r\n") {
+		return errors.New("session.cookie_name contains invalid characters")
 	}
-	if !s.Secure || !s.HTTPOnly || (!strings.EqualFold(s.SameSite, "strict") && !strings.EqualFold(s.SameSite, "lax")) {
-		return errors.New("session cookies must be Secure, HttpOnly, and SameSite Strict or Lax")
+	// The __Host- cookie prefix is only honored by browsers alongside the
+	// Secure attribute; a plain-HTTP interim edge must use a plain name.
+	if strings.HasPrefix(s.CookieName, "__Host-") && !s.Secure {
+		return errors.New("__Host- session cookies require the Secure attribute")
+	}
+	if !s.HTTPOnly || (!strings.EqualFold(s.SameSite, "strict") && !strings.EqualFold(s.SameSite, "lax")) {
+		return errors.New("session cookies must be HttpOnly and SameSite Strict or Lax")
 	}
 	if s.IdleTimeoutSeconds < 300 || s.AbsoluteTimeoutSeconds <= s.IdleTimeoutSeconds || s.AbsoluteTimeoutSeconds > 7*24*60*60 {
 		return errors.New("session timeouts are outside the allowed range")
@@ -635,8 +647,8 @@ func (t Tenant) Validate() error {
 		return errors.New("portal_uid must be a non-root UID")
 	}
 	portalOrigin, err := url.Parse(t.PortalOrigin)
-	if err != nil || portalOrigin.Scheme != "https" || portalOrigin.Host == "" || portalOrigin.User != nil || portalOrigin.RawQuery != "" || portalOrigin.Fragment != "" || (portalOrigin.Path != "" && portalOrigin.Path != "/") {
-		return errors.New("portal_origin must be an HTTPS origin")
+	if err != nil || (portalOrigin.Scheme != "https" && portalOrigin.Scheme != "http") || portalOrigin.Host == "" || portalOrigin.User != nil || portalOrigin.RawQuery != "" || portalOrigin.Fragment != "" || (portalOrigin.Path != "" && portalOrigin.Path != "/") {
+		return errors.New("portal_origin must be an HTTPS or HTTP origin")
 	}
 	if t.IdleReapSeconds < 60 || t.IdleReapSeconds > 86400 {
 		return errors.New("idle_reap_seconds must be between 60 and 86400")

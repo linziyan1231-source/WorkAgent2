@@ -8,9 +8,13 @@
 	}
 }
 
-workagent.example.invalid {
-	tls internal
-
+# Interim owner-approved plain-HTTP edge: the cloud middlebox kills TLS-ALPN-01
+# handshakes and port 80 belongs to an unrelated workload, so no public ACME
+# path exists on this host. Until the owner brings a real domain with a
+# verifiable certificate path, the edge serves cleartext HTTP on the public
+# IP. Passwords and session credentials cross the network unencrypted; this is
+# accepted only as a temporary state.
+http://:443 {
 	encode zstd gzip
 	log {
 		output file /var/log/caddy/workagent-access.log {
@@ -33,7 +37,6 @@ workagent.example.invalid {
 
 	header {
 		-Server
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "same-origin"
 		Permissions-Policy "camera=(), geolocation=(), microphone=()"
@@ -42,7 +45,5 @@ workagent.example.invalid {
 	@internal path /internal /internal/*
 	respond @internal 404
 
-	reverse_proxy 127.0.0.1:42580 {
-		header_up X-Forwarded-Proto https
-	}
+	reverse_proxy 127.0.0.1:42580
 }

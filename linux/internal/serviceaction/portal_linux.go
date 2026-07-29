@@ -165,7 +165,7 @@ func VerifyPortalEdgePublicationReadiness(ctx context.Context, portal config.Por
 		return PortalEdgeGeneration{}, err
 	}
 	publicOrigin, err := url.Parse(portal.Listener.PublicOrigin)
-	if err != nil || publicOrigin.Scheme != "https" || publicOrigin.Host == "" || publicOrigin.Path != "" || publicOrigin.RawQuery != "" || publicOrigin.Fragment != "" {
+	if err != nil || (publicOrigin.Scheme != "https" && publicOrigin.Scheme != "http") || publicOrigin.Host == "" || publicOrigin.Path != "" || publicOrigin.RawQuery != "" || publicOrigin.Fragment != "" {
 		return PortalEdgeGeneration{}, errors.New("Portal public origin is invalid for edge readiness")
 	}
 	endpoint := "http://" + portal.Listener.Address + "/readyz"
@@ -180,8 +180,10 @@ func VerifyPortalEdgePublicationReadiness(ctx context.Context, portal config.Por
 		transport.DialContext = func(dialContext context.Context, _, _ string) (net.Conn, error) {
 			return dialer.DialContext(dialContext, "tcp", "127.0.0.1:443")
 		}
-		transport.ForceAttemptHTTP2 = true
-		transport.TLSHandshakeTimeout = 5 * time.Second
+		if publicOrigin.Scheme == "https" {
+			transport.ForceAttemptHTTP2 = true
+			transport.TLSHandshakeTimeout = 5 * time.Second
+		}
 	}
 	client := &http.Client{
 		Transport: transport,

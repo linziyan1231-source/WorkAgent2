@@ -7,16 +7,16 @@
   "listener": {
     "network": "tcp",
     "address": "127.0.0.1:42580",
-    "public_origin": "https://workagent.example.invalid",
+    "public_origin": "http://192.0.2.1:443",
     "trusted_proxy_cidrs": [
       "127.0.0.1/32",
       "::1/128"
     ],
-    "require_forwarded_https": true
+    "require_forwarded_https": false
   },
   "session": {
-    "cookie_name": "__Host-aionui-portal",
-    "secure": true,
+    "cookie_name": "aionui-portal",
+    "secure": false,
     "http_only": true,
     "same_site": "lax",
     "idle_timeout_seconds": 1800,

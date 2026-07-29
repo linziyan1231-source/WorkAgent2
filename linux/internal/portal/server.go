@@ -37,6 +37,16 @@ import (
 
 const csrfCookieName = "__Host-aionui-portal-csrf"
 
+// cookieNameForEdge returns the configured cookie name adjusted for the edge
+// mode: the __Host- prefix is only honored over HTTPS, so the interim
+// plain-HTTP edge strips it rather than having browsers reject the cookie.
+func (s *Server) cookieNameForEdge(name string) string {
+	if s.cfg.Session.Secure {
+		return name
+	}
+	return strings.TrimPrefix(name, "__Host-")
+}
+
 type Server struct {
 	cfg                config.Portal
 	store              *store.Store
@@ -450,7 +460,7 @@ func (s *Server) login(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	userValue = currentUser
-	if previous, err := sessionToken(request, s.cfg.Session.CookieName); err == nil {
+	if previous, err := sessionToken(request, s.cookieNameForEdge(s.cfg.Session.CookieName)); err == nil {
 		if err := s.store.DeleteSession(request.Context(), previous); err != nil {
 			s.internalError(writer, "invalidate previous session", err)
 			return
@@ -617,7 +627,7 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) logout(writer http.ResponseWriter, request *http.Request) {
-	token, _ := sessionToken(request, s.cfg.Session.CookieName)
+	token, _ := sessionToken(request, s.cookieNameForEdge(s.cfg.Session.CookieName))
 	if err := s.store.DeleteSession(request.Context(), token); err != nil {
 		s.internalError(writer, "delete session", err)
 		return
@@ -634,7 +644,7 @@ func (s *Server) logout(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) logoutCompatibility(writer http.ResponseWriter, request *http.Request) {
-	token, tokenErr := sessionToken(request, s.cfg.Session.CookieName)
+	token, tokenErr := sessionToken(request, s.cookieNameForEdge(s.cfg.Session.CookieName))
 	if tokenErr != nil {
 		s.clearSessionCookies(writer)
 		writeJSON(writer, http.StatusOK, map[string]any{"success": true, "status": "signed_out"})
@@ -699,7 +709,7 @@ func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) sessionForRequest(request *http.Request) (store.Session, error) {
-	token, err := sessionToken(request, s.cfg.Session.CookieName)
+	token, err := sessionToken(request, s.cookieNameForEdge(s.cfg.Session.CookieName))
 	if err != nil {
 		return store.Session{}, err
 	}
@@ -728,7 +738,7 @@ func (s *Server) withAdmin(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		value := request.Context().Value(sessionContextKey).(store.Session)
-		csrfCookie, err := request.Cookie(csrfCookieName)
+		csrfCookie, err := request.Cookie(s.cookieNameForEdge(csrfCookieName))
 		header := request.Header.Get("X-CSRF-Token")
 		headerHash := store.TokenHash(header)
 		if err != nil || header == "" || csrfCookie.Value != header || subtle.ConstantTimeCompare(value.CSRFHash, headerHash) != 1 {
@@ -947,8 +957,8 @@ func (s *Server) setSessionCookies(writer http.ResponseWriter, sessionToken, csr
 	if strings.EqualFold(s.cfg.Session.SameSite, "lax") {
 		mode = http.SameSiteLaxMode
 	}
-	http.SetCookie(writer, &http.Cookie{Name: s.cfg.Session.CookieName, Value: sessionToken, Path: "/", Secure: true, HttpOnly: true, SameSite: mode, Expires: expires, MaxAge: s.cfg.Session.AbsoluteTimeoutSeconds})
-	http.SetCookie(writer, &http.Cookie{Name: csrfCookieName, Value: csrfToken, Path: "/", Secure: true, HttpOnly: false, SameSite: mode, Expires: expires, MaxAge: s.cfg.Session.AbsoluteTimeoutSeconds})
+	http.SetCookie(writer, &http.Cookie{Name: s.cookieNameForEdge(s.cfg.Session.CookieName), Value: sessionToken, Path: "/", Secure: s.cfg.Session.Secure, HttpOnly: true, SameSite: mode, Expires: expires, MaxAge: s.cfg.Session.AbsoluteTimeoutSeconds})
+	http.SetCookie(writer, &http.Cookie{Name: s.cookieNameForEdge(csrfCookieName), Value: csrfToken, Path: "/", Secure: s.cfg.Session.Secure, HttpOnly: false, SameSite: mode, Expires: expires, MaxAge: s.cfg.Session.AbsoluteTimeoutSeconds})
 }
 
 func (s *Server) clearSessionCookies(writer http.ResponseWriter) {
@@ -957,7 +967,7 @@ func (s *Server) clearSessionCookies(writer http.ResponseWriter) {
 		mode = http.SameSiteLaxMode
 	}
 	for _, name := range []string{s.cfg.Session.CookieName, csrfCookieName} {
-		http.SetCookie(writer, &http.Cookie{Name: name, Value: "", Path: "/", Secure: true, HttpOnly: name == s.cfg.Session.CookieName, SameSite: mode, MaxAge: -1, Expires: time.Unix(1, 0)})
+		http.SetCookie(writer, &http.Cookie{Name: s.cookieNameForEdge(name), Value: "", Path: "/", Secure: s.cfg.Session.Secure, HttpOnly: name == s.cfg.Session.CookieName, SameSite: mode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	}
 }
 
