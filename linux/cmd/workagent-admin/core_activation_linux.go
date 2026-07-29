@@ -750,7 +750,9 @@ func enableAndProveCoreTimer(ctx context.Context, controller systemdctl.Controll
 		return err
 	}
 	// systemd applies the timer state transition asynchronously; the readback
-	// immediately after the start job can still report activating.
+	// immediately after the start job can still report activating. A persistent
+	// timer with an overdue schedule fires at once and briefly reports elapsed
+	// while its target service runs; both are valid armed states.
 	var properties map[string]string
 	var err error
 	for attempt := 1; attempt <= 50; attempt++ {
@@ -758,11 +760,11 @@ func enableAndProveCoreTimer(ctx context.Context, controller systemdctl.Controll
 		if err != nil {
 			return err
 		}
-		if properties["UnitFileState"] == "enabled" && properties["ActiveState"] == "active" && properties["SubState"] == "waiting" {
+		if properties["UnitFileState"] == "enabled" && properties["ActiveState"] == "active" && (properties["SubState"] == "waiting" || properties["SubState"] == "elapsed") {
 			break
 		}
 		if attempt == 50 {
-			return errors.New("core timer is not persistently enabled, active, and waiting")
+			return fmt.Errorf("core timer %s is not persistently enabled and active (unit_file_state=%s active_state=%s sub_state=%s)", timer, properties["UnitFileState"], properties["ActiveState"], properties["SubState"])
 		}
 		select {
 		case <-ctx.Done():
