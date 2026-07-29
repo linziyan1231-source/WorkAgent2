@@ -311,7 +311,7 @@ func caddyPublishingGenerationFromProperties(properties map[string]string) (Cadd
 	return CaddyPublishingGeneration{
 		MainPID: properties["MainPID"], ControlPID: properties["ControlPID"], InvocationID: properties["InvocationID"],
 		ExecMainStartTimestampMonotonic: properties["ExecMainStartTimestampMonotonic"], FragmentPath: properties["FragmentPath"], DropInPaths: properties["DropInPaths"],
-		ExecStart: properties["ExecStart"], ExecStartPre: properties["ExecStartPre"], ExecStartPost: properties["ExecStartPost"],
+		ExecStart: stableExecVector(properties["ExecStart"]), ExecStartPre: stableExecVector(properties["ExecStartPre"]), ExecStartPost: stableExecVector(properties["ExecStartPost"]),
 	}, nil
 }
 

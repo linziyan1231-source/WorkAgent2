@@ -27,6 +27,26 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/systemdctl"
 )
 
+// stableExecVector reduces a manager-loaded Exec vector to its durable
+// command identity. systemd appends volatile runtime fields (start_time,
+// stop_time, pid, code, status) to every record once a process runs, which
+// must not register as a generation change.
+func stableExecVector(value string) string {
+	records := strings.Split(value, " ; { path=")
+	for index, record := range records {
+		if index > 0 {
+			record = "{ path=" + record
+		}
+		if cut := strings.Index(record, " ; ignore_errors="); cut >= 0 {
+			record = record[:cut]
+		} else if cut := strings.Index(record, " ; flags="); cut >= 0 {
+			record = record[:cut]
+		}
+		records[index] = record
+	}
+	return strings.Join(records, " ; ")
+}
+
 // PortalEdgeGeneration is the authenticated running identity of
 // workagent-portal.service at one point in time.
 type PortalEdgeGeneration struct {
@@ -221,7 +241,7 @@ func CapturePortalEdgeGeneration(ctx context.Context, portal config.Portal, cont
 	}
 	return PortalEdgeGeneration{
 		MainPID: after["MainPID"], InvocationID: after["InvocationID"], ActiveEnterTimestampMonotonic: after["ActiveEnterTimestampMonotonic"],
-		FragmentPath: after["FragmentPath"], DropInPaths: after["DropInPaths"], ExecStart: after["ExecStart"],
+		FragmentPath: after["FragmentPath"], DropInPaths: after["DropInPaths"], ExecStart: stableExecVector(after["ExecStart"]),
 	}, nil
 }
 
