@@ -447,11 +447,17 @@ func verifyCaddyLiveConfigAt(ctx context.Context, socketPath, signedCaddyfilePat
 	if err != nil {
 		return fmt.Errorf("adapt signed Caddyfile through the running Caddy generation: %w", err)
 	}
+	// The adapt endpoint wraps the configuration in a result envelope;
+	// /config/ returns the bare object. Both are canonical JSON.
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(adapted, &envelope); err != nil || len(envelope["result"]) == 0 {
+		return errors.Join(errors.New("Caddy adapt response is missing its result configuration"), err)
+	}
 	live, err := requestCaddyAdminJSON(ctx, client, http.MethodGet, "http://localhost/config/", nil, "")
 	if err != nil {
 		return fmt.Errorf("read running Caddy configuration: %w", err)
 	}
-	if !bytes.Equal(adapted, live) {
+	if !bytes.Equal(envelope["result"], live) {
 		return errors.New("running Caddy configuration is not semantically equal to the signed Caddyfile")
 	}
 	parentAfter, parentAfterErr := os.Lstat(parentPath)
