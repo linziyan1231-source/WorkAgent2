@@ -808,8 +808,8 @@ func verifyCoreFleetDesiredState(ctx context.Context, controller systemdctl.Cont
 	}
 	for _, timer := range coreTimerUnits {
 		properties, err := authenticateCoreUnitState(ctx, controller, timer, verifySource)
-		if err != nil || properties["UnitFileState"] != "enabled" || properties["ActiveState"] != "active" || properties["SubState"] != "waiting" {
-			return errors.Join(errors.New("core timer final state is not enabled, active, and waiting"), err)
+		if err != nil || properties["UnitFileState"] != "enabled" || properties["ActiveState"] != "active" || (properties["SubState"] != "waiting" && properties["SubState"] != "elapsed") {
+			return errors.Join(errors.New("core timer final state is not enabled and active"), err)
 		}
 	}
 	target, err := authenticateCoreUnitState(ctx, controller, "workagent-tenant-catalog-ready.target", verifySource)
