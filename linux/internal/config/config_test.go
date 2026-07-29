@@ -175,7 +175,7 @@ func TestProductionLayoutRequiresSharedHTTPSProxyBoundary(t *testing.T) {
 			value.Listener.Address = "/run/workagent/portal.sock"
 		},
 		"HTTPS attestation with a plain-HTTP origin": func(value *Portal) { value.Listener.RequireForwardedHTTPS = true },
-		"insecure loopback bypass":  func(value *Portal) { value.Listener.AllowInsecureLoopback = true },
+		"cleartext loopback rejected in plain-HTTP mode": func(value *Portal) { value.Listener.AllowInsecureLoopback = false },
 		"direct TLS termination": func(value *Portal) {
 			value.Listener.TLSCertificateFile = "/etc/workagent/tls/portal.crt"
 			value.Listener.TLSPrivateKeyFile = "/etc/workagent/tls/portal.key"

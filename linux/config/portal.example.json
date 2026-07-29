@@ -12,7 +12,8 @@
       "127.0.0.1/32",
       "::1/128"
     ],
-    "require_forwarded_https": false
+    "require_forwarded_https": false,
+    "allow_insecure_loopback": true
   },
   "session": {
     "cookie_name": "aionui-portal",

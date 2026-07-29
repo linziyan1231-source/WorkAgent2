@@ -366,14 +366,19 @@ func (p Portal) ValidateProductionLayout(configPath string) error {
 	if !p.Runtime.RequireDedicatedUID || !p.Runtime.RequireProjectQuota || !p.Runtime.RequireReleaseHashes {
 		return errors.New("Portal production isolation requirements must all be enabled")
 	}
-	if p.Listener.Network != "tcp" || p.Listener.AllowInsecureLoopback || p.Listener.TLSCertificateFile != "" || p.Listener.TLSPrivateKeyFile != "" {
+	if p.Listener.Network != "tcp" || p.Listener.TLSCertificateFile != "" || p.Listener.TLSPrivateKeyFile != "" {
 		return errors.New("Portal production traffic must use the shared edge proxy and a cleartext loopback TCP listener")
 	}
 	// Two coherent edge modes are admitted: forwarded-HTTPS attestation behind
 	// a TLS edge, or the owner-approved interim plain-HTTP edge used while no
-	// public certificate path exists on this host.
-	if p.Listener.RequireForwardedHTTPS && p.Listener.PublicOrigin != "" && !strings.HasPrefix(p.Listener.PublicOrigin, "https://") {
-		return errors.New("Portal production forwarded-HTTPS mode requires an HTTPS public origin")
+	// public certificate path exists on this host. The interim mode allows
+	// cleartext only from loopback peers.
+	if p.Listener.RequireForwardedHTTPS {
+		if p.Listener.AllowInsecureLoopback || !strings.HasPrefix(p.Listener.PublicOrigin, "https://") {
+			return errors.New("Portal production forwarded-HTTPS mode forbids insecure loopback and requires an HTTPS public origin")
+		}
+	} else if !p.Listener.AllowInsecureLoopback {
+		return errors.New("Portal production plain-HTTP mode must scope cleartext to loopback peers")
 	}
 	for _, value := range p.Listener.TrustedProxyCIDRs {
 		prefix, err := netip.ParsePrefix(value)
