@@ -749,12 +749,26 @@ func enableAndProveCoreTimer(ctx context.Context, controller systemdctl.Controll
 	if err := controller.Action(ctx, "start", timer); err != nil {
 		return err
 	}
-	properties, err := authenticateCoreUnitState(ctx, controller, timer, verifySource)
-	if err != nil {
-		return err
-	}
-	if properties["UnitFileState"] != "enabled" || properties["ActiveState"] != "active" || properties["SubState"] != "waiting" {
-		return errors.New("core timer is not persistently enabled, active, and waiting")
+	// systemd applies the timer state transition asynchronously; the readback
+	// immediately after the start job can still report activating.
+	var properties map[string]string
+	var err error
+	for attempt := 1; attempt <= 50; attempt++ {
+		properties, err = authenticateCoreUnitState(ctx, controller, timer, verifySource)
+		if err != nil {
+			return err
+		}
+		if properties["UnitFileState"] == "enabled" && properties["ActiveState"] == "active" && properties["SubState"] == "waiting" {
+			break
+		}
+		if attempt == 50 {
+			return errors.New("core timer is not persistently enabled, active, and waiting")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	// Persistent timers may immediately launch their oneshot target. The
 	// backup target can be blocked on the A_EX lock held by this transaction;
