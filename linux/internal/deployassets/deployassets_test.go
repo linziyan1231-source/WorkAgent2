@@ -97,7 +97,7 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 	if err := portal.ValidateProductionLayout("/etc/workagent/portal.json"); err != nil {
 		t.Fatal(err)
 	}
-	if portal.Listener.PublicOrigin != "http://192.0.2.1:443" || portal.OutboundProxyURL != "http://127.0.0.1:8118" || portal.Runtime.MaxConcurrentInstances != 20 || portal.Runtime.IdleReapSeconds != 1800 || portal.Notifications.Endpoint != "http://127.0.0.1:25888/notification" || portal.Renderer.RelativeRoot != "static" {
+	if portal.Listener.PublicOrigin != "http://192.0.2.1:8443" || portal.OutboundProxyURL != "http://127.0.0.1:8118" || portal.Runtime.MaxConcurrentInstances != 20 || portal.Runtime.IdleReapSeconds != 1800 || portal.Notifications.Endpoint != "http://127.0.0.1:25888/notification" || portal.Renderer.RelativeRoot != "static" {
 		t.Fatalf("Portal production contract drifted: %#v", portal)
 	}
 
@@ -116,7 +116,7 @@ func TestProductionExamplesUseTheMigratedHostContract(t *testing.T) {
 	chat := repositoryFile(t, "config/chatforward.example.env")
 	requireContains(t, chat,
 		"CHATFORWARD_PORTAL_URL=http://127.0.0.1:42580",
-		"CHATFORWARD_MIRROR_URL=http://192.0.2.1:443/chatgpt/",
+		"CHATFORWARD_MIRROR_URL=http://192.0.2.1:8443/chatgpt/",
 		"CHATFORWARD_CHROMIUM_BIN=/usr/bin/google-chrome-stable",
 		"CHATFORWARD_OUTBOUND_PROXY_URL=http://127.0.0.1:8118",
 	)

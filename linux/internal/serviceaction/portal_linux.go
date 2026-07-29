@@ -178,7 +178,7 @@ func VerifyPortalEdgePublicationReadiness(ctx context.Context, portal config.Por
 		endpoint = strings.TrimSuffix(portal.Listener.PublicOrigin, "/") + "/readyz"
 		dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}
 		transport.DialContext = func(dialContext context.Context, _, _ string) (net.Conn, error) {
-			return dialer.DialContext(dialContext, "tcp", "127.0.0.1:443")
+			return dialer.DialContext(dialContext, "tcp", "127.0.0.1:8443")
 		}
 		if publicOrigin.Scheme == "https" {
 			transport.ForceAttemptHTTP2 = true

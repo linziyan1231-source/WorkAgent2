@@ -7,7 +7,7 @@
   "listener": {
     "network": "tcp",
     "address": "127.0.0.1:42580",
-    "public_origin": "http://192.0.2.1:443",
+    "public_origin": "http://192.0.2.1:8443",
     "trusted_proxy_cidrs": [
       "127.0.0.1/32",
       "::1/128"
