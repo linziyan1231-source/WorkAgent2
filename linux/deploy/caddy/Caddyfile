@@ -9,13 +9,7 @@
 }
 
 workagent.example.invalid {
-	tls {
-		issuer acme {
-			# TCP 80 belongs to an unrelated workload. Do not attempt HTTP-01;
-			# issuance must succeed through public TCP 443 with TLS-ALPN-01.
-			disable_http_challenge
-		}
-	}
+	tls internal
 
 	encode zstd gzip
 	log {
