@@ -355,7 +355,8 @@ func SettleCommittedCaddyEdge(ctx context.Context, controller systemdctl.Control
 		stamp, stampErr := strconv.ParseUint(properties["ActiveEnterTimestampMonotonic"], 10, 64)
 		stable := properties["MainPID"] == expected.MainPID && properties["InvocationID"] == expected.InvocationID &&
 			properties["ExecMainStartTimestampMonotonic"] == expected.ExecMainStartTimestampMonotonic && properties["FragmentPath"] == expected.FragmentPath &&
-			properties["DropInPaths"] == expected.DropInPaths && properties["ExecStart"] == expected.ExecStart && properties["ExecStartPre"] == expected.ExecStartPre && properties["ExecStartPost"] == expected.ExecStartPost
+			properties["DropInPaths"] == expected.DropInPaths && stableExecVector(properties["ExecStart"]) == expected.ExecStart &&
+			stableExecVector(properties["ExecStartPre"]) == expected.ExecStartPre && stableExecVector(properties["ExecStartPost"]) == expected.ExecStartPost
 		if authErr != nil || !stable {
 			return errors.Join(errors.New("Caddy generation or authenticated source changed while its committed watcher settled"), authErr, errorUnless(stable, "Caddy committed generation identity changed"))
 		}
