@@ -655,7 +655,7 @@ func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testi
 	// so no public ACME path exists on this host. Until the owner brings a
 	// real domain with a verifiable certificate path, the edge serves
 	// cleartext HTTP on the public IP.
-	requireContains(t, caddy, "http://:443")
+	requireContains(t, caddy, "auto_https off")
 	if strings.Contains(caddy, "sslip.io") || strings.Contains(caddy, "tls internal") || strings.Contains(caddy, "issuer acme") || strings.Contains(caddy, "Strict-Transport-Security") {
 		t.Fatal("Caddy contains a stale hostname, an untrusted TLS fallback, or HTTPS-only headers on the plain-HTTP edge")
 	}
