@@ -643,9 +643,8 @@ func TestSourceGatePackagesTheControlPlaneCommands(t *testing.T) {
 func TestTLSAndMonitoringNeverSubstituteLocalEvidenceForPublicReadiness(t *testing.T) {
 	caddy := repositoryFile(t, "deploy/caddy/Caddyfile")
 	requireContains(t, caddy,
-		"http://:443",
+		"auto_https off",
 		"admin unix//run/caddy-admin/admin.sock",
-		"auto_https disable_redirects",
 		"request>uri delete",
 		"request>headers delete",
 		"roll_size 100MiB",
