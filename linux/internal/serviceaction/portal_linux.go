@@ -165,7 +165,7 @@ func VerifyPortalEdgePublicationReadiness(ctx context.Context, portal config.Por
 	}
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   8 * time.Second,
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("Portal readiness redirected")
 		},

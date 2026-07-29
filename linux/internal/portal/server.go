@@ -336,7 +336,7 @@ func (s *Server) health(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) ready(writer http.ResponseWriter, request *http.Request) {
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 	report := s.readiness(ctx)
 	s.metrics.readinessRuns.Add(1)
