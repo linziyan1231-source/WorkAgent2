@@ -44,7 +44,14 @@ func TestApplyInitialAgentDefaultsEnablesOnlyAionCodexAndKimiOnce(t *testing.T) 
 		t.Fatalf("unexpected enabled agents: %v", got)
 	}
 	assertYoloAssistantDefaults(t, db)
+	assertAssistantVisibility(t, db, []string{"codex", "kimi"}, []string{"aionui-assistant"}, []string{"aionui-assistant"})
 	if _, err := db.Exec(`UPDATE agent_metadata SET enabled=1 WHERE id='qwen'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE assistant_overlays SET enabled=1 WHERE assistant_definition_id IN ('bare:qwen','builtin:game')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE assistant_overrides SET enabled=1 WHERE assistant_id='game-3d'`); err != nil {
 		t.Fatal(err)
 	}
 	applied, err = applyInitialAgentDefaults(context.Background(), dbPath, markerPath, time.UnixMilli(1783969100000))
@@ -54,6 +61,7 @@ func TestApplyInitialAgentDefaultsEnablesOnlyAionCodexAndKimiOnce(t *testing.T) 
 	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "codex", "custom", "kimi", "qwen"}) {
 		t.Fatalf("repeat call overwrote user selection: %v", got)
 	}
+	assertAssistantVisibility(t, db, []string{"codex", "kimi", "qwen"}, []string{"aionui-assistant", "game-3d"}, []string{"aionui-assistant", "game-3d"})
 }
 
 func TestApplyInitialAgentDefaultsFailsWithoutBothTargets(t *testing.T) {
@@ -80,6 +88,40 @@ func TestApplyInitialAgentDefaultsFailsWithoutBothTargets(t *testing.T) {
 	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"qwen"}) {
 		t.Fatalf("failed initialization changed agent state: %v", got)
 	}
+}
+
+func TestApplyInitialAgentDefaultsRollsBackWhenGeneratedOverlayIsMissing(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "aionui-backend.db")
+	markerPath := filepath.Join(root, agentDefaultsMarkerName)
+	db := seedAgentMetadata(t, dbPath, []agentFixture{
+		{"aion", "Aion CLI", "", "internal", 1},
+		{"codex", "Codex CLI", "codex", "builtin", 0},
+		{"kimi", "Kimi", "kimi", "builtin", 0},
+		{"qwen", "Qwen", "qwen", "builtin", 1},
+	})
+	if _, err := db.Exec(`DELETE FROM assistant_overlays WHERE assistant_definition_id='bare:qwen'`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	applied, err := applyInitialAgentDefaults(context.Background(), dbPath, markerPath, time.UnixMilli(1783969150000))
+	if err == nil || applied || !strings.Contains(err.Error(), "missing 1") {
+		t.Fatalf("expected missing-overlay failure, applied=%v err=%v", applied, err)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("marker exists after rolled-back initialization: %v", err)
+	}
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "qwen"}) {
+		t.Fatalf("failed visibility initialization changed agent state: %v", got)
+	}
+	assertAssistantVisibility(t, db, []string{"aion"}, []string{"game-3d"}, []string{"game-3d"})
 }
 
 func TestApplyInitialAgentDefaultsV2EnablesAionWithoutOverwritingSelections(t *testing.T) {
@@ -109,6 +151,7 @@ func TestApplyInitialAgentDefaultsV2EnablesAionWithoutOverwritingSelections(t *t
 	if got := enabledAgentIDs(t, db); !reflect.DeepEqual(got, []string{"aion", "claude", "codex", "kimi", "qwen"}) {
 		t.Fatalf("v2 migration overwrote prior selections: %v", got)
 	}
+	assertAssistantVisibility(t, db, []string{"claude", "codex", "kimi", "qwen"}, []string{"game-3d"}, []string{"game-3d"})
 }
 
 func TestApplyInitialAgentDefaultsV3PreservesAgentSelectionsAndSetsYolo(t *testing.T) {
@@ -137,6 +180,7 @@ func TestApplyInitialAgentDefaultsV3PreservesAgentSelectionsAndSetsYolo(t *testi
 		t.Fatalf("v3 migration overwrote agent selections: %v", got)
 	}
 	assertYoloAssistantDefaults(t, db)
+	assertAssistantVisibility(t, db, []string{"codex"}, []string{"game-3d"}, []string{"game-3d"})
 }
 
 type agentFixture struct {
@@ -163,8 +207,22 @@ last_check_latency_ms INTEGER,last_check_at INTEGER,last_success_at INTEGER,last
 		t.Fatal(err)
 	}
 	_, err = db.Exec(`CREATE TABLE assistant_definitions (
-id TEXT PRIMARY KEY NOT NULL,source TEXT NOT NULL,source_ref TEXT,agent_id TEXT NOT NULL,
+id TEXT PRIMARY KEY NOT NULL,assistant_id TEXT NOT NULL UNIQUE,source TEXT NOT NULL,source_ref TEXT,agent_id TEXT NOT NULL,
 default_permission_mode TEXT NOT NULL,default_permission_value TEXT,updated_at INTEGER NOT NULL,deleted_at INTEGER)`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE assistant_overlays (
+assistant_definition_id TEXT PRIMARY KEY NOT NULL,enabled INTEGER NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,
+agent_id_override TEXT,last_used_at INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE assistant_overrides (
+assistant_id TEXT PRIMARY KEY NOT NULL,enabled INTEGER NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,
+agent_backend TEXT,last_used_at INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`)
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -183,12 +241,40 @@ VALUES(?,?,?,?,?,?,1783950847713,1783950847713)`, agent.id, agent.name, backend,
 			db.Close()
 			t.Fatal(err)
 		}
-		if agent.id == "aion" || agent.id == "kimi" {
-			if _, err := db.Exec(`INSERT INTO assistant_definitions(id,source,source_ref,agent_id,default_permission_mode,updated_at)
-VALUES(?,?,?,?,?,1783950847713)`, "bare:"+agent.id, "generated", agent.id, agent.id, "auto"); err != nil {
-				db.Close()
-				t.Fatal(err)
-			}
+		definitionSource := "generated"
+		if agent.source == "custom" {
+			definitionSource = "user"
+		}
+		definitionID := "bare:" + agent.id
+		if _, err := db.Exec(`INSERT INTO assistant_definitions(id,assistant_id,source,source_ref,agent_id,default_permission_mode,updated_at)
+VALUES(?,?,?,?,?,?,1783950847713)`, definitionID, definitionID, definitionSource, agent.id, agent.id, "auto"); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO assistant_overlays(assistant_definition_id,enabled,created_at,updated_at)
+VALUES(?,?,1783950847713,1783950847713)`, definitionID, agent.enabled); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	for _, builtin := range []struct {
+		definitionID, assistantID string
+		enabled                   int
+	}{{"builtin:workagent", "aionui-assistant", 0}, {"builtin:game", "game-3d", 1}} {
+		if _, err := db.Exec(`INSERT INTO assistant_definitions(id,assistant_id,source,source_ref,agent_id,default_permission_mode,updated_at)
+VALUES(?,?, 'builtin',?,?, 'auto',1783950847713)`, builtin.definitionID, builtin.assistantID, builtin.assistantID, "aion"); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO assistant_overlays(assistant_definition_id,enabled,created_at,updated_at)
+VALUES(?,?,1783950847713,1783950847713)`, builtin.definitionID, builtin.enabled); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO assistant_overrides(assistant_id,enabled,created_at,updated_at)
+VALUES(?,?,1783950847713,1783950847713)`, builtin.assistantID, builtin.enabled); err != nil {
+			db.Close()
+			t.Fatal(err)
 		}
 	}
 	return db
@@ -197,7 +283,7 @@ VALUES(?,?,?,?,?,1783950847713)`, "bare:"+agent.id, "generated", agent.id, agent
 func assertYoloAssistantDefaults(t *testing.T, db *sql.DB) {
 	t.Helper()
 	rows, err := db.Query(`SELECT agent_id,default_permission_mode,default_permission_value
-FROM assistant_definitions ORDER BY agent_id`)
+FROM assistant_definitions WHERE source='generated' AND agent_id IN ('aion','kimi') ORDER BY agent_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +302,44 @@ FROM assistant_definitions ORDER BY agent_id`)
 	}
 	if !reflect.DeepEqual(got, []string{"aion:fixed:yolo", "kimi:auto:"}) {
 		t.Fatalf("unexpected assistant permission defaults: %v", got)
+	}
+}
+
+func assertAssistantVisibility(t *testing.T, db *sql.DB, generated, builtin, legacy []string) {
+	t.Helper()
+	queries := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"generated", `SELECT ad.agent_id
+FROM assistant_overlays ao JOIN assistant_definitions ad ON ad.id=ao.assistant_definition_id
+WHERE ad.source='generated' AND ao.enabled<>0 ORDER BY ad.agent_id`, generated},
+		{"builtin", `SELECT ad.source_ref
+FROM assistant_overlays ao JOIN assistant_definitions ad ON ad.id=ao.assistant_definition_id
+WHERE ad.source='builtin' AND ao.enabled<>0 ORDER BY ad.source_ref`, builtin},
+		{"legacy", `SELECT assistant_id FROM assistant_overrides WHERE enabled<>0 ORDER BY assistant_id`, legacy},
+	}
+	for _, query := range queries {
+		rows, err := db.Query(query.sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var value string
+			if err := rows.Scan(&value); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			got = append(got, value)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, query.want) {
+			t.Fatalf("unexpected enabled %s assistants: got %v want %v", query.name, got, query.want)
+		}
 	}
 }
 

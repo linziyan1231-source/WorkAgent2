@@ -23,7 +23,7 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	packed := filepath.Join(root, "packed")
 	for name, body := range map[string]string{
 		"aionui-web.exe": "web", "package.json": `{"version":"test"}`, "static/index.html": "renderer",
-		"bundled-aioncore/win32-x64/aioncore.exe":                  "core",
+		"bundled-aioncore/win32-x64/aioncore.exe":                      "core",
 		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
 		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
 		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
@@ -48,7 +48,7 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	agentRoot := agentcli.RootFromAionReleases(releases)
 	agentReleaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
 	agentRelease := filepath.Join(agentRoot, "releases", agentReleaseID)
-	for name, body := range map[string]string{agentcli.CodexRelativePath: "codex", agentcli.KimiRelativePath: "python", agentcli.KimiModuleRelativePath: "kimi", agentcli.PythonRelativePath: "python-runtime"} {
+	for name, body := range map[string]string{agentcli.CodexRelativePath: "codex", agentcli.RipgrepRelativePath: "ripgrep", agentcli.KimiRelativePath: "python", agentcli.KimiModuleRelativePath: "kimi", agentcli.PythonRelativePath: "python-runtime"} {
 		path := filepath.Join(agentRelease, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)

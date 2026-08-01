@@ -15,7 +15,8 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath $BuildManifestPath -PathType Leaf)) {
     throw "Required build manifest is missing: $BuildManifestPath"
 }
-$manifest = Get-Content -LiteralPath $BuildManifestPath -Raw | ConvertFrom-Json
+$manifestRaw = Get-Content -LiteralPath $BuildManifestPath -Raw
+$manifest = $manifestRaw | ConvertFrom-Json
 if ($manifest.format_version -ne 2) { throw 'Only component-scoped build manifest format 2 is accepted.' }
 if ([string]$manifest.release_scope -cne $ReleaseScope) {
     throw "Build manifest release_scope '$($manifest.release_scope)' does not match requested scope '$ReleaseScope'."
@@ -106,6 +107,9 @@ if ('web' -cin $components) {
 }
 
 if ($RequireUpgradeContract) {
+    if ($manifestRaw -cnotmatch '"captured_at_utc"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"') {
+        throw 'Upgrade manifest captured_at_utc must preserve its UTC ISO-8601 lexical form.'
+    }
     foreach ($component in $components) {
         $baseline = [string]$expectedInstalled.PSObject.Properties[$component].Value
         Assert-Sha256String -Value $baseline -Description "$component production baseline"

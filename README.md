@@ -9,6 +9,7 @@ The repository contains the Windows control plane, per-user runtime supervisor, 
 - **Browser-first access:** users reach their workspace from a browser while agent processes run on centrally managed infrastructure.
 - **Per-user isolation:** Windows SID identity, private data roots, ACLs, loopback listeners, and Job Objects keep user workspaces and process trees separated.
 - **Centralized model access:** provider credentials, model catalogs, aliases, quotas, and usage accounting are managed consistently instead of being configured independently on every endpoint.
+- **Resumable employee onboarding:** account creation runs as an isolated per-user job, streams privileged milestones over protected IPC, and can safely resume after profile or bootstrap failures.
 - **Shared capacity:** centrally managed runtimes reduce duplicated desktop resource use and make capacity available independently of whether a user's personal computer remains online.
 - **Model-native interfaces:** the platform preserves the agent and tool interfaces expected by modern models, adding only the context and policy needed for domain workflows.
 - **Operational control:** immutable release manifests, protected version pointers, health checks, idle collection, upgrade contracts, and rollback-aware state make runtime behavior observable and repeatable.
@@ -44,6 +45,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component responsibilities,
 | `cmd/portal` | Administrative CLI entry point |
 | `cmd/aion-agent-cli` | Stable agent launcher and release verifier |
 | `internal/portal` | Authentication, sessions, HTTP/WebSocket proxying, quotas, and UI delivery |
+| `internal/admin` | Privileged account provisioning, validation, and recovery orchestration |
+| `internal/provisionipc` | Bounded progress protocol for resumable employee provisioning jobs |
 | `internal/userhost` | Private runtime lifecycle, credentials, OAuth, projects, and agent defaults |
 | `internal/winutil` | Windows accounts, ACLs, Job Objects, profiles, restricted tokens, and processes |
 | `internal/release` | Immutable release validation and version-pointer management |
@@ -81,7 +84,7 @@ Windows service identity, ACL inheritance, filesystem quotas, TLS, OAuth callbac
 
 The platform keeps third-party runtimes independently upgradeable. Source-level extensions are published as reviewable patches instead of copied source trees or binaries:
 
-- AionCore `v0.1.42`: conversation fork and steering, channel commands, WeChat media and completion delivery, idle routing, project classification, persistence, and tests.
+- AionCore `v0.1.42`: conversation fork and steering, channel commands, WeChat media and completion delivery, resumable uploads, built-in help, idle routing, project classification, persistence, and tests.
 - Kimi Code `v0.29.1`: authenticated ACP session fork and active-turn steering support.
 
 Application and license details are documented in [patches/README.md](patches/README.md).

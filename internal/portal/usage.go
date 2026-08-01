@@ -5,10 +5,54 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"aionuiportal/internal/portalusage"
+	"aionuiportal/internal/store"
 )
+
+func (s *Server) managedUserUsage(ctx context.Context, user store.User) (portalusage.Summary, error) {
+	finish, err := s.instances.BeginRequest(user.WindowsSID, false)
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	defer finish()
+	status, err := s.instances.Status(ctx, user.WindowsSID)
+	if err != nil || !status.Healthy {
+		if err != nil {
+			return portalusage.Summary{}, err
+		}
+		return portalusage.Summary{}, errors.New("UserHost is not running")
+	}
+	if !strings.EqualFold(status.WindowsSID, user.WindowsSID) {
+		return portalusage.Summary{}, errors.New("UserHost returned an invalid status identity")
+	}
+	ids, err := s.instances.ModelKeyIDs(ctx, user.WindowsSID)
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	summary, err := s.usage.Current(ctx, user.WindowsSID, ids)
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	quota, err := s.store.ChatGPTProQuota(ctx, user.ID, s.now())
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	for index := range summary.Providers {
+		if summary.Providers[index].Kind == portalusage.KindChatGPT {
+			summary.Providers[index].Pro = &portalusage.CountWindow{Used: quota.Confirmed + quota.Pending, Limit: quota.Limit, ResetAt: quota.ResetAt.Format(time.RFC3339)}
+			break
+		}
+	}
+	storage, err := s.instances.StorageUsage(ctx, user.WindowsSID)
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	summary.Storage = &portalusage.StorageUsage{LimitBytes: storage.LimitBytes, UsedBytes: storage.UsedBytes, RemainingBytes: storage.RemainingBytes, MeasuredAt: storage.MeasuredAt}
+	return summary, nil
+}
 
 func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

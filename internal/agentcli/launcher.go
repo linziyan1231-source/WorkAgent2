@@ -46,6 +46,8 @@ func Spec(executablePath string, arguments, environment []string) (LauncherSpec,
 		}
 		spec.Env = setEnvironment(spec.Env, "CODEX_MANAGED_PACKAGE_ROOT", filepath.Join(verified.Path, "codex"))
 		spec.Env = prependEnvironmentPath(spec.Env, filepath.Join(verified.Path, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-path"))
+	case "rg":
+		spec.Target = filepath.Join(verified.Path, filepath.FromSlash(RipgrepRelativePath))
 	case "kimi":
 		if _, ok := verified.Manifest.Files[KimiCodeRelativePath]; ok {
 			spec.Target = filepath.Join(verified.Path, filepath.FromSlash(KimiCodeRelativePath))
@@ -123,6 +125,32 @@ func Probe(ctx context.Context, binDirectory string, environment []string, prepa
 		if actual := strings.TrimSpace(string(output)); actual != check.expected {
 			return Versions{}, fmt.Errorf("%s CLI reported %q, expected %q", check.name, actual, check.expected)
 		}
+	}
+	ripgrepPath := filepath.Join(binDirectory, "rg.exe")
+	resolvedRipgrep, err := executableFromPath(environment, filepath.Base(ripgrepPath))
+	if err != nil {
+		return Versions{}, fmt.Errorf("ripgrep PATH lookup failed: %w", err)
+	}
+	if !strings.EqualFold(filepath.Clean(resolvedRipgrep), filepath.Clean(ripgrepPath)) {
+		return Versions{}, fmt.Errorf("ripgrep PATH resolved to %s instead of protected launcher %s", resolvedRipgrep, ripgrepPath)
+	}
+	ripgrepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ripgrep := exec.CommandContext(ripgrepCtx, resolvedRipgrep, "--version")
+	ripgrep.Env = environment
+	if prepare != nil {
+		if err := prepare(ripgrep); err != nil {
+			cancel()
+			return Versions{}, fmt.Errorf("prepare ripgrep version probe: %w", err)
+		}
+	}
+	output, commandErr := ripgrep.CombinedOutput()
+	cancel()
+	if commandErr != nil {
+		return Versions{}, fmt.Errorf("ripgrep version probe failed: %w (%s)", commandErr, strings.TrimSpace(string(output)))
+	}
+	firstLine := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)[0]
+	if !strings.HasPrefix(firstLine, "ripgrep ") {
+		return Versions{}, fmt.Errorf("ripgrep reported an unexpected version string %q", firstLine)
 	}
 	return versions, nil
 }

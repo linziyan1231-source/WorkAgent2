@@ -22,6 +22,7 @@ const (
 	PreviousName      = "previous.json"
 
 	CodexRelativePath      = "codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+	RipgrepRelativePath    = "codex/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe"
 	KimiRelativePath       = "kimi-tool/Scripts/python.exe"
 	KimiModuleRelativePath = "kimi-tool/Lib/site-packages/kimi_cli/__main__.py"
 	KimiCodeRelativePath   = "kimi-code/kimi.exe"
@@ -362,7 +363,7 @@ func validateManifest(manifest Manifest) error {
 }
 
 func criticalFiles(manifest Manifest) []string {
-	files := []string{CodexRelativePath, KimiRelativePath, KimiModuleRelativePath, PythonRelativePath}
+	files := []string{CodexRelativePath, RipgrepRelativePath, KimiRelativePath, KimiModuleRelativePath, PythonRelativePath}
 	if _, ok := manifest.Files[KimiCodeRelativePath]; ok {
 		files = append(files, KimiCodeRelativePath)
 	}

@@ -97,6 +97,19 @@ func (m *Manager) Status(ctx context.Context, sid string) (ipc.Status, error) {
 	return m.status(ctx, sid)
 }
 
+// ProbeActivity asks the UserHost to refresh its authoritative activity
+// snapshot. Unknown activity remains fail-closed inside the UserHost.
+func (m *Manager) ProbeActivity(ctx context.Context, sid string) (ipc.Activity, error) {
+	response, err := m.command(ctx, sid, "activity")
+	if err != nil {
+		return ipc.Activity{}, err
+	}
+	if response.Status == nil || !equalSID(response.Status.WindowsSID, sid) {
+		return ipc.Activity{}, errors.New("UserHost returned an invalid activity identity")
+	}
+	return response.Status.Activity, nil
+}
+
 func (m *Manager) Ensure(ctx context.Context, sid string) (ipc.Status, error) {
 	state := m.runtime(sid)
 	state.mu.Lock()
@@ -175,7 +188,7 @@ func (m *Manager) requireEnabled(ctx context.Context, sid string) error {
 }
 
 func (m *Manager) runningCount(ctx context.Context, excludeSID string) (int, error) {
-	users, err := m.store.ListUsers(ctx)
+	users, err := m.store.ListManagedUsers(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -378,7 +391,7 @@ func (m *Manager) ConnectionCounts(sid string) (requests, webSockets int) {
 }
 
 func (m *Manager) ReapOnce(ctx context.Context) []error {
-	users, err := m.store.ListUsers(ctx)
+	users, err := m.store.ListManagedUsers(ctx)
 	if err != nil {
 		return []error{err}
 	}

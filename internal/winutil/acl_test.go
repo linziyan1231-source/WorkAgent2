@@ -1,6 +1,7 @@
 package winutil
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,6 +86,49 @@ func TestPrivateTreeAcceptsOwnerRightsForUserOwnedDescendant(t *testing.T) {
 	}
 	if err := VerifyDescendantACL(pipTemp, PrivateTreePolicy("S-1-5-19")); err == nil {
 		t.Fatal("OWNER RIGHTS was accepted for an owner outside the private-tree policy")
+	}
+}
+
+func TestPrivateTreeAllowsOnlyNarrowHeadlessChromeCacheCapabilities(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const capabilitySID = "S-1-15-3-1024-1653277547-598600573-1504598449-2187120098-1115546814-1860042162-2924348907-3700367812"
+	tests := []struct {
+		name           string
+		relative       string
+		capabilityACEs string
+		wantAccept     bool
+	}{
+		{name: "cache modify", relative: filepath.Join("temp", "HeadlessChrome124801119435078", "Default", "Cache"), capabilityACEs: "(A;;0x001301bf;;;%[1]s)(A;OICIIO;0xe0010000;;;%[1]s)", wantAccept: true},
+		{name: "outside cache", relative: filepath.Join("data", "HeadlessChrome124801119435078", "Default", "Cache"), capabilityACEs: "(A;;0x001301bf;;;%s)"},
+		{name: "cache full control", relative: filepath.Join("temp", "HeadlessChrome124801119435078", "Default", "Cache"), capabilityACEs: "(A;;FA;;;%s)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "private")
+			target := filepath.Join(root, test.relative)
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			policy := PrivateTreePolicy(identity.SID)
+			if err := ApplyTreeACL(root, policy); err != nil {
+				t.Fatal(err)
+			}
+			applySecurityDescriptorForTest(t, target, "O:"+identity.SID+"G:"+SystemSID+"D:P"+
+				"(A;;FA;;;"+SystemSID+")"+
+				"(A;;FA;;;"+AdministratorsSID+")"+
+				"(A;;FA;;;"+identity.SID+")"+
+				fmt.Sprintf(test.capabilityACEs, capabilitySID))
+			err := VerifyTreeACL(root, policy)
+			if test.wantAccept && err != nil {
+				t.Fatalf("safe cache capability was rejected: %v", err)
+			}
+			if !test.wantAccept && err == nil {
+				t.Fatal("unsafe capability exception was accepted")
+			}
+		})
 	}
 }
 

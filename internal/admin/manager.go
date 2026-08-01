@@ -133,6 +133,28 @@ func (m *Manager) AddUser(ctx context.Context, username, windowsAccount string, 
 	return user, nil
 }
 
+func (m *Manager) AddAdministrator(ctx context.Context, username string, password []byte) (store.User, error) {
+	defer auth.Zero(password)
+	if err := auth.ValidatePortalUsername(username); err != nil {
+		return store.User{}, err
+	}
+	if err := auth.ValidatePortalPassword(password); err != nil {
+		return store.User{}, err
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return store.User{}, err
+	}
+	user, err := m.Store.CreateAdministrator(ctx, username, hash, time.Now())
+	if err != nil {
+		return store.User{}, err
+	}
+	if err := m.Store.Audit(ctx, "admin.account.create", "success", user.Username, "", "local-admin", map[string]any{}, time.Now()); err != nil {
+		return user, fmt.Errorf("Portal administrator was created but its audit event could not be recorded: %w", err)
+	}
+	return user, nil
+}
+
 func (m *Manager) SetUserEnabled(ctx context.Context, username string, enabled bool) error {
 	user, err := m.Store.UserByUsername(ctx, username)
 	if err != nil {
@@ -586,7 +608,7 @@ func (m *Manager) RemoveTask(ctx context.Context, username string) error {
 }
 
 func (m *Manager) List(ctx context.Context) ([]UserStatus, error) {
-	users, err := m.Store.ListUsers(ctx)
+	users, err := m.Store.ListManagedUsers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -694,7 +716,7 @@ func (m *Manager) VerifyACLs(ctx context.Context) []error {
 	} else if err := winutil.VerifyTreeACL(agentRoot, winutil.SharedReadOnlyPolicy()); err != nil {
 		failures = append(failures, fmt.Errorf("shared agent CLI ACL: %w", err))
 	}
-	users, err := m.Store.ListUsers(ctx)
+	users, err := m.Store.ListManagedUsers(ctx)
 	if err != nil {
 		return append(failures, err)
 	}
@@ -805,7 +827,7 @@ func (m *Manager) ApplyACLs(ctx context.Context) []error {
 	} else if _, err := agentcli.VerifyCurrent(agentRoot); err != nil {
 		failures = append(failures, fmt.Errorf("shared agent CLI release: %w", err))
 	}
-	users, err := m.Store.ListUsers(ctx)
+	users, err := m.Store.ListManagedUsers(ctx)
 	if err != nil {
 		return append(failures, err)
 	}
@@ -920,7 +942,7 @@ func (m *Manager) Readiness(ctx context.Context) []error {
 		failures = append(failures, fmt.Errorf("shared release: %w", err))
 	}
 	failures = append(failures, m.VerifyACLs(ctx)...)
-	users, err := m.Store.ListUsers(ctx)
+	users, err := m.Store.ListManagedUsers(ctx)
 	if err != nil {
 		return append(failures, err)
 	}

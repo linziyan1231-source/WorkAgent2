@@ -37,6 +37,16 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if environmentValue(codex.Env, "CODEX_HOME") != `C:\Users\user-87eba76e\AionUiPortal\config\codex` {
 		t.Fatal("per-user CODEX_HOME was overwritten")
 	}
+	ripgrep, err := Spec(filepath.Join(root, "bin", "rg.exe"), []string{"微信", `C:\docs`}, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ripgrep.Target != filepath.Join(releasePath, filepath.FromSlash(RipgrepRelativePath)) || strings.Join(ripgrep.Args, "|") != `微信|C:\docs` {
+		t.Fatalf("unexpected ripgrep launcher spec: %+v", ripgrep)
+	}
+	if environmentValue(ripgrep.Env, "PATH") != environmentValue(environment, "PATH") {
+		t.Fatalf("ripgrep launcher changed PATH: %s", environmentValue(ripgrep.Env, "PATH"))
+	}
 	perUserEnvironment := append(append([]string(nil), environment...), PerUserSandboxEnvironment+"=1")
 	perUserCodex, err := Spec(filepath.Join(root, "bin", "codex.exe"), arguments, perUserEnvironment)
 	if err != nil {

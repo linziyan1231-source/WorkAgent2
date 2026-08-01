@@ -45,6 +45,32 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
+func TestAdministratorIsSeparateFromManagedUsers(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	now := time.Unix(1_700_000_000, 0)
+	admin, err := s.CreateAdministrator(ctx, "admin", "admin-hash", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admin.Admin || admin.WindowsSID != "portal-admin:admin" || admin.WindowsUsername != "portal-admin:admin" {
+		t.Fatalf("administrator identity mismatch: %+v", admin)
+	}
+	if _, err := s.CreateAdministrator(ctx, "second-admin", "admin-hash", now); err == nil {
+		t.Fatal("second Portal administrator was accepted")
+	}
+	if _, err := s.CreateUser(ctx, "employee", "employee-hash", "S-1-5-21-1241094192-1685126104-1679339914-3812", `SERVER\employee`, false, now); err != nil {
+		t.Fatal(err)
+	}
+	users, err := s.ListManagedUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 1 || users[0].Username != "employee" || users[0].Admin {
+		t.Fatalf("managed users included the administrator: %+v", users)
+	}
+}
+
 func TestSessionInvalidatedByPasswordResetAndDisable(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

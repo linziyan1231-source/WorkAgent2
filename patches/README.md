@@ -4,7 +4,7 @@ WorkAgent2 integrates with independently maintained agent runtimes. This directo
 
 ## AionCore
 
-`aioncore-v0.1.42-workagent.patch` applies to the upstream AionCore `v0.1.42` tag. It contains the platform's conversation fork and steering integration, channel command handling, WeChat media and completion delivery, idle-conversation routing, project classification, and the related persistence and tests.
+`aioncore-v0.1.42-workagent.patch` applies to the upstream AionCore `v0.1.42` tag. It contains the platform's conversation fork and steering integration, channel command handling, WeChat media and completion delivery, resumable uploads, built-in help, idle-conversation routing, project classification, and the related persistence and tests.
 
 ```powershell
 git clone https://github.com/iOfficeAI/AionCore.git

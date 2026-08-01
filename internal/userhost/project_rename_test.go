@@ -13,11 +13,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const projectRenameTestSID = "S-1-5-21-1958036862-1490797588-1401426644-2813"
-
 func TestRenameProjectUpdatesDirectoryAndMatchingConversationPaths(t *testing.T) {
-	workspace, dbPath, source := projectRenameFixture(t)
-	result, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "new-project", false)
+	workspace, dbPath, source, sid := projectRenameFixture(t)
+	result, code, err := renameProjectState(context.Background(), workspace, dbPath, sid, "old-project", "new-project", false)
 	if err != nil || code != "" {
 		t.Fatalf("rename failed: code=%s err=%v", code, err)
 	}
@@ -31,7 +29,7 @@ func TestRenameProjectUpdatesDirectoryAndMatchingConversationPaths(t *testing.T)
 	if info, err := os.Stat(target); err != nil || !info.IsDir() {
 		t.Fatalf("renamed directory is unavailable: info=%v err=%v", info, err)
 	}
-	if err := winutil.VerifyDescendantACL(target, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
+	if err := winutil.VerifyDescendantACL(target, winutil.PrivateTreePolicy(sid)); err != nil {
 		t.Fatalf("renamed directory ACL is invalid: %v", err)
 	}
 	workspaces := readConversationWorkspaces(t, dbPath)
@@ -41,12 +39,12 @@ func TestRenameProjectUpdatesDirectoryAndMatchingConversationPaths(t *testing.T)
 }
 
 func TestRenameProjectConflictLeavesDirectoryAndDatabaseUnchanged(t *testing.T) {
-	workspace, dbPath, source := projectRenameFixture(t)
+	workspace, dbPath, source, sid := projectRenameFixture(t)
 	target := filepath.Join(workspace, "existing-project")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "existing-project", false)
+	_, code, err := renameProjectState(context.Background(), workspace, dbPath, sid, "old-project", "existing-project", false)
 	if err == nil || code != "PROJECT_EXISTS" {
 		t.Fatalf("conflict result: code=%s err=%v", code, err)
 	}
@@ -59,7 +57,7 @@ func TestRenameProjectConflictLeavesDirectoryAndDatabaseUnchanged(t *testing.T) 
 }
 
 func TestRenameProjectReportsWindowsDirectoryOccupationWithoutPartialUpdates(t *testing.T) {
-	workspace, dbPath, source := projectRenameFixture(t)
+	workspace, dbPath, source, sid := projectRenameFixture(t)
 	pointer, err := windows.UTF16PtrFromString(source)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +68,7 @@ func TestRenameProjectReportsWindowsDirectoryOccupationWithoutPartialUpdates(t *
 	}
 	defer windows.CloseHandle(handle)
 
-	_, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "old-project", "blocked-project", false)
+	_, code, err := renameProjectState(context.Background(), workspace, dbPath, sid, "old-project", "blocked-project", false)
 	if err == nil || code != "PROJECT_IN_USE" {
 		t.Fatalf("occupied result: code=%s err=%v", code, err)
 	}
@@ -83,7 +81,7 @@ func TestRenameProjectReportsWindowsDirectoryOccupationWithoutPartialUpdates(t *
 }
 
 func TestRenameLegacyWorkspaceRootMovesOnlyRootProjectEntries(t *testing.T) {
-	workspace, dbPath, childProject := projectRenameFixture(t)
+	workspace, dbPath, childProject, sid := projectRenameFixture(t)
 	rootFile := filepath.Join(workspace, "index.html")
 	if err := os.WriteFile(rootFile, []byte("legacy project"), 0o600); err != nil {
 		t.Fatal(err)
@@ -99,7 +97,7 @@ func TestRenameLegacyWorkspaceRootMovesOnlyRootProjectEntries(t *testing.T) {
 	}
 	db.Close()
 
-	result, code, err := renameProjectState(context.Background(), workspace, dbPath, projectRenameTestSID, "", "renamed-root", true)
+	result, code, err := renameProjectState(context.Background(), workspace, dbPath, sid, "", "renamed-root", true)
 	if err != nil || code != "" {
 		t.Fatalf("legacy rename failed: code=%s err=%v", code, err)
 	}
@@ -119,14 +117,19 @@ func TestRenameLegacyWorkspaceRootMovesOnlyRootProjectEntries(t *testing.T) {
 	}
 }
 
-func projectRenameFixture(t *testing.T) (workspace, dbPath, source string) {
+func projectRenameFixture(t *testing.T) (workspace, dbPath, source, sid string) {
 	t.Helper()
+	identity, err := winutil.CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid = identity.SID
 	root := t.TempDir()
 	workspace = filepath.Join(root, "workspace")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy := winutil.PrivateTreePolicy(projectRenameTestSID)
+	policy := winutil.PrivateTreePolicy(sid)
 	if err := winutil.ApplyACL(workspace, policy); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +164,7 @@ func projectRenameFixture(t *testing.T) (workspace, dbPath, source string) {
 			t.Fatal(err)
 		}
 	}
-	return workspace, dbPath, source
+	return workspace, dbPath, source, sid
 }
 
 func readConversationWorkspaces(t *testing.T, dbPath string) map[string]string {
