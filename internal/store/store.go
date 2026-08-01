@@ -221,6 +221,34 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, windowsS
 	return s.UserByID(ctx, id)
 }
 
+func (s *Store) CreateAdministrator(ctx context.Context, username, passwordHash string, now time.Time) (User, error) {
+	username = strings.TrimSpace(username)
+	norm := NormalizeUsername(username)
+	if norm == "" || strings.TrimSpace(passwordHash) == "" {
+		return User{}, errors.New("administrator username and password hash are required")
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM portal_users WHERE is_admin=1`).Scan(&count); err != nil {
+		return User{}, fmt.Errorf("count Portal administrators: %w", err)
+	}
+	if count != 0 {
+		return User{}, errors.New("a Portal administrator already exists")
+	}
+	identity := "portal-admin:" + norm
+	stamp := now.Unix()
+	result, err := s.db.ExecContext(ctx, `INSERT INTO portal_users
+ (username,username_norm,password_hash,windows_sid,windows_username,enabled,is_admin,auth_version,created_at,updated_at)
+ VALUES(?,?,?,?,?,1,1,1,?,?)`, username, norm, passwordHash, identity, identity, stamp, stamp)
+	if err != nil {
+		return User{}, fmt.Errorf("create Portal administrator: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return User{}, fmt.Errorf("read created administrator id: %w", err)
+	}
+	return s.UserByID(ctx, id)
+}
+
 func (s *Store) UserByID(ctx context.Context, id int64) (User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, userSelect+` WHERE id=?`, id))
 }
@@ -237,6 +265,23 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, userSelect+` ORDER BY username_norm`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	var users []User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+func (s *Store) ListManagedUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, userSelect+` WHERE is_admin=0 ORDER BY username_norm`)
+	if err != nil {
+		return nil, fmt.Errorf("list managed users: %w", err)
 	}
 	defer rows.Close()
 	var users []User

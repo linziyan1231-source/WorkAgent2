@@ -27,6 +27,7 @@ import (
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/portalusage"
+	"aionuiportal/internal/provisionipc"
 	"aionuiportal/internal/store"
 )
 
@@ -38,10 +39,12 @@ const (
 type fakeInstances struct {
 	mu                  sync.Mutex
 	ensureSIDs          []string
+	statusSIDs          []string
 	routeSIDs           []string
 	beginSIDs           []string
 	route               instance.Route
 	ensureError         error
+	statusError         error
 	touchError          error
 	touchSIDs           []string
 	oauthStarts         []ipc.OAuthStartRequest
@@ -64,6 +67,7 @@ type fakeInstances struct {
 	storageUsage        ipc.StorageUsage
 	storageUsageError   error
 	storageUsageSIDs    []string
+	stopSIDs            []string
 }
 
 func (f *fakeInstances) Ensure(_ context.Context, sid string) (ipc.Status, error) {
@@ -71,6 +75,15 @@ func (f *fakeInstances) Ensure(_ context.Context, sid string) (ipc.Status, error
 	defer f.mu.Unlock()
 	f.ensureSIDs = append(f.ensureSIDs, sid)
 	return f.route.Status, f.ensureError
+}
+
+func (f *fakeInstances) Status(_ context.Context, sid string) (ipc.Status, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statusSIDs = append(f.statusSIDs, sid)
+	status := f.route.Status
+	status.WindowsSID = sid
+	return status, f.statusError
 }
 
 func (f *fakeInstances) Route(_ context.Context, sid string) (instance.Route, error) {
@@ -182,6 +195,13 @@ func (f *fakeInstances) StorageUsage(_ context.Context, sid string) (ipc.Storage
 
 func (f *fakeInstances) WriteUsageSnapshot(_ context.Context, _ string, _ []byte) error { return nil }
 
+func (f *fakeInstances) Stop(_ context.Context, sid string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopSIDs = append(f.stopSIDs, sid)
+	return nil
+}
+
 type fakeUsageService struct {
 	mu           sync.Mutex
 	calls        []usageCall
@@ -243,6 +263,238 @@ func TestWrongPasswordNeverStartsInstance(t *testing.T) {
 	if len(instances.ensureSIDs) != 0 {
 		t.Fatalf("invalid or rate-limited credentials started instances: %v", instances.ensureSIDs)
 	}
+}
+
+func TestAdministratorLoginSkipsInstanceAndCanManageUsers(t *testing.T) {
+	server, data, instances := testServer(t)
+	password := []byte("correct-administrator-portal-password")
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.CreateAdministrator(context.Background(), "admin", hash, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.CreateUser(context.Background(), "employee-two", hash, testSID2, `SERVER\test2`, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	login := httptest.NewRecorder()
+	server.Handler().ServeHTTP(login, loginRequest(`{"username":"admin","password":"correct-administrator-portal-password"}`))
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `"admin":true`) {
+		t.Fatalf("administrator login status=%d body=%s", login.Code, login.Body.String())
+	}
+	instances.mu.Lock()
+	if len(instances.ensureSIDs) != 0 || len(instances.beginSIDs) != 0 {
+		instances.mu.Unlock()
+		t.Fatalf("administrator login started an employee instance: ensure=%v begin=%v", instances.ensureSIDs, instances.beginSIDs)
+	}
+	instances.mu.Unlock()
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("administrator session cookie missing: %#v", cookies)
+	}
+	provisionRequests := make(chan provisionipc.Request, 1)
+	server.provision = func(_ context.Context, request provisionipc.Request, report func(provisionipc.Progress)) (provisionipc.Response, error) {
+		report(provisionipc.Progress{Percent: 62, Step: "creating_portal_account"})
+		provisionRequests <- request
+		created, err := data.CreateUser(context.Background(), request.Username, hash, "S-1-5-21-1875785998-1615036399-1837640303-5768", `SERVER\test3`, false, time.Now())
+		if err != nil {
+			return provisionipc.Response{}, err
+		}
+		return provisionipc.Response{OK: true, User: &provisionipc.User{Username: created.Username, WindowsUsername: created.WindowsUsername, WindowsSID: created.WindowsSID}}, nil
+	}
+	invalidRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users", strings.NewReader(`{"username":"employee-three","portal_password":"short"}`))
+	invalidRequest.Header.Set("Content-Type", "application/json")
+	invalidRequest.Header.Set("Origin", "https://portal.example.test")
+	invalidRequest.AddCookie(cookies[0])
+	invalidResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest || len(provisionRequests) != 0 {
+		t.Fatalf("invalid password reached provisioner: status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+	addRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users", strings.NewReader(`{"username":"employee-three","portal_password":"new-employee-portal-password"}`))
+	addRequest.Header.Set("Content-Type", "application/json")
+	addRequest.Header.Set("Origin", "https://portal.example.test")
+	addRequest.AddCookie(cookies[0])
+	addResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(addResponse, addRequest)
+	if addResponse.Code != http.StatusAccepted || !strings.Contains(addResponse.Body.String(), `"status":"running"`) {
+		t.Fatalf("add status=%d body=%s", addResponse.Code, addResponse.Body.String())
+	}
+	var addPayload struct {
+		Job provisionJob `json:"job"`
+	}
+	if err := json.Unmarshal(addResponse.Body.Bytes(), &addPayload); err != nil || addPayload.Job.ID == "" {
+		t.Fatalf("decode provision job: payload=%+v err=%v", addPayload, err)
+	}
+	select {
+	case request := <-provisionRequests:
+		if request.Command != "add-user" || request.Username != "employee-three" || string(request.PortalPassword) != "new-employee-portal-password" {
+			t.Fatalf("unexpected provision request: command=%q username=%q", request.Command, request.Username)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provision job did not start")
+	}
+	var completed provisionJob
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		jobRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/user-jobs?id="+url.QueryEscape(addPayload.Job.ID), nil)
+		jobRequest.AddCookie(cookies[0])
+		jobResponse := httptest.NewRecorder()
+		server.Handler().ServeHTTP(jobResponse, jobRequest)
+		var payload struct {
+			Job provisionJob `json:"job"`
+		}
+		if jobResponse.Code != http.StatusOK || json.Unmarshal(jobResponse.Body.Bytes(), &payload) != nil {
+			t.Fatalf("read provision job status=%d body=%s", jobResponse.Code, jobResponse.Body.String())
+		}
+		completed = payload.Job
+		if completed.Status == "succeeded" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if completed.Status != "succeeded" || completed.Percent != 100 || completed.Step != "completed" {
+		t.Fatalf("provision job did not complete: %+v", completed)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users", nil)
+	listRequest.AddCookie(cookies[0])
+	listResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), `"username":"employee-two"`) ||
+		strings.Contains(listResponse.Body.String(), `"resource_usage"`) ||
+		strings.Contains(listResponse.Body.String(), `"username":"admin"`) {
+		t.Fatalf("administrator list status=%d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+	instances.mu.Lock()
+	if len(instances.ensureSIDs) != 0 || len(instances.beginSIDs) != 0 || len(instances.statusSIDs) != 0 {
+		instances.mu.Unlock()
+		t.Fatalf("administrator list touched employee runtimes: ensure=%v begin=%v status=%v", instances.ensureSIDs, instances.beginSIDs, instances.statusSIDs)
+	}
+	instances.mu.Unlock()
+
+	usageRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users/usage?username=employee-two", nil)
+	usageRequest.AddCookie(cookies[0])
+	usageResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(usageResponse, usageRequest)
+	if usageResponse.Code != http.StatusOK || !strings.Contains(usageResponse.Body.String(), `"resource_usage"`) ||
+		!strings.Contains(usageResponse.Body.String(), `"used_bytes":2147483648`) {
+		t.Fatalf("administrator usage status=%d body=%s", usageResponse.Code, usageResponse.Body.String())
+	}
+	instances.mu.Lock()
+	if len(instances.ensureSIDs) != 0 || len(instances.statusSIDs) != 1 || instances.statusSIDs[0] != testSID2 {
+		instances.mu.Unlock()
+		t.Fatalf("administrator usage started or inspected the wrong runtime: ensure=%v status=%v", instances.ensureSIDs, instances.statusSIDs)
+	}
+	instances.statusError = errors.New("UserHost IPC is unavailable")
+	instances.mu.Unlock()
+
+	unavailableUsageRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users/usage?username=employee-three", nil)
+	unavailableUsageRequest.AddCookie(cookies[0])
+	unavailableUsageResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unavailableUsageResponse, unavailableUsageRequest)
+	if unavailableUsageResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stopped user usage status=%d body=%s", unavailableUsageResponse.Code, unavailableUsageResponse.Body.String())
+	}
+	instances.mu.Lock()
+	if len(instances.ensureSIDs) != 0 {
+		instances.mu.Unlock()
+		t.Fatalf("stopped user usage started an instance: %v", instances.ensureSIDs)
+	}
+	instances.statusError = nil
+	instances.mu.Unlock()
+
+	disableRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/disable", strings.NewReader(`{"username":"employee-two"}`))
+	disableRequest.Header.Set("Content-Type", "application/json")
+	disableRequest.Header.Set("Origin", "https://portal.example.test")
+	disableRequest.AddCookie(cookies[0])
+	disableResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(disableResponse, disableRequest)
+	if disableResponse.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", disableResponse.Code, disableResponse.Body.String())
+	}
+	disabled, err := data.UserByUsername(context.Background(), "employee-two")
+	if err != nil || disabled.Enabled {
+		t.Fatalf("employee was not disabled: user=%+v err=%v", disabled, err)
+	}
+	instances.mu.Lock()
+	if len(instances.stopSIDs) != 1 || instances.stopSIDs[0] != testSID2 {
+		instances.mu.Unlock()
+		t.Fatalf("disabled employee instance was not stopped: %v", instances.stopSIDs)
+	}
+	instances.mu.Unlock()
+
+	enableRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/enable", strings.NewReader(`{"username":"employee-two"}`))
+	enableRequest.Header.Set("Content-Type", "application/json")
+	enableRequest.Header.Set("Origin", "https://portal.example.test")
+	enableRequest.AddCookie(cookies[0])
+	enableResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(enableResponse, enableRequest)
+	if enableResponse.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", enableResponse.Code, enableResponse.Body.String())
+	}
+	enabled, err := data.UserByUsername(context.Background(), "employee-two")
+	if err != nil || !enabled.Enabled {
+		t.Fatalf("employee was not enabled: user=%+v err=%v", enabled, err)
+	}
+	if err := data.CreateSession(context.Background(), "employee-session-before-reset", enabled, time.Hour, "192.0.2.20", "employee-browser", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	resetRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/reset-password", strings.NewReader(`{"username":"employee-two","portal_password":"replacement-employee-password"}`))
+	resetRequest.Header.Set("Content-Type", "application/json")
+	resetRequest.Header.Set("Origin", "https://portal.example.test")
+	resetRequest.AddCookie(cookies[0])
+	resetResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resetResponse, resetRequest)
+	if resetResponse.Code != http.StatusOK {
+		t.Fatalf("reset password status=%d body=%s", resetResponse.Code, resetResponse.Body.String())
+	}
+	resetUser, err := data.UserByUsername(context.Background(), "employee-two")
+	if err != nil || !auth.VerifyPassword(resetUser.PasswordHash, []byte("replacement-employee-password")) || auth.VerifyPassword(resetUser.PasswordHash, password) {
+		t.Fatalf("employee Portal password was not replaced: user=%+v err=%v", resetUser, err)
+	}
+	if _, err := data.Session(context.Background(), "employee-session-before-reset", time.Hour, time.Now()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("employee session remained valid after administrator password reset: %v", err)
+	}
+	adminListRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users", nil)
+	adminListRequest.AddCookie(cookies[0])
+	adminListResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(adminListResponse, adminListRequest)
+	if adminListResponse.Code != http.StatusOK {
+		t.Fatalf("employee password reset invalidated administrator session: status=%d body=%s", adminListResponse.Code, adminListResponse.Body.String())
+	}
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	server.provision = func(_ context.Context, request provisionipc.Request, _ func(provisionipc.Progress)) (provisionipc.Response, error) {
+		started <- request.Username
+		<-release
+		return provisionipc.Response{}, errors.New("planned provision failure")
+	}
+	for _, username := range []string{"employee-four", "employee-five"} {
+		request := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users",
+			strings.NewReader(`{"username":"`+username+`","portal_password":"new-employee-portal-password"}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Origin", "https://portal.example.test")
+		request.AddCookie(cookies[0])
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("start concurrent provision for %s: status=%d body=%s", username, response.Code, response.Body.String())
+		}
+	}
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case username := <-started:
+			seen[username] = true
+		case <-time.After(time.Second):
+			t.Fatalf("provision jobs did not run concurrently: %v", seen)
+		}
+	}
+	close(release)
 }
 
 func TestFilesystemBrowseStartsAtWorkspaceAndRejectsEscape(t *testing.T) {

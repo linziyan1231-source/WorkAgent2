@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"aionuiportal/internal/config"
 )
 
 type reparseLikeDirEntry struct {
@@ -54,6 +56,38 @@ func TestMeasureStorageUsageStopsWhenRequestIsCancelled(t *testing.T) {
 	_, err := measureStorageUsage(ctx, t.TempDir())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v, want context cancellation", err)
+	}
+}
+
+func TestCurrentStorageUsageCachesAndRefreshesFullWalk(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "first.bin"), make([]byte, 1024), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := Host{cfg: config.UserHost{DataRoot: root}}
+	first, err := host.currentStorageUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "second.bin"), make([]byte, 2048), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := host.currentStorageUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.UsedBytes != first.UsedBytes || cached.MeasuredAt != first.MeasuredAt {
+		t.Fatalf("storage cache changed before expiry: first=%+v cached=%+v", first, cached)
+	}
+	host.storageMu.Lock()
+	host.storageUsageAt = time.Now().Add(-storageUsageCacheTTL)
+	host.storageMu.Unlock()
+	refreshed, err := host.currentStorageUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.UsedBytes != 3072 {
+		t.Fatalf("expired storage cache was not refreshed: %+v", refreshed)
 	}
 }
 

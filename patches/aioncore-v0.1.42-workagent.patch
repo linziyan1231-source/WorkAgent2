@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca182b19f59 100644
+index af94e91b29064926fd70a717a0440b9c8b0f5d0f..dbe8c514e434fd22a0b06a4121b354bcb7e2bfe6 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -331,7 +331,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-ai-agent"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "agent-client-protocol",
   "aion-agent",
@@ -16,7 +16,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-api-types"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-common",
   "serde",
@@ -25,7 +25,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-app"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-ai-agent",
   "aionui-api-types",
@@ -34,7 +34,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-assets"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-common",
   "axum",
@@ -43,7 +43,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-assistant"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-auth",
@@ -52,7 +52,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-auth"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-common",
@@ -61,7 +61,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-channel"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
 + "aes",
   "aionui-ai-agent",
@@ -90,7 +90,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-common"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aes-gcm",
   "async-trait",
@@ -99,7 +99,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-conversation"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-ai-agent",
   "aionui-api-types",
@@ -108,7 +108,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-cron"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-ai-agent",
   "aionui-api-types",
@@ -117,7 +117,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-db"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-common",
   "async-trait",
@@ -126,7 +126,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-extension"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-common",
@@ -135,83 +135,96 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  [[package]]
  name = "aionui-file"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-common",
-@@ -684,7 +690,7 @@ dependencies = [
+@@ -673,18 +679,20 @@ dependencies = [
+  "reqwest",
+  "serde",
+  "serde_json",
++ "sha2 0.10.9",
+  "tempfile",
+  "thiserror 2.0.18",
+  "tokio",
+  "tower-http",
+  "tracing",
++ "uuid",
+  "walkdir",
+  "zip",
+ ]
  
  [[package]]
  name = "aionui-mcp"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-common",
-@@ -710,7 +716,7 @@ dependencies = [
+@@ -710,7 +718,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-office"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-auth",
-@@ -736,7 +742,7 @@ dependencies = [
+@@ -736,7 +744,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-realtime"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "axum",
-@@ -751,7 +757,7 @@ dependencies = [
+@@ -751,7 +759,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-runtime"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "dirs",
   "flate2",
-@@ -778,7 +784,7 @@ dependencies = [
+@@ -778,7 +786,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-shell"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-common",
-@@ -809,7 +815,7 @@ dependencies = [
+@@ -809,7 +817,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-system"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "aionui-api-types",
   "aionui-auth",
-@@ -836,7 +842,7 @@ dependencies = [
+@@ -836,7 +844,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-team"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "agent-client-protocol",
   "aionui-ai-agent",
-@@ -862,7 +868,7 @@ dependencies = [
+@@ -862,7 +870,7 @@ dependencies = [
  
  [[package]]
  name = "aionui-team-prompts"
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  dependencies = [
   "serde",
   "serde_json",
-@@ -3508,6 +3514,12 @@ dependencies = [
+@@ -3508,6 +3516,12 @@ dependencies = [
   "digest 0.10.7",
  ]
  
@@ -225,7 +238,7 @@ index af94e91b29064926fd70a717a0440b9c8b0f5d0f..472758cfee91bb968df234132f6e8ca1
  name = "memchr"
  version = "2.8.0"
 diff --git a/Cargo.toml b/Cargo.toml
-index 771ef83df4b28b4b7153c009e33d599fcbabc1b8..a9eda65542f4341f5eaa84fb053b805dfc3991d2 100644
+index 771ef83df4b28b4b7153c009e33d599fcbabc1b8..014e76a1a5e8b8e62d58c5156412e40554f48b40 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -25,7 +25,7 @@ members = [
@@ -233,7 +246,7 @@ index 771ef83df4b28b4b7153c009e33d599fcbabc1b8..a9eda65542f4341f5eaa84fb053b805d
  
  [workspace.package]
 -version = "0.1.42"
-+version = "0.1.42-editfork.10"
++version = "0.1.42-editfork.14"
  edition = "2024"
  license = "MIT"
  
@@ -254,7 +267,7 @@ index 771ef83df4b28b4b7153c009e33d599fcbabc1b8..a9eda65542f4341f5eaa84fb053b805d
  # Concurrency
  dashmap = "6"
 diff --git a/crates/aionui-ai-agent/src/manager/acp/agent.rs b/crates/aionui-ai-agent/src/manager/acp/agent.rs
-index e37ef75fa7049236815e50243ff074341daac102..170402c08cdcbb29d245cf5b84db19a86b29720f 100644
+index e37ef75fa7049236815e50243ff074341daac102..2f1274559f148ca7a6c10be55167bc60bc3b7415 100644
 --- a/crates/aionui-ai-agent/src/manager/acp/agent.rs
 +++ b/crates/aionui-ai-agent/src/manager/acp/agent.rs
 @@ -15,8 +15,9 @@ use crate::registry::CatalogSender;
@@ -269,11 +282,55 @@ index e37ef75fa7049236815e50243ff074341daac102..170402c08cdcbb29d245cf5b84db19a8
  };
  use aionui_api_types::{
      AgentHandshake, ConfigOptionConfirmation, GetConfigOptionsResponse, SetConfigOptionResponse,
-@@ -60,6 +61,16 @@ use super::mode_normalize::normalize_requested_mode;
+@@ -27,6 +28,7 @@ use aionui_common::{
+ };
+ use serde_json::Value;
+ use std::collections::HashMap;
++use std::future::Future;
+ use std::sync::Arc;
+ use std::time::{Duration, Instant};
+ use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
+@@ -59,7 +61,52 @@ use super::mode_normalize::normalize_requested_mode;
+ 
  /// Grace period before force-killing an ACP process (ms).
  const ACP_KILL_GRACE_MS: u64 = 500;
++/// Delay before the single retry after an ACP initialize timeout.
++const ACP_INIT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
  const OBSERVED_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(10);
 +const STEER_TURN_ENDED_MARKER: &str = "AIONUI_STEER_TURN_ENDED";
++
++async fn retry_init_timeout_once<T, F, Fut>(conversation_id: &str, mut operation: F) -> Result<T, AgentError>
++where
++    F: FnMut() -> Fut,
++    Fut: Future<Output = Result<T, AgentError>>,
++{
++    match operation().await {
++        Err(AgentError::Acp(AcpError::InitTimeout { timeout_secs })) => {
++            warn!(
++                %conversation_id,
++                timeout_secs,
++                backoff_ms = ACP_INIT_RETRY_BACKOFF.as_millis(),
++                "ACP initialize timed out; retrying once with a fresh process"
++            );
++            tokio::time::sleep(ACP_INIT_RETRY_BACKOFF).await;
++            match operation().await {
++                Ok(value) => {
++                    info!(%conversation_id, "ACP initialize retry succeeded");
++                    Ok(value)
++                }
++                Err(err) => {
++                    error!(
++                        %conversation_id,
++                        error = %ErrorChain(&err),
++                        "ACP initialize retry failed"
++                    );
++                    Err(err)
++                }
++            }
++        }
++        result => result,
++    }
++}
 +
 +fn map_steer_protocol_error(error: AcpError) -> AgentError {
 +    match &error {
@@ -286,7 +343,80 @@ index e37ef75fa7049236815e50243ff074341daac102..170402c08cdcbb29d245cf5b84db19a8
  
  /// Decompose a child `ExitStatus` (or its absence) into the
  /// `(exit_code, signal)` pair that `AcpError::StartupCrash` /
-@@ -744,6 +755,16 @@ impl AcpAgentManager {
+@@ -370,6 +417,24 @@ impl AcpAgentManager {
+             mpsc::Receiver<SessionNotification>,
+         ),
+         AgentError,
++    > {
++        let conversation_id = params.conversation_id.clone();
++        retry_init_timeout_once(&conversation_id, || {
++            Self::new_attempt(Arc::clone(&params), Arc::clone(&skill_manager))
++        })
++        .await
++    }
++
++    async fn new_attempt(
++        params: Arc<AcpSessionParams>,
++        skill_manager: Arc<AcpSkillManager>,
++    ) -> Result<
++        (
++            Self,
++            mpsc::Receiver<AcpSessionEvent>,
++            mpsc::Receiver<SessionNotification>,
++        ),
++        AgentError,
+     > {
+         let process = Arc::new(CliAgentProcess::spawn_for_sdk(params.command_spec.clone(), &params.data_dir).await?);
+         register_session_process(
+@@ -420,15 +485,38 @@ impl AcpAgentManager {
+                 let _ = unregister_agent_process(&params.data_dir, process.pid());
+                 return Err(AgentError::from(AcpError::StartupCrash { exit_code, signal, stderr }));
+             }
+-            res = &mut connect_fut => res.map_err(|e| {
+-                error!(
+-                    conversation_id = %params.conversation_id,
+-                    error = %ErrorChain(&e),
+-                    "Failed to establish ACP protocol connection"
+-                );
+-                let _ = unregister_agent_process(&params.data_dir, process.pid());
+-                AgentError::from(e)
+-            })?,
++            res = &mut connect_fut => match res {
++                Ok(protocol) => protocol,
++                Err(e) => {
++                    let init_timed_out = matches!(e, AcpError::InitTimeout { .. });
++                    if init_timed_out {
++                        warn!(
++                            conversation_id = %params.conversation_id,
++                            pid = process.pid(),
++                            error = %ErrorChain(&e),
++                            "ACP initialize attempt timed out; cleaning up process"
++                        );
++                        if let Err(cleanup_err) = process.kill(Duration::from_millis(ACP_KILL_GRACE_MS)).await {
++                            error!(
++                                conversation_id = %params.conversation_id,
++                                pid = process.pid(),
++                                error = %ErrorChain(&cleanup_err),
++                                "Failed to clean up timed-out ACP process; retry suppressed"
++                            );
++                            let _ = unregister_agent_process(&params.data_dir, process.pid());
++                            return Err(cleanup_err);
++                        }
++                    } else {
++                        error!(
++                            conversation_id = %params.conversation_id,
++                            error = %ErrorChain(&e),
++                            "Failed to establish ACP protocol connection"
++                        );
++                    }
++                    let _ = unregister_agent_process(&params.data_dir, process.pid());
++                    return Err(AgentError::from(e));
++                }
++            },
+         };
+         let permission_router = Arc::new(PermissionRouter::new(permission_rx));
+ 
+@@ -744,6 +832,16 @@ impl AcpAgentManager {
                      "acp_config_option_command_ack"
                  );
                  self.ensure_session_unchanged(&session_id, "model").await?;
@@ -303,7 +433,7 @@ index e37ef75fa7049236815e50243ff074341daac102..170402c08cdcbb29d245cf5b84db19a8
                  self.wait_for_observed_config_option("model", value, OBSERVED_CONFIRMATION_TIMEOUT)
                      .await
              }
-@@ -828,6 +849,72 @@ impl AcpAgentManager {
+@@ -828,6 +926,72 @@ impl AcpAgentManager {
          self.session.read().await.session_id().map(ToOwned::to_owned)
      }
  
@@ -376,16 +506,85 @@ index e37ef75fa7049236815e50243ff074341daac102..170402c08cdcbb29d245cf5b84db19a8
      /// Restore a previously persisted session_id (e.g. from DB on task rebuild).
      /// Enables resume path on next send_message instead of creating a fresh session.
      ///
-@@ -1292,7 +1379,7 @@ impl AcpAgentManager {
+@@ -1292,7 +1456,7 @@ impl AcpAgentManager {
  
  #[cfg(test)]
  mod tests {
 -    use super::{exit_status_parts, user_facing_message};
-+    use super::{exit_status_parts, map_steer_protocol_error, user_facing_message};
++    use super::{exit_status_parts, map_steer_protocol_error, retry_init_timeout_once, user_facing_message};
      use crate::agent_runtime::AgentRuntime;
      use crate::error::AgentError;
      use crate::manager::acp::{AcpAgentManager, AcpSession};
-@@ -1475,6 +1562,25 @@ mod tests {
+@@ -1304,6 +1468,7 @@ mod tests {
+     use aionui_api_types::AgentHandshake;
+     use serde_json::json;
+     use std::collections::HashMap;
++    use std::sync::atomic::{AtomicUsize, Ordering};
+ 
+     fn capture_logs(max_level: tracing::Level, f: impl FnOnce()) -> String {
+         use std::io::Write;
+@@ -1346,6 +1511,60 @@ mod tests {
+         assert_eq!(exit_status_parts(None), (None, None));
+     }
+ 
++    #[tokio::test]
++    async fn initialize_timeout_retries_once_and_returns_second_success() {
++        let attempts = Arc::new(AtomicUsize::new(0));
++        let observed = Arc::clone(&attempts);
++
++        let result = retry_init_timeout_once("conv-retry-success", move || {
++            let attempt = observed.fetch_add(1, Ordering::SeqCst);
++            async move {
++                if attempt == 0 {
++                    Err(AgentError::from(AcpError::InitTimeout { timeout_secs: 30 }))
++                } else {
++                    Ok("connected")
++                }
++            }
++        })
++        .await;
++
++        assert_eq!(result.unwrap(), "connected");
++        assert_eq!(attempts.load(Ordering::SeqCst), 2);
++    }
++
++    #[tokio::test]
++    async fn second_initialize_timeout_is_returned_without_a_third_attempt() {
++        let attempts = Arc::new(AtomicUsize::new(0));
++        let observed = Arc::clone(&attempts);
++
++        let result = retry_init_timeout_once("conv-retry-exhausted", move || {
++            observed.fetch_add(1, Ordering::SeqCst);
++            async { Err::<(), _>(AgentError::from(AcpError::InitTimeout { timeout_secs: 30 })) }
++        })
++        .await;
++
++        assert!(matches!(
++            result,
++            Err(AgentError::Acp(AcpError::InitTimeout { timeout_secs: 30 }))
++        ));
++        assert_eq!(attempts.load(Ordering::SeqCst), 2);
++    }
++
++    #[tokio::test]
++    async fn non_initialize_error_is_not_retried() {
++        let attempts = Arc::new(AtomicUsize::new(0));
++        let observed = Arc::clone(&attempts);
++
++        let result = retry_init_timeout_once("conv-no-retry", move || {
++            observed.fetch_add(1, Ordering::SeqCst);
++            async { Err::<(), _>(AgentError::bad_request("invalid agent command")) }
++        })
++        .await;
++
++        assert!(matches!(result, Err(AgentError::BadRequest(message)) if message == "invalid agent command"));
++        assert_eq!(attempts.load(Ordering::SeqCst), 1);
++    }
++
+     #[cfg(unix)]
+     #[test]
+     fn exit_status_parts_extracts_unix_exit_code() {
+@@ -1475,6 +1694,25 @@ mod tests {
          );
      }
  
@@ -495,8 +694,44 @@ index 93fba083fae364b0c5880a3d101ab029d0c0df75..17d2352401ab62faa63a2b39044ffb14
      // ── Paginated type aliases ──────────────────────────────────────
  
      #[test]
+diff --git a/crates/aionui-api-types/src/file.rs b/crates/aionui-api-types/src/file.rs
+index f6eef3bc89e653c0313081cfc02dab42e107489f..77161328647623c3d31efb2c76ba95e145a0ff1f 100644
+--- a/crates/aionui-api-types/src/file.rs
++++ b/crates/aionui-api-types/src/file.rs
+@@ -89,6 +89,31 @@ pub struct CreateTempFileRequest {
+     pub file_name: String,
+ }
+ 
++/// Request body for `POST /api/fs/uploads` — initialize a resumable upload.
++#[derive(Debug, Deserialize)]
++pub struct CreateUploadSessionRequest {
++    pub file_name: String,
++    pub file_size: u64,
++    #[serde(default)]
++    pub conversation_id: Option<String>,
++    #[serde(default)]
++    pub fingerprint: Option<String>,
++    #[serde(default)]
++    pub client_request_id: Option<String>,
++}
++
++/// Resumable upload state returned by the initialization endpoint.
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
++pub struct UploadSessionResponse {
++    pub upload_id: String,
++    pub offset: u64,
++    pub file_size: u64,
++    pub chunk_size: usize,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub fingerprint: Option<String>,
++    pub expires_at_unix_ms: u64,
++}
++
+ /// Request body for `POST /api/fs/image-base64` — get image as base64.
+ #[derive(Debug, Deserialize)]
+ pub struct GetImageBase64Request {
 diff --git a/crates/aionui-api-types/src/lib.rs b/crates/aionui-api-types/src/lib.rs
-index ad71efec98a567f59ee84842ffa79fbea552dd70..e590f100e18a49e41dd905b0a774ec8a2865963f 100644
+index ad71efec98a567f59ee84842ffa79fbea552dd70..43dc740758166203cc84172efe91cdb5fdc4935b 100644
 --- a/crates/aionui-api-types/src/lib.rs
 +++ b/crates/aionui-api-types/src/lib.rs
 @@ -79,8 +79,9 @@ pub use conversation::{
@@ -511,6 +746,1193 @@ index ad71efec98a567f59ee84842ffa79fbea552dd70..e590f100e18a49e41dd905b0a774ec8a
      UpdateConversationArtifactRequest, UpdateConversationRequest,
  };
  pub use cron::{
+@@ -100,12 +101,12 @@ pub use extension::{
+ };
+ pub use file::{
+     BrowseDirectoryQuery, BrowseDirectoryResponse, BrowseEntry, CancelZipRequest, CopyFilesRequest, CopyFilesResponse,
+-    CreateTempFileRequest, DirOrFileResponse, FetchRemoteImageRequest, FileChangeInfoResponse, FileMetadataResponse,
+-    FileWatchRequest, GetFileMetadataRequest, GetFilesByDirRequest, GetImageBase64Request, ListWorkspaceFilesRequest,
+-    ReadFileBufferRequest, ReadFileRequest, RemoveEntryRequest, RenameRequest, RenameResponse, SnapshotBaselineRequest,
+-    SnapshotCompareResponse, SnapshotDiscardRequest, SnapshotInfoResponse, SnapshotMode, SnapshotStageRequest,
+-    SnapshotWorkspaceRequest, WorkspaceFlatFileResponse, WorkspaceOfficeWatchRequest, WriteFileRequest, ZipFileEntry,
+-    ZipRequest,
++    CreateTempFileRequest, CreateUploadSessionRequest, DirOrFileResponse, FetchRemoteImageRequest,
++    FileChangeInfoResponse, FileMetadataResponse, FileWatchRequest, GetFileMetadataRequest, GetFilesByDirRequest,
++    GetImageBase64Request, ListWorkspaceFilesRequest, ReadFileBufferRequest, ReadFileRequest, RemoveEntryRequest,
++    RenameRequest, RenameResponse, SnapshotBaselineRequest, SnapshotCompareResponse, SnapshotDiscardRequest,
++    SnapshotInfoResponse, SnapshotMode, SnapshotStageRequest, SnapshotWorkspaceRequest, UploadSessionResponse,
++    WorkspaceFlatFileResponse, WorkspaceOfficeWatchRequest, WriteFileRequest, ZipFileEntry, ZipRequest,
+ };
+ pub use lifecycle::{GitHubReleaseAsset, SystemInfoResponse, UpdateCheckRequest, UpdateCheckResult, UpdateReleaseInfo};
+ pub use mcp::{
+diff --git a/crates/aionui-app/assets/builtin-skills/workagent-help/SKILL.md b/crates/aionui-app/assets/builtin-skills/workagent-help/SKILL.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..660875ec33e8de4a25cc43e8aae080f2628e5603
+--- /dev/null
++++ b/crates/aionui-app/assets/builtin-skills/workagent-help/SKILL.md
+@@ -0,0 +1,23 @@
++---
++name: workagent-help
++description: Answer questions about how to use WorkAgent AI from its bundled Chinese help guide, including assistants, models and quotas, projects and files, chat mode, skills, scheduled tasks, WeChat connection and commands, settings, troubleshooting entry points, and documented limits. Use when a user asks where a WorkAgent AI feature is, how it behaves, what a button or setting does, which workflow to choose, or what limits and precautions apply. This skill is read-only product guidance; it does not change settings or diagnose live runtime state.
++---
++
++# WorkAgent AI Help
++
++Use the bundled help snapshot as the source of truth for product-usage questions.
++
++## Answer a question
++
++1. Read `references/help.zh-CN.md` before answering. For a long document, search the user's feature name and synonyms first, then read the surrounding heading and related caution blocks.
++2. Answer in the user's language. Keep paths, button labels, limits, modes, and warnings exact; translate the Chinese source when needed without changing its meaning.
++3. Distinguish similar surfaces such as normal assistants, ChatGPT chat mode, Web UI, and WeChat. Do not transfer a limitation or capability from one surface to another.
++4. Prefer a short direct answer followed by the exact navigation path or steps. Mention prerequisites and irreversible actions when the guide does.
++5. If the bundled guide does not cover the question, say that clearly. Do not invent behavior from general AionUi knowledge.
++
++## Boundaries
++
++- Treat the reference as a versioned documentation snapshot, not evidence of current runtime state.
++- Do not modify WorkAgent AI settings under this skill. Use `aionui-config` when the user asks the管家 to perform a configuration change.
++- Do not diagnose a live failure under this skill. Use `aionui-troubleshooting` for runtime investigation.
++- Never expose API keys, internal credentials, private host paths, or implementation-only details in a user-facing help answer.
+diff --git a/crates/aionui-app/assets/builtin-skills/workagent-help/agents/openai.yaml b/crates/aionui-app/assets/builtin-skills/workagent-help/agents/openai.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..9969dc0423f2315f5febca2a9850d46de519925d
+--- /dev/null
++++ b/crates/aionui-app/assets/builtin-skills/workagent-help/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "WorkAgent AI 帮助"
++  short_description: "依据内置说明查询 WorkAgent AI 功能、路径、限制与注意事项"
++  default_prompt: "Use $workagent-help to answer my question from the bundled WorkAgent AI guide."
+diff --git a/crates/aionui-app/assets/builtin-skills/workagent-help/references/help.zh-CN.md b/crates/aionui-app/assets/builtin-skills/workagent-help/references/help.zh-CN.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..48f1b5f2ab9d1e222a9bfdda3b16b1170ed378fa
+--- /dev/null
++++ b/crates/aionui-app/assets/builtin-skills/workagent-help/references/help.zh-CN.md
+@@ -0,0 +1,1123 @@
++# WorkAgent AI 中文帮助文档
++
++> 此文件由 WorkAgent AI 内置中文帮助文档自动生成。请勿手工编辑。
++# 0. 快速开始
++
++绝大多数日常工作都可以用“单智能体模式”完成。
++
++步骤
++
++你要做什么
++
++说明
++
++1
++
++创建对话
++
++点击“新对话”，或在已有项目旁点击“+”。
++
++2
++
++选择助手与项目
++
++通常选择 Codex CLI；持续性工作建议放入项目。
++
++3
++
++上传资料
++
++添加 Word、PDF、表格、图片或其他工作文件。
++
++4
++
++说明任务
++
++讲清背景、要做什么、具体要求和交付格式。
++
++5
++
++检查结果
++
++核对事实、数字、格式与文件改动，再决定是否采用。
++
++建议的默认选择
++
++单智能体模式 + Codex CLI + GPT 5.6
++Luna（xhigh）+“智能体（完全访问）”权限。需要持续处理同一批材料时，先创建或选择一个项目。
++
++## 把任务说明写清楚：五个要素
++
++要素
++
++需要说明的内容
++
++示例
++
++背景
++
++这项工作用于什么场景、面向谁
++
++给公司管理层汇报
++
++目标与成功标准
++
++要完成什么结果、必须满足哪些条件、最终答案必须包含什么
++
++完成次版本迭代；功能通过测试，并提供变更说明
++
++约束与授权
++
++可以直接执行哪些操作，哪些外部或破坏性操作必须先确认
++
++在每次版本迭代前都需保存旧版本
++
++输出
++
++最终结果的格式、长度、受众和必要证据
++
++提交新版本、测试结果和变更说明
++
++停止条件
++
++什么时候可以结束，证据不足时如何处理
++
++达到成功标准后结束；证据不足时列明缺口，不要猜测
++
++提示词示例
++
++背景：这份材料将用于【使用场景】，读者是【对象】。
++
++目标与成功标准：请根据我上传的文件，完成【具体目标】；必须满足【条件】；最终答案必须包含【内容】。
++
++约束与授权：在每次版本迭代前都需保存旧版本；可以直接执行【本地操作】；执行【外部或破坏性操作】前必须先征得我确认。
++
++输出：面向【受众】，以【Word / Excel / PPT / Markdown】格式提交，并附上【必要证据】。
++
++停止条件：达到上述成功标准后结束；如果证据不足，请列明缺少什么并停止，不要猜测。
++
++# 1. 先认识 6 个基本概念
++
++完成一次标准任务，需要做出六个选择：使用哪个
++Agent、是否使用项目、是否复用已有对话、选择哪个模型/什么思考强度、是否要使用技能/使用哪些技能、授予多大权限。
++
++概念
++
++通俗解释
++
++使用建议
++
++助手 / Agent / 智能体
++
++负责理解任务、调用工具并执行工作的智能体。
++
++先选适合任务的助手，再选择模型。
++
++项目
++
++一项工作的文件夹和工作空间，可保存相关文件与多个对话。
++
++同一事项需要多次处理时使用项目。
++
++对话 / 会话
++
++围绕一个具体任务展开的一条工作线程。
++
++一个对话尽量只处理一个明确目标。
++
++模型
++
++智能体的“思考核心”，不同模型在能力、速度和额度消耗上不同。
++
++优先使用默认推荐，复杂任务再升级；使用 Kimi 时，日常任务优先 K2.7，复杂任务再升级 K3。
++
++技能
++
++完成特定任务的操作手册和工具组合，例如处理 Word、PDF 或表格。
++
++按需加载，避免一次添加过多。
++
++权限
++
++智能体可以读取、修改文件和运行命令的范围。
++
++权限越高，效率越高，风险也越高。
++
++## 项目和对话有什么区别？
++
++项目更像“工作文件夹”，对话更像“围绕某个任务的一次沟通”。例如，“年度经营分析”可以建立为一个项目，在其中分别创建“整理数据”“撰写报告”“检查数字”等多个对话。
++
++什么时候不需要项目？
++
++只问一个临时问题、无需保存文件或后续继续处理时，可以选择“不使用项目”。
++
++## 平台默认提供的助手
++
++当前默认提供 Aion CLI、Codex CLI、Kimi 和 WorkAgent AI 管家。其他助手若暂不可用，可在“助手”页面关闭显示，保持界面简洁。
++
++“官方助手”通常已预置特定任务的规则与技能。例如，Word
++文档助手会提前配置文档编辑相关能力，更适合直接处理对应类型的工作。
++
++# 2. 单智能体模式
++
++适合日常写作、分析、整理、调查和文件处理，是最常用的模式。
++
++## 方法一：从“新对话”开始
++
++1. 点击左侧“新对话”。
++
++2. 选择需要使用的助手（Agent）。
++
++3. 选择已有项目、创建新项目，或在临时问答时选择“不使用项目”。
++
++4. 上传文件，输入任务说明，然后点击发送或按回车发送。
++
++图 1 新对话页面：选择助手、项目、模型与权限
++
++建议
++
++持续几天或需要反复修改的工作，先建立项目；一次性问答可以不使用项目。
++
++## 方法二：在已有项目中创建对话
++
++将鼠标移到项目名称上方，点击项目右侧浮现的“+”，即可在该项目内新建对话。
++
++图 2 在已有项目中创建新对话
++
++## 分支并编辑与引导
++
++将鼠标移到自己发送过的消息上，可使用“分支并编辑”（下图红框）：系统会以该消息之前的聊天记录为起点创建一个新对话，并让你修改这条消息后重新发送。新对话仅会包含该消息之前的所有对话上下文。分支只会创建新对话并改变聊天上下文，不会复制、回滚或修改项目文件。也不会删除旧对话。适合尝试另一种问法或从较早位置走一条新的对话路线。（如果只想创建分支而不编辑，可前往“设置
++→ 系统 → 对话分支方式”调整。）
++
++新分支与原对话仍可使用同一个项目目录；分支点之后哪些聊天内容会被助手看到，与磁盘上的文件当前是什么状态，是两件不同的事。
++
++助手正在回复时，新提示词默认进入队列。Codex
++对话的排队提示词旁会显示“引导”图标（下图蓝框）；点击后，这条提示词会立即加入当前正在生成的回复，用来补充要求或纠正方向，而不是等待下一轮。只有引导成功后，该提示词才会从队列移除。
++
++工作习惯
++
++不要把所有事情堆在同一个超长对话里。一个阶段完成后，可新建对话并继续使用同一项目中的文件。
++
++如果助手正在当前对话中工作，你仍可继续发送新指令。新指令会进入队列；当前指令执行完毕后，助手会按发送顺序依次执行队列中的指令。
++
++# 3. 聊天模式：节省额度、使用 Pro 思考强度或生成图片
++
++点击主界面左侧“聊天模式”，即可进入 ChatGPT 网页对话。
++
++需要生成图片时，也请使用聊天模式。
++
++额度说明
++
++聊天模式中的普通对话不会消耗平台的 ChatGPT
++日额度和周额度，所以在时间充裕的情况下，建议尽量使用更高级的模型和更强的思考强度（如 example-balanced ·
++xhigh）。需要注意的是，Pro 思考强度的额度较低：每位用户默认每周最多使用 7 次，管理员可以按需提高上限。
++
++使用限制
++
++1. 文件数量上限：聊天模式最多支持 10 个文件；文件较多时，建议先打包为
++ZIP，或者让助手先尝试合并文件。
++
++2. 工具与扩展能力受限：聊天模式无法调用部分工具和定制化插件/技能，只适合不依赖这些能力的通用任务。
++
++聊天模式首次加载、切换对话和上传文件通常需要更长时间，连接稳定性也低于 Codex
++CLI。建议仅在需要节省日额度或周额度、任务确实需要 Pro 思考强度，或需要生成图片时使用。Pro
++是聊天模式独有的思考强度，其他助手不提供这一档位。
++
++图 3 聊天模式入口
++
++# 4. 团队模式：让多个智能体协作
++
++适合可拆分、复杂度高、需要交叉审核的任务；日常任务通常不需要。
++
++1. 点击左侧“团队”右侧的“+”。
++
++2. 输入团队名称，选择团队负责人（Leader）；通常建议选择 Codex CLI。项目为可选项。
++
++3. 上传资料并说明总任务，负责人会先给出任务分配方案。
++
++4. 审核分工方案：可以直接同意，也可以用自然语言要求修改后再执行。
++
++图 4 创建团队入口
++
++## 适合使用团队模式的情况
++
++- 需要快速完成任务切任务非常复杂，但可以拆成相互独立的子任务。
++
++- 需要不同模型分别起草、复核或交叉验证。
++
++- 希望利用不同助手的特长，例如一个负责分析、一个负责中文审校。
++
++## 不建议使用团队模式的情况
++
++- 任务很简单，单个助手几分钟即可完成。
++
++- 任务无法清晰拆分，多个助手容易重复工作或互相矛盾。
++
++- 额度较紧张，或对执行时间没有迫切要求。
++
++额度提醒
++
++团队模式会同时调用多个智能体，额度消耗通常明显高于单智能体模式。应先确认分工合理，并留意剩余额度。
++
++# 5. 助手与模型介绍
++
++助手决定主要能力和工作方式；每个助手下可以提供一个或多个模型。
++
++助手
++
++模型
++
++模型介绍
++
++Codex CLI
++
++综合执行能力强，适合长流程、文件操作、分析与编程。
++
++example-reasoning
++
++默认模型，质量、速度和成本较均衡。
++
++example-fast
++
++速度与能力较均衡，响应通常更快。
++
++example-balanced
++
++能力更强、成本更高，面向复杂任务。
++
++Kimi
++
++图片文字识别和结果复核表现较好。
++
++kimi-for-coding（K2.7 标准版）
++
++Kimi 标准模型，成本最低。
++
++kimi-for-coding-highspeed（K2.7 高速版）
++
++K2.7 快速通道，响应更快；本平台单位 token 价格为标准版的 2 倍。
++
++kimi-k3（K3）
++
++Kimi 高性能模型，面向更复杂的任务。
++
++Aion CLI
++
++可在同一对话中切换不同供应商模型，并灵活加载和清理技能上下文。
++
++按需选择供应商模型
++
++适合少数需要保留上下文并跨模型接力的场景。
++
++WorkAgent AI 管家
++
++内置平台说明和诊断能力。
++
++平台内置模型
++
++用于平台配置、故障排查与功能咨询。
++
++Kimi 任务成本提示
++
++以 K2.7 标准版为基准，K3 的输入、输出和缓存输入单价分别约为 3.16 倍、3.75 倍和 1.58 倍。K3 的单位 token
++价格明显低于 GPT 5.6 Sol，但同等 token 数量下完成任务的效率不如 Sol，因此完成相同任务的实际总成本通常只略低于
++Sol。K2.7 与 K3 按各自价格分别计费，并共同占用 Kimi 日额度和周额度。
++
++## 不要同时开启过多助手
++
++平台可能显示更多尚未启用的助手。为避免选择混乱，可在“助手”页面关闭暂时不用的助手，仅保留常用选项。
++
++# 6. 任务对应的模型与思考强度
++
++根据任务类型直接选择下面的组合。Codex CLI 提供多档思考强度；Kimi 提供“Thinking On（开启）”和“Thinking
++Off（关闭）”两种思考状态。Aion CLI 和 WorkAgent AI 管家只需选择模型。Kimi 还通过标准版、高速版或 K3
++区分能力和速度。聊天模式提供的普通模型和思考强度与 Codex CLI 相同；Pro 思考强度仅聊天模式提供。
++
++任务类型
++
++助手
++
++模型 + 思考强度
++
++说明
++
++日常文字、整理、分析与多数办公任务
++
++Codex CLI
++
++example-reasoning · xhigh（默认推荐）
++
++质量与成本较均衡，优先使用。
++
++希望更快完成的日常任务
++
++Codex CLI
++
++example-balanced · low；example-fast · high
++
++两种组合通常都更快，但额度消耗更高；优先尝试排在前面的 Sol · low。
++
++复杂分析、关键方案与困难推理
++
++Codex CLI
++
++example-balanced · high / xhigh
++
++仅在任务确实复杂时升级使用。
++
++需要节省平台日额度或周额度的任务
++
++聊天模式
++
++参考 Codex CLI 选择模型与思考强度
++
++普通对话不消耗平台额度；只适合不依赖受限工具或定制化插件/技能的通用任务；时间充裕时可优先选择 example-balanced ·
++xhigh 等更高档组合。
++
++需要生成图片的任务
++
++聊天模式
++
++选择支持图片生成的模型
++
++说明画面内容、风格、尺寸和用途；生成后可继续要求修改。
++
++长篇研究报告、复杂数学推理等最复杂任务
++
++聊天模式
++
++Pro 思考强度（额度较低，每周默认 7 次）
++
++目前世界上综合性能最好的模型档位，性能优于 GPT 5.6 Sol ·
++xhigh，但思考时间长很多；仅在确有需要时使用。注意观察是否出现“降智”：如果感觉质量不高、生成的文章明显较短，或生成速度异常快（几乎没有思考就直接生成），请切换到
++Extra High（极高）思考强度。
++
++审校和图片文字识别任务
++
++Kimi
++
++kimi-for-coding（K2.7 标准版）
++
++需要仔细审校或分析时可开启思考；简单任务可关闭。
++
++极快速任务
++
++Kimi
++
++kimi-for-coding-highspeed（K2.7 高速版）
++
++通常关闭思考，适合优先关注响应速度的情况。
++
++复杂编码、复杂审校与结果复核
++
++Kimi
++
++kimi-k3（K3）
++
++建议开启思考；性能仅略逊于 GPT 5.6 Sol，可在追求质量时作为 K2.7 的上位替代。
++
++需要保留上下文并跨供应商模型接力
++
++Aion CLI
++
++example-reasoning（推荐）
++
++默认使用该组合；确需跨模型接力时再切换模型。
++
++平台配置、故障排查与功能咨询
++
++WorkAgent AI 管家
++
++example-reasoning（推荐）
++
++默认使用该组合处理平台配置、故障排查与功能咨询。
++
++## Kimi 的思考开关
++
++选项
++
++区别
++
++适合任务
++
++Thinking On（开启）
++
++让模型先进行更充分的推理，再给出答案；通常质量更高，但耗时和 token 消耗也可能增加。
++
++复杂分析、编码、审校、方案设计和结果复核。
++
++Thinking Off（关闭）
++
++减少额外推理，直接处理任务；通常响应更快、消耗更低。
++
++简单问答、格式转换、明确的小修改和其他速度优先的任务。
++
++思考开关只影响模型的推理方式，不会改变助手可以执行哪些操作；操作范围由授权模式决定。
++
++默认组合
++
++不确定时先选 Codex CLI + example-reasoning ·
++xhigh。只有任务明显更复杂或默认组合结果不足时，再升级模型；任务过大时先拆分，再逐步复核。
++
++# 7. 权限设置与安全
++
++权限决定智能体能否修改文件、运行命令或自动执行操作。
++
++图 5 Codex CLI 的权限选择
++
++助手
++
++权限选项
++
++建议
++
++Codex CLI
++
++只读 / 智能体 / 智能体（完全访问）
++
++一般可以选择“智能体（完全访问）”，因为云端服务器的数据可以和本地电脑隔离确保安全。但在高危险场景下收紧权限。
++
++Kimi
++
++默认 / 计划模式 / 自动 / 全自动
++
++日常任务通常使用“全自动”，和 Codex CLI
++一样；云端服务器的数据与本地电脑隔离，可以提高执行效率。只需先看方案时使用“计划模式”，高危险场景下再收紧权限。
++
++Aion CLI
++
++默认 / 自动编辑 / 全自动
++
++通常使用“全自动”用于可控、安全的任务。建议在高危险场景下收紧权限。
++
++## Kimi 的四种授权模式
++
++模式
++
++行为
++
++建议
++
++默认
++
++正常执行任务；遇到需要你批准的操作时，会先请求确认。
++
++适合希望逐项确认操作的任务；日常任务通常直接使用“全自动”。
++
++计划模式
++
++主要进行只读分析并拟定执行方案，不直接修改项目文件。
++
++适合先评审方案；确认后再切换到可执行的模式。
++
++自动
++
++自动批准安全操作；敏感操作仍可能请求确认，并且不会向你提出澄清问题。
++
++适合任务边界清楚、可以无人值守执行的可信项目。
++
++全自动
++
++跳过大多数常规工具操作的人工批准，但需要你选择、补充关键信息或触及特殊安全边界时仍可能询问。
++
++云端隔离环境中的日常任务推荐使用；高危险场景下应收紧权限。
++
++## 使用高权限前，先做 4 件事
++
++1. 确认当前项目文件夹正确，避免操作到无关目录。
++
++2. 备份重要文件，尤其是批量重命名、删除或覆盖前。
++
++3. 在任务说明中明确“不得删除原文件”“先生成副本”等限制。
++
++4. 执行后检查文件列表、修改记录和最终结果。
++
++# 8. 文件与项目管理
++
++文件可以通过聊天框上传，也可以在项目文件面板中统一管理。
++
++## 打开文件管理面板
++
++进入项目对话并至少发送一条消息后，点击右上角的文件面板图标即可展开或关闭文件管理区域。
++
++- 点击“+”上传文件。
++
++- 使用搜索框查找文件。
++
++- 右键文件可添加到聊天、下载、删除或重命名。
++
++- 也可以直接点击聊天框左下角“+”上传文件并附加到当前对话。
++
++## 使用 @ 引用项目文件
++
++在聊天输入框中输入
++@，再继续输入文件名或路径关键词，即可搜索当前项目中的文件和文件夹。选择结果后，对应路径会显示在消息中，并作为本次任务的项目内容交给助手。
++
++- 可使用鼠标选择结果，也可用方向键移动并按 Enter 确认。
++
++- 一条消息可以引用多个项目文件；继续输入 @ 即可添加下一项。
++
++- 如果不再需要某项引用，发送前删除消息中的对应 @路径 即可。
++
++## 上传大文件
++
++网页端单个文件最大支持 1 GiB。上传时会显示每个文件的进度，也可以单独取消仍在进行的上传。
++
++- 大文件会自动分块上传，不需要手动拆分。
++
++- 上传中断后，重新选择同一个文件时，系统会尝试从已经完成的位置继续。
++
++- 上传尚未完成时不要切换对话；切换对话会取消原对话中仍在进行的上传。
++
++- 发送按钮会在附件上传完成后恢复，确认文件已经出现在输入框中再发送任务。
++
++图 6 项目文件管理面板
++
++## 管理项目或聊天
++
++将鼠标悬停在项目或聊天名称上，会出现“…”菜单，可执行重命名、置顶、移除或删除等操作。
++
++“移除项目”不等于“删除文件夹”
++
++移除项目通常会从侧边栏删除该项目及其对话，但项目文件可能仍保留在工作目录中。若需彻底删除，应先备份，再到上级文件夹的文件面板中确认并删除。
++
++## 查找、批量管理与导出对话
++
++功能
++
++使用方式
++
++检索会话内容
++
++点击页面上方的搜索按钮，输入关键词搜索历史消息；可继续加载结果并跳转到对应消息。
++
++批量管理
++
++点击侧边栏顶部的“批量管理”，选择一个或多个对话后批量导出或删除。
++
++导出单个对话
++
++打开对话的“…”菜单并选择“导出”，再选择保存目录。
++
++导出的 ZIP 包包含 JSON 和 Markdown 格式的会话记录，以及该对话关联的项目文件。批量删除无法撤销，建议先导出备份。
++
++## 推荐的项目命名方式
++
++场景
++
++推荐格式
++
++示例
++
++长期项目
++
++年份/月份-客户/部门-事项
++
++2609-XX集团-可研报告
++
++临时任务
++
++日期-任务简称
++
++0716-会议纪要
++
++版本迭代
++
++项目名-V1/V2/终稿
++
++员工手册-V2
++
++# 9. 额度与计算资源
++
++额度限制模型使用量；聊天模式的普通对话不占用平台日额度和周额度，但 Pro 模型单独按每周次数限制；硬盘、内存和 CPU
++限制文件处理与任务并发。
++
++资源
++
++默认上限
++
++说明
++
++ChatGPT 模型额度
++
++每周 40 美元/每日20美元
++
++达到任一上限后该类模型将无法使用
++
++聊天模式普通对话
++
++不占用日额度和周额度
++
++加载时间较长、连接稳定性相对较低，并受 10 个文件与部分工具、插件/技能不可用的限制。
++
++Pro 模型额度
++
++默认每人每周 7 次
++
++仅聊天模式可用；管理员可以提高个人上限，每周额度按用户分别统计。
++
++Kimi 模型额度
++
++每周 10 美元/每日5美元
++
++K2.7 与 K3 共用该额度，并按各自单价分别计费；K3 会更快消耗额度。
++
++硬盘空间
++
++最多 20 GB
++
++定期删除不再需要的中间文件和重复文件。
++
++运行内存
++
++最多 6 GB
++
++处理大型文件时可能受到总体资源占用影响。
++
++CPU
++
++最多 8 核
++
++实际可用资源取决于平台整体负载。
++
++图 7 在设置页面查看模型与剩余额度
++
++额度不足怎么办？
++
++日额度或周额度不足，且任务不依赖受限工具或定制化插件/技能时，可以直接改用聊天模式中的模型；聊天模式提供与 Codex
++CLI
++相同的普通模型和思考强度，普通对话不消耗平台日额度和周额度。也可以先降低思考强度、改用成本更低的模型、减少团队成员或拆分任务；使用
++Kimi 时，日常任务优先切回 K2.7。聊天模式加载时间较长且连接稳定性相对较低；Pro
++思考强度的额度较低，确需提高普通额度或 Pro 次数时联系管理员。
++
++## 节省额度的 6 个方法
++
++1. 上传必要材料，不要一次加入大量无关文件。
++
++2. 一个对话只完成一个明确目标，避免长期混杂多个事项。
++
++3. 先要求输出提纲或小样，确认方向后再生成完整文件。
++
++4. 日常 Kimi 任务使用 K2.7，只有复杂任务再升级 K3；Codex CLI 同样先用默认模型，复杂任务再提高档位。
++
++5. 能够接受加载较慢和连接不稳定时，可使用聊天模式中的模型；普通对话不占用日额度和周额度。
++
++6. 团队模式只用于真正可拆分、需要交叉审核的任务。
++
++# 10. 技能、定时任务与微信设置
++
++这些功能用于扩展能力和自动化重复工作。
++
++## 助手管理
++
++点击左侧“助手”可以管理用于单智能体、团队和定时任务的助手。
++
++- 在“我的助手”中调整展示顺序、创建自定义助手，或编辑助手使用的 Agent、规则、默认模型、权限、技能和 MCP。
++
++- 在“官方助手”中启用需要的助手；如需修改官方助手的名称、规则或技能，可先复制为“我的助手”。
++
++- “设置 → 智能体”用于查看底层 Agent 的连接状态、测试连接和处理登录、环境变量或运行环境异常。
++
++## 技能 / 能力扩展
++
++创建新对话前，可以按任务添加技能，例如 PDF、Word、表格或演示文稿处理。技能会告诉智能体应遵循的步骤、工具和注意事项。
++
++入口
++
++作用
++
++设置 → 能力扩展 → 技能
++
++查看和管理技能，可导入单个技能目录、包含多个技能的父目录或 ZIP 压缩包。
++
++设置 → 能力扩展 → 工具
++
++手动添加、从 JSON 导入或扫描已有 CLI 的 MCP 配置，并检测 MCP 是否可连接。
++
++技能不是越多越好
++
++加载过多技能会占用上下文并分散智能体注意力。只添加与当前任务直接相关的技能，建议一次不超过 8 个。
++
++## 定时任务
++
++定时任务会按照计划自动运行，例如每天汇总信息、每周整理文件或定期生成报告。可通过自然语言让智能体帮助创建，也可以在“定时任务”页面手动设置。
++
++执行模式
++
++适用情况
++
++新建会话
++
++每次执行都从新对话开始，不带入上一次上下文，适合日报、巡检和定时汇总。
++
++持续会话
++
++每次回到同一个对话继续执行，保留之前的上下文和结果，适合长期跟进同一事项。
++
++- 写清运行时间、频率、任务范围和输出方式。
++
++- 创建后不能更改执行模式；需要切换时，应删除任务后重新创建。
++
++- 任务详情页可以立即执行、暂停或恢复、编辑任务，并查看每次执行记录。
++
++- 删除定时任务时，其所属会话也会被删除，应先确认结果是否已经保存。
++
++- 涉及发送、删除或覆盖文件时，先设置人工确认。
++
++- 定期检查是否仍然需要，避免持续消耗额度。
++
++## 连接微信
++
++设置路径为“设置 → 远程连接 → 微信”。首次使用时按以下步骤完成连接和授权：
++
++1. 点击“扫码登录”，使用微信扫描二维码并在手机上确认。
++
++2. 选择微信对话使用的助手和默认模型。
++
++3. 在微信中找到机器人并发送任意消息。
++
++4. 返回远程连接页面，在配对请求中点击“批准”。授权成功后即可从微信发起任务。
++
++不再使用时可以断开微信连接；已授权用户也应在授权名单中单独检查和移除。
++
++## 通过微信发送文件
++
++微信支持接收图片和文件，单个文件最大 200 MB。
++
++- 可以连续发送多个附件，系统会先将它们暂存，不会在只有附件时立即调用 AI。
++
++- 发送第一条文字指令后，已暂存的全部附件会和这条指令一起交给 AI。
++
++- 文件会保存到当前项目的“微信文件”目录；无项目对话会使用该对话的临时工作区。
++
++- 如果任务最终生成了文件，系统会以微信文件消息返回，而不是只发送文件路径。
++
++## 微信斜杠命令
++
++在已授权的微信对话中，可以发送以下中文斜杠命令管理项目、对话和模型。需要选择项目、对话或模型时，可以直接回复列表中的编号。
++
++命令
++
++作用
++
++/新对话 [项目名]
++
++新建对话。不填写项目名时列出可用项目，可回复编号或项目名称；也可选择无项目的临时工作区。
++
++/切换 [编号/ID/名称]
++
++查看并切换历史对话。可按列表编号、对话 ID 或名称选择。
++
++/历史 [条数]
++
++查看当前对话最近的消息，默认 10 条，最多 30 条。
++
++/模型 [编号/模型ID]
++
++查看当前对话可用模型，或直接切换到指定模型。
++
++/继续
++
++恢复上一个对话；空闲后自动新建对话时，也可用它返回原对话。
++
++/压缩
++
++压缩当前 CLI 对话的上下文，释放可用上下文空间。
++
++/重命名 新名称
++
++修改当前对话名称。
++
++/额度
++
++查看 ChatGPT、Kimi 的可用额度和硬盘剩余空间。
++
++/帮助 或 /指令
++
++在微信中显示命令帮助。
++
++- 命令支持无歧义的中文前缀，例如 /新、/额。
++
++- 列出项目、对话或模型后，可以直接回复编号；列表末尾也有退出选项。
++
++- 以上中文命令由微信功能处理；其他 ASCII 斜杠命令，例如 /review，会原样交给当前 CLI。
++
++## 微信任务完成提醒
++
++微信提醒用于把网页端任务的最终回答发送到最近活跃、已授权的微信对话。使用前需要先在“设置 → 远程连接”中完成微信授权。
++
++开关
++
++提醒范围
++
++“设置 → 系统 → 任务完成后发送微信提醒”开启
++
++所有网页对话完成后都发送微信提醒。
++
++总开关关闭，某个对话“三个点 → 微信提醒”开启
++
++只提醒这个对话。
++
++总开关和单独开关都关闭
++
++不发送提醒。
++
++- 总开关优先级更高：总开关开启时，即使某个对话没有单独开启，也会发送提醒。
++
++- 微信中直接发起的任务已经会实时返回结果，不再额外发送一条完成提醒。
++
++- 如果最终结果包含可发送的本地文件，文件会随完成提醒一起发送。
++
++## 微信空闲后的对话处理
++
++设置路径为“设置 → 系统 → 微信空闲后的对话处理”。
++
++空闲时间达到设定分钟数时，系统不会立即切换对话，而是在收到下一条微信消息时执行所选策略。
++
++处理方式
++
++实际行为
++
++先询问
++
++暂存收到的消息和附件，询问“继续当前对话、创建新对话或取消”；选择后再发送原消息。
++
++自动新建
++
++自动创建不带旧上下文的新对话；触发切换的那条消息不会发送给 AI，需要重新发送。
++
++关闭
++
++不按空闲时间切换，继续使用原对话和原上下文。
++
++如何返回空闲前的对话？
++
++“自动新建”模式下，可以发送 /继续 返回之前的对话，然后重新发送刚才的指令。
++
++## 系统中的任务与文件设置
++
++以下选项都位于“设置 → 系统”，用于调整任务等待时间、后台资源占用和项目文件处理方式。
++
++设置
++
++作用
++
++LLM 请求超时时间（秒）
++
++设置单次 LLM 请求的等待上限，可填写 30–3600 秒；任务经常需要长时间思考时可适当调高。
++
++Agent 空闲超时（分钟）
++
++Agent 空闲超过设定时间后自动终止其进程以释放内存，可填写 1–60 分钟。
++
++上传文件保存到项目文件夹
++
++开启后，将聊天中上传的文件保存到当前项目文件夹，便于后续任务继续使用。
++
++自动预览新建 Office 文件
++
++开启后，自动打开当前项目中新创建的 Word、Excel 和 PowerPoint 文件；Office 临时锁定文件会被忽略。
++
++## 常用设置入口
++
++设置
++
++路径
++
++作用
++
++界面语言
++
++Settings → System → Language（英文界面）
++
++切换中文或其他界面语言。
++
++远程连接
++
++设置 → 远程连接
++
++连接即时通讯工具后，可在对应软件中与平台交互。
++
++微信任务完成提醒
++
++设置 → 系统
++
++设置全部网页对话的微信完成提醒。
++
++微信空闲处理
++
++设置 → 系统
++
++设置微信空闲时间及后续对话处理方式。
++
++外观
++
++设置 → 外观
++
++调整主题、字体等显示效果。
++
++模型与额度
++
++设置 → 模型
++
++查看可用模型、开关和剩余额度。
++
++能力扩展
++
++设置 → 能力扩展
++
++查看、添加和管理技能与 MCP 工具。
++
++# 11. 智能体适合做什么，不适合做什么
++
++Agent
++适合处理“可用文字说明、可调用工具、可检查结果”的任务。它在文字、数据、代码和资料搜集方面通常表现更稳定；对复杂视觉、真实性判断和高风险决策仍需要专业工具与人工。
++
++类型
++
++典型任务
++
++注意事项
++
++适合直接使用
++
++文档整理与改写；资料检索与摘要；联网调查；表格分析；报告草稿；代码与自动化；批量文件处理。
++
++提供清晰材料、格式和验收标准。
++
++可以使用但需复核
++
++扫描 PDF、图片文字识别、图表解读、网页信息调查、复杂数据推断。
++
++可能存在识别错误、引用过时或推断不完整。
++
++不宜完全交给 Agent
++
++视频剪辑、复杂图像精修、最终法律/财务/医疗判断、正式审批、未经人工审核的对外发布。
++
++使用专业软件、专业人员和人工审核。
++
++##
++要求 Agent
++查询最新政策、价格、新闻或产品信息时，应明确要求“联网搜索并注明来源与日期”。即使提供了来源，也要检查引用是否真正支持结论，避免使用旧信息、错误信息。
++
++复杂视觉材料
++
++扫描 PDF、图片表格等可以交给智能体初步识别，但关键字段应人工核对。复杂视频、图像精修或高精度
++OCR，优先使用专业工具。
++
++# 12. 常见工作场景与提示词示例
++
++把下面示例中的方括号替换为你的实际内容即可。
++
++## 场景一：整理会议纪要
++
++提示词示例
++
++请根据我上传的会议录音转写稿，整理一份正式会议纪要。
++
++结构包括：会议主题、时间与参会人、核心结论、待办事项、负责人、截止时间。
++
++删除重复口语，不得补写未出现的决定；不确定内容标记为“待确认”。
++
++输出 Word 文档，并在开头提供 150 字以内的管理层摘要。
++
++## 场景二：根据资料撰写报告
++
++提示词示例
++
++背景：这是一份面向非技术管理人员的内部汇报。
++
++请阅读项目中的全部资料，先列出报告提纲和证据来源，再撰写完整报告。
++
++要求：突出结论、风险和下一步建议；避免技术堆砌；所有数字必须注明来源。
++
++交付：Word 版报告 + 一页摘要；提交前检查目录、页码、表格和引用。
++
++## 场景三：批量整理文件
++
++提示词示例
++
++请整理当前项目文件夹中的资料。先扫描并给出拟执行方案，不要立即修改。
++
++按“年份-项目-文件类型-版本”统一命名；重复文件单独列出，不得直接删除。
++
++获得我确认后再执行，并保留原文件备份。
++
++完成后输出修改清单，包括原文件名、新文件名和处理结果。
++
++## 场景四：交叉审核
++
++提示词示例
++
++请作为审查者检查项目中的报告，不要重写全文。
++
++重点检查：事实错误、数字矛盾、逻辑跳跃、遗漏要求、表达不清和格式问题。
++
++按“问题位置—问题说明—修改建议—严重程度”输出审查表。
++
++无法确认的内容请明确说明，不要猜测。
++
++# 13. 名词解释与常用斜杠命令
++
++遇到不熟悉的英文名词，可先查看本节。
++
++## 名词解释
++
++名词
++
++解释
++
++Agent / 智能体 / 助手
++
++其本质上是一个模拟人工作的能够围绕目标持续完成“感知信息、做出判断、调用工具、执行行动、检查结果并调整下一步”的闭环系统。大语言模型是它的大脑，工具是手脚，上下文是它拥有的记忆和技能，规则和校验机制则保证它不会失控。
++
++Skill / 技能
++
++Agent 可以调用的一项标准化能力模块：它把完成某类任务所需的规则、步骤、工具和注意事项封装起来，让 Agent
++知道“这件事应该怎么做”，比如“生成 PPT”“审查代码”“分析表格”都可以是一个 Skill。如果说 Agent 是助手，Skill
++就是摆在助手桌面上的一些说明手册。
++
++Token
++
++模型处理文本的计量单位，输入、输出、上下文和费用通常按 Token 计算。
++
++CLI
++
++命令行界面（Command Line Interface），通过文字命令控制程序。平台中的 CLI
++助手会使用命令和工具完成文件、代码等工作。
++
++上下文
++
++智能体在当前对话中能够参考的信息，包括消息、文件内容、工具结果和已加载技能。
++
++## 常用斜杠命令
++
++命令
++
++作用
++
++注意事项
++
++/compact
++
++将较长的对话压缩为摘要，减少上下文占用。
++
++压缩后部分细节可能被概括，关键要求应再次确认。
++
++/goal
++
++设置明确目标，让 Codex CLI 持续执行直到完成或耗尽限额。
++
++目标必须清晰、可量化、可验收；会增加额度消耗。仅限 Codex CLI。
++
++/yolo
++
++切换 Kimi 的完全访问状态与人工审批要求。
++
++执行文件修改或命令前，先确认当前开关状态。仅限 Kimi。
++
++查看当前支持的命令
++
++在聊天框输入“/”即可查看当前助手与版本实际支持的命令。
++
 diff --git a/crates/aionui-app/src/router/routes.rs b/crates/aionui-app/src/router/routes.rs
 index 29b6e15598bed087eb5c4f86d38d952dc6a0652d..3b563d457fdc0746bbe5e4004e67833100514a42 100644
 --- a/crates/aionui-app/src/router/routes.rs
@@ -528,9 +1950,18 @@ index 29b6e15598bed087eb5c4f86d38d952dc6a0652d..3b563d457fdc0746bbe5e4004e678331
          elapsed_ms = boot.elapsed().as_millis(),
          "startup: channel orchestrator spawned"
 diff --git a/crates/aionui-app/src/router/state.rs b/crates/aionui-app/src/router/state.rs
-index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533ec9cd579 100644
+index 9297f095f62fa14da7c2647c93ecc32ffda203a2..52c745a9e9e0cca10373ccb5d8e42de05f1234ba 100644
 --- a/crates/aionui-app/src/router/state.rs
 +++ b/crates/aionui-app/src/router/state.rs
+@@ -27,7 +27,7 @@ use aionui_extension::{
+     HubIndexManager, HubInstaller, HubRouterState, SkillRouterState, resolve_install_target_dir_for_data_dir,
+     resolve_scan_paths_for_data_dir, resolve_state_file_path,
+ };
+-use aionui_file::{BrowseRoots, FileRouterState, FileService, FileWatchService, SnapshotService};
++use aionui_file::{BrowseRoots, FileRouterState, FileService, FileWatchService, SnapshotService, UploadService};
+ use aionui_mcp::{
+     AionrsAdapter, AionuiAdapter, ClaudeAdapter, CodeBuddyAdapter, CodexAdapter, GeminiAdapter, McpAgentAdapter,
+     McpConfigService, McpConnectionTestService, McpRouterState, McpSyncService, OpencodeAdapter, QwenAdapter,
 @@ -159,6 +159,7 @@ fn build_module_state_phase<T>(boot: &Instant, phase: &'static str, build: impl
  /// The caller must spawn the orchestrator as a background task.
  pub struct ChannelOrchestratorComponents {
@@ -539,7 +1970,15 @@ index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533
      pub message_rx: tokio::sync::mpsc::Receiver<aionui_channel::types::UnifiedIncomingMessage>,
      pub confirm_rx: tokio::sync::mpsc::Receiver<(String, String)>,
      pub manager: Arc<aionui_channel::manager::ChannelManager>,
-@@ -494,6 +495,24 @@ async fn build_channel_message_service(
+@@ -413,6 +414,7 @@ pub fn build_file_state(services: &AppServices) -> Result<FileRouterState, Route
+     let snapshot_service = Arc::new(SnapshotService::new());
+     Ok(FileRouterState {
+         file_service,
++        upload_service: UploadService::default(),
+         watch_service,
+         snapshot_service,
+         allowed_roots,
+@@ -494,6 +496,24 @@ async fn build_channel_message_service(
      ))
  }
  
@@ -564,7 +2003,7 @@ index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533
  /// Build the default `ChannelRouterState` and orchestrator components.
  pub async fn build_channel_state(
      services: &AppServices,
-@@ -535,12 +554,25 @@ pub async fn build_channel_state(
+@@ -535,12 +555,25 @@ pub async fn build_channel_state(
      ));
  
      let message_service = build_channel_message_service(services, Arc::clone(&channel_settings)).await;
@@ -590,7 +2029,7 @@ index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533
      );
  
      let state = ChannelRouterState {
-@@ -555,6 +587,7 @@ pub async fn build_channel_state(
+@@ -555,6 +588,7 @@ pub async fn build_channel_state(
  
      let components = ChannelOrchestratorComponents {
          orchestrator,
@@ -598,7 +2037,7 @@ index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533
          message_rx,
          confirm_rx,
          manager,
-@@ -1026,7 +1059,7 @@ mod tests {
+@@ -1026,7 +1060,7 @@ mod tests {
          };
  
          let first = message_service
@@ -607,7 +2046,7 @@ index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533
              .await
              .unwrap();
  
-@@ -1052,7 +1085,7 @@ mod tests {
+@@ -1052,7 +1086,7 @@ mod tests {
              ..session
          };
          let second = message_service
@@ -616,6 +2055,45 @@ index 9297f095f62fa14da7c2647c93ecc32ffda203a2..a206d2a59d94dbafc9f54e8930113533
              .await
              .unwrap();
          assert_eq!(second.conversation_id, first.conversation_id);
+diff --git a/crates/aionui-app/tests/skills_builtin_e2e.rs b/crates/aionui-app/tests/skills_builtin_e2e.rs
+index 7ecdea467425bfffd85380a50958f89b7b6818c7..2e138bd5b928538cfdd6c8de9641538d7e628dd0 100644
+--- a/crates/aionui-app/tests/skills_builtin_e2e.rs
++++ b/crates/aionui-app/tests/skills_builtin_e2e.rs
+@@ -194,6 +194,34 @@ async fn builtin_skill_read_opt_in_returns_frontmatter_content() {
+     assert!(!content.is_empty(), "mermaid SKILL.md is empty");
+ }
+ 
++#[tokio::test]
++async fn workagent_help_skill_and_reference_are_embedded() {
++    let fx = fixture_embedded().await;
++
++    let resp = fx
++        .app
++        .clone()
++        .oneshot(json_with_token(
++            "POST",
++            "/api/skills/builtin-skill",
++            json!({"file_name": "workagent-help/SKILL.md"}),
++            &fx.token,
++            &fx.csrf,
++        ))
++        .await
++        .unwrap();
++    assert_eq!(resp.status(), StatusCode::OK);
++
++    let json = body_json(resp).await;
++    let content = json["data"].as_str().unwrap();
++    assert!(content.contains("name: workagent-help"));
++
++    let help_reference = fx.data_dir.join("builtin-skills/workagent-help/references/help.zh-CN.md");
++    let reference = std::fs::read_to_string(help_reference).unwrap();
++    assert!(reference.contains("微信斜杠命令"));
++    assert!(reference.contains("使用 @ 引用项目文件"));
++}
++
+ #[tokio::test]
+ async fn builtin_skill_missing_file_returns_empty_string() {
+     let fx = fixture_embedded().await;
 diff --git a/crates/aionui-channel/Cargo.toml b/crates/aionui-channel/Cargo.toml
 index a0de2d46de42b704e6d34a7e7781494b7660589b..462d9df01382952ccd49991add33be80cbbecc82 100644
 --- a/crates/aionui-channel/Cargo.toml
@@ -4500,6 +5978,27 @@ index ed092bcb1dca2ba9418a19364d5ea8c776a37f66..f68ffe0bf6598d6b6bf840222d8777d8
          .await
          .unwrap();
  
+diff --git a/crates/aionui-common/src/constants.rs b/crates/aionui-common/src/constants.rs
+index 9f4e9886f33cf4de1f2a947ac91aeb07c5a26bc6..b936414129cc1a89afccd8eb7b0a3742b8d87919 100644
+--- a/crates/aionui-common/src/constants.rs
++++ b/crates/aionui-common/src/constants.rs
+@@ -27,6 +27,16 @@ pub const DEFAULT_PORT: u16 = 25808;
+ pub const BODY_LIMIT: usize = 10 * 1024 * 1024;
+ /// File upload size limit (30 MB).
+ pub const UPLOAD_MAX_SIZE: usize = 30 * 1024 * 1024;
++/// Maximum logical size of one resumable upload (1 GiB).
++pub const RESUMABLE_UPLOAD_MAX_SIZE: u64 = 1024 * 1024 * 1024;
++/// Maximum body size of one resumable upload request (16 MiB).
++pub const RESUMABLE_UPLOAD_CHUNK_SIZE: usize = 16 * 1024 * 1024;
++/// Maximum number of upload chunks written concurrently by one AionCore instance.
++pub const RESUMABLE_UPLOAD_MAX_CONCURRENT_CHUNKS: usize = 3;
++/// Maximum logical bytes reserved by incomplete uploads (3 GiB).
++pub const RESUMABLE_UPLOAD_MAX_RESERVED_BYTES: u64 = 3 * 1024 * 1024 * 1024;
++/// Lifetime of an incomplete upload session (24 hours).
++pub const RESUMABLE_UPLOAD_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
+ 
+ // --- Team mode ---
+ 
 diff --git a/crates/aionui-conversation/src/convert.rs b/crates/aionui-conversation/src/convert.rs
 index 05caa23a43c217bdf9329a4a737f48575f2af15e..8e2a07daf1e14b77d9b38e858249d872f3c086d3 100644
 --- a/crates/aionui-conversation/src/convert.rs
@@ -4751,7 +6250,7 @@ index f99f6359cfd97bf026f6374c7f79970844bf6a4c..43c990d7f846bcf30ca5fa0a43a60615
      State(state): State<ConversationRouterState>,
      Extension(user): Extension<CurrentUser>,
 diff --git a/crates/aionui-conversation/src/service.rs b/crates/aionui-conversation/src/service.rs
-index 02d068ec48e9f6cc0697de7cadc5af8a8d76c5ab..b1ea50d77027828f891cfb87ce7670ff1d71f724 100644
+index 02d068ec48e9f6cc0697de7cadc5af8a8d76c5ab..0409a1ea8f42187e9193e5a27988fb1aef455818 100644
 --- a/crates/aionui-conversation/src/service.rs
 +++ b/crates/aionui-conversation/src/service.rs
 @@ -18,9 +18,10 @@ use aionui_api_types::{
@@ -4768,7 +6267,7 @@ index 02d068ec48e9f6cc0697de7cadc5af8a8d76c5ab..b1ea50d77027828f891cfb87ce7670ff
      WebSocketMessage, assistant_avatar_response_value, assistant_avatar_response_value_with_version,
  };
  use aionui_common::{
-@@ -1683,6 +1684,277 @@ impl ConversationService {
+@@ -1683,6 +1684,276 @@ impl ConversationService {
          Ok(response)
      }
  
@@ -4968,14 +6467,13 @@ index 02d068ec48e9f6cc0697de7cadc5af8a8d76c5ab..b1ea50d77027828f891cfb87ce7670ff
 +                    )
 +                    .await?;
 +            }
-+            if let Some(session_id) = provider_session_id.as_deref() {
-+                if !self
++            if let Some(session_id) = provider_session_id.as_deref()
++                && !self
 +                    .acp_session_repo
 +                    .update_session_id(&new_conversation_id, session_id)
 +                    .await?
-+                {
-+                    return Err(ConversationError::internal("fork ACP session row disappeared"));
-+                }
++            {
++                return Err(ConversationError::internal("fork ACP session row disappeared"));
 +            }
 +
 +            let mut remapped_message_ids = HashMap::<String, String>::new();
@@ -5046,7 +6544,7 @@ index 02d068ec48e9f6cc0697de7cadc5af8a8d76c5ab..b1ea50d77027828f891cfb87ce7670ff
      /// List conversations with cursor-based pagination and optional filters.
      #[tracing::instrument(skip_all, fields(user_id = %user_id))]
      pub async fn list(
-@@ -2481,6 +2753,104 @@ impl ConversationService {
+@@ -2481,6 +2752,104 @@ impl ConversationService {
  // ── Message Flow (send / stop / warmup) ─────────────────────────────
  
  impl ConversationService {
@@ -5296,6 +6794,1202 @@ index 1052df95ead23c9f59730903bf2286fce42a126d..69f91e39413696388d91648a1c60c94b
      #[tokio::test]
      async fn delete_user_removes_row() {
          let (repo, _db) = setup().await;
+diff --git a/crates/aionui-file/Cargo.toml b/crates/aionui-file/Cargo.toml
+index fc3c37039f6874e555f7c5355be7a67a809cca04..78062359776c1b8cd0377b725ca091c173ac64a8 100644
+--- a/crates/aionui-file/Cargo.toml
++++ b/crates/aionui-file/Cargo.toml
+@@ -25,6 +25,8 @@ thiserror.workspace = true
+ tracing.workspace = true
+ dashmap.workspace = true
+ dirs.workspace = true
++sha2.workspace = true
++uuid.workspace = true
+ 
+ [dev-dependencies]
+ tempfile = "3"
+diff --git a/crates/aionui-file/src/error.rs b/crates/aionui-file/src/error.rs
+index 7cb26d589489fc8cf60bec480d05eff4d1c48f4a..1390135c2f10025f37d042a2834ea341540e5302 100644
+--- a/crates/aionui-file/src/error.rs
++++ b/crates/aionui-file/src/error.rs
+@@ -20,3 +20,28 @@ pub enum FileError {
+     #[error("{0}")]
+     Internal(String),
+ }
++
++/// Resumable upload application errors.
++#[derive(Debug, thiserror::Error)]
++pub enum UploadError {
++    #[error("{0}")]
++    BadRequest(String),
++
++    #[error("{0}")]
++    PayloadTooLarge(String),
++
++    #[error("{0}")]
++    NotFound(String),
++
++    #[error("upload offset mismatch")]
++    OffsetMismatch { expected: u64 },
++
++    #[error("{0}")]
++    ChecksumMismatch(String),
++
++    #[error("{0}")]
++    CapacityExceeded(String),
++
++    #[error("{0}")]
++    Internal(String),
++}
+diff --git a/crates/aionui-file/src/lib.rs b/crates/aionui-file/src/lib.rs
+index 2c7f16f78562fc2cea09833dfb75a11d11348ac4..5cff6c896ec12d5e2c66f8a217bf7341f3e2480b 100644
+--- a/crates/aionui-file/src/lib.rs
++++ b/crates/aionui-file/src/lib.rs
+@@ -11,16 +11,16 @@ pub mod traits;
+ pub mod types;
+ pub mod watch_service;
+ 
+-pub use error::FileError;
++pub use error::{FileError, UploadError};
+ pub use path_safety::{has_traversal, validate_path, validate_path_for_write};
+ pub use routes::{BrowseRoots, FileRouterState, file_routes};
+-pub use service::FileService;
++pub use service::{FileService, UploadService};
+ pub use snapshot_service::SnapshotService;
+ pub use traits::{
+     FileServiceRef, FileWatchServiceRef, IFileService, IFileWatchService, ISnapshotService, SnapshotServiceRef,
+ };
+ pub use types::{
+     CompareResult, ContentUpdateEvent, ContentUpdateOperation, CopyResult, DirOrFile, FileChangeInfo, FileMetadata,
+-    FileWatchEvent, OfficeFileAddedEvent, SnapshotInfo, SnapshotMode, WorkspaceFlatFile, ZipEntry,
++    FileWatchEvent, OfficeFileAddedEvent, SnapshotInfo, SnapshotMode, UploadSession, WorkspaceFlatFile, ZipEntry,
+ };
+ pub use watch_service::FileWatchService;
+diff --git a/crates/aionui-file/src/routes.rs b/crates/aionui-file/src/routes.rs
+index ddc0658b8ce68a7cacefc8eab87493a5e4f298de..a3da3e906e315579eafad6d605ad2fa190c61288 100644
+--- a/crates/aionui-file/src/routes.rs
++++ b/crates/aionui-file/src/routes.rs
+@@ -1,8 +1,11 @@
+ #![allow(clippy::disallowed_types)]
+ 
+ use axum::Router;
++use axum::body::Bytes;
+ use axum::extract::rejection::JsonRejection;
+-use axum::extract::{DefaultBodyLimit, Json, Multipart, Query, State};
++use axum::extract::{DefaultBodyLimit, Json, Multipart, Path as AxumPath, Query, State};
++use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
++use axum::response::{IntoResponse, Response};
+ use axum::routing::{get, post};
+ use std::path::{Path, PathBuf};
+ use std::sync::{Arc, OnceLock};
+@@ -10,23 +13,32 @@ use tower_http::limit::RequestBodyLimitLayer;
+ 
+ use aionui_api_types::{
+     ApiResponse, BrowseDirectoryQuery, BrowseDirectoryResponse, CancelZipRequest, CopyFilesRequest, CopyFilesResponse,
+-    CreateTempFileRequest, DirOrFileResponse, FetchRemoteImageRequest, FileChangeInfoResponse, FileMetadataResponse,
+-    FileWatchRequest, GetFileMetadataRequest, GetFilesByDirRequest, GetImageBase64Request, ListWorkspaceFilesRequest,
+-    ReadFileBufferRequest, ReadFileRequest, RemoveEntryRequest, RenameRequest, RenameResponse, SnapshotBaselineRequest,
+-    SnapshotCompareResponse, SnapshotDiscardRequest, SnapshotInfoResponse, SnapshotStageRequest,
+-    SnapshotWorkspaceRequest, WorkspaceFlatFileResponse, WorkspaceOfficeWatchRequest, WriteFileRequest, ZipRequest,
++    CreateTempFileRequest, CreateUploadSessionRequest, DirOrFileResponse, FetchRemoteImageRequest,
++    FileChangeInfoResponse, FileMetadataResponse, FileWatchRequest, GetFileMetadataRequest, GetFilesByDirRequest,
++    GetImageBase64Request, ListWorkspaceFilesRequest, ReadFileBufferRequest, ReadFileRequest, RemoveEntryRequest,
++    RenameRequest, RenameResponse, SnapshotBaselineRequest, SnapshotCompareResponse, SnapshotDiscardRequest,
++    SnapshotInfoResponse, SnapshotStageRequest, SnapshotWorkspaceRequest, UploadSessionResponse,
++    WorkspaceFlatFileResponse, WorkspaceOfficeWatchRequest, WriteFileRequest, ZipRequest,
+ };
+ use aionui_common::ApiError;
+-use aionui_common::constants::UPLOAD_MAX_SIZE;
++use aionui_common::constants::{RESUMABLE_UPLOAD_CHUNK_SIZE, UPLOAD_MAX_SIZE};
+ 
+ use crate::browse;
+-use crate::error::FileError;
++use crate::error::{FileError, UploadError};
++use crate::service::UploadService;
+ use crate::traits::{FileServiceRef, FileWatchServiceRef, SnapshotServiceRef};
+ use crate::types::{
+-    CompareResult, CopyResult, DirOrFile, FileChangeInfo, FileMetadata, SnapshotInfo, SnapshotMode, WorkspaceFlatFile,
+-    ZipEntry,
++    CompareResult, CopyResult, DirOrFile, FileChangeInfo, FileMetadata, SnapshotInfo, SnapshotMode, UploadSession,
++    WorkspaceFlatFile, ZipEntry,
+ };
+ 
++const UPLOAD_OFFSET_HEADER: &str = "upload-offset";
++const UPLOAD_LENGTH_HEADER: &str = "upload-length";
++const UPLOAD_CHUNK_SIZE_HEADER: &str = "upload-chunk-size";
++const UPLOAD_FINGERPRINT_HEADER: &str = "upload-fingerprint";
++const UPLOAD_CHECKSUM_HEADER: &str = "upload-checksum";
++const UPLOAD_CHUNK_CONTENT_TYPE: &str = "application/offset+octet-stream";
++
+ impl From<FileError> for ApiError {
+     fn from(error: FileError) -> Self {
+         match error {
+@@ -47,6 +59,34 @@ impl From<FileError> for ApiError {
+     }
+ }
+ 
++struct UploadRouteError(UploadError);
++
++impl From<UploadError> for UploadRouteError {
++    fn from(error: UploadError) -> Self {
++        Self(error)
++    }
++}
++
++impl IntoResponse for UploadRouteError {
++    fn into_response(self) -> Response {
++        match self.0 {
++            UploadError::OffsetMismatch { expected } => {
++                let mut response = ApiError::Conflict("upload offset mismatch".to_owned()).into_response();
++                if let Ok(value) = HeaderValue::from_str(&expected.to_string()) {
++                    response.headers_mut().insert(UPLOAD_OFFSET_HEADER, value);
++                }
++                response
++            }
++            UploadError::BadRequest(message) => ApiError::BadRequest(message).into_response(),
++            UploadError::PayloadTooLarge(message) => ApiError::PayloadTooLarge(message).into_response(),
++            UploadError::NotFound(message) => ApiError::NotFound(message).into_response(),
++            UploadError::ChecksumMismatch(message) => ApiError::UnprocessableEntity(message).into_response(),
++            UploadError::CapacityExceeded(_) => ApiError::RateLimited.into_response(),
++            UploadError::Internal(message) => ApiError::Internal(message).into_response(),
++        }
++    }
++}
++
+ // ---------------------------------------------------------------------------
+ // Router state
+ // ---------------------------------------------------------------------------
+@@ -91,6 +131,7 @@ impl Default for BrowseRoots {
+ #[derive(Clone)]
+ pub struct FileRouterState {
+     pub file_service: FileServiceRef,
++    pub upload_service: UploadService,
+     pub watch_service: FileWatchServiceRef,
+     pub snapshot_service: SnapshotServiceRef,
+     pub allowed_roots: Vec<std::path::PathBuf>,
+@@ -120,6 +161,12 @@ pub fn file_routes(state: FileRouterState) -> Router {
+         .layer(RequestBodyLimitLayer::new(UPLOAD_MAX_SIZE))
+         .with_state(state.clone());
+ 
++    let upload_chunk_router = Router::new()
++        .route("/api/fs/uploads/{upload_id}", axum::routing::patch(append_upload_chunk))
++        .layer(DefaultBodyLimit::disable())
++        .layer(RequestBodyLimitLayer::new(RESUMABLE_UPLOAD_CHUNK_SIZE))
++        .with_state(state.clone());
++
+     Router::new()
+         // A. Core file operations
+         .route("/api/fs/browse", get(browse_directory))
+@@ -133,6 +180,12 @@ pub fn file_routes(state: FileRouterState) -> Router {
+         .route("/api/fs/remove", post(remove_entry))
+         .route("/api/fs/rename", post(rename_entry))
+         .route("/api/fs/temp", post(create_temp_file))
++        .route("/api/fs/uploads", post(create_upload_session))
++        .route(
++            "/api/fs/uploads/{upload_id}",
++            axum::routing::head(get_upload_status).delete(cancel_upload),
++        )
++        .route("/api/fs/uploads/{upload_id}/complete", post(complete_upload))
+         .route("/api/fs/image-base64", post(get_image_base64))
+         .route("/api/fs/fetch-remote-image", post(fetch_remote_image))
+         .route("/api/fs/zip", post(create_zip))
+@@ -158,6 +211,7 @@ pub fn file_routes(state: FileRouterState) -> Router {
+         .route("/api/fs/snapshot/dispose", post(snapshot_dispose))
+         .with_state(state)
+         .merge(upload_router)
++        .merge(upload_chunk_router)
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -326,6 +380,144 @@ async fn create_temp_file(
+     Ok(Json(ApiResponse::ok(path)))
+ }
+ 
++async fn create_upload_session(
++    State(state): State<FileRouterState>,
++    body: Result<Json<CreateUploadSessionRequest>, JsonRejection>,
++) -> Result<Json<ApiResponse<UploadSessionResponse>>, UploadRouteError> {
++    let Json(req) = body
++        .map_err(ApiError::from)
++        .map_err(|error| UploadRouteError(UploadError::BadRequest(error.to_string())))?;
++    let file_name = sanitize_upload_filename(&req.file_name)
++        .ok_or_else(|| UploadError::BadRequest("file name must not be empty".to_owned()))?;
++    let session = state
++        .upload_service
++        .create_session(
++            file_name,
++            req.file_size,
++            req.conversation_id,
++            req.fingerprint,
++            req.client_request_id,
++        )
++        .await?;
++    Ok(Json(ApiResponse::ok(to_upload_session_response(session))))
++}
++
++async fn get_upload_status(
++    State(state): State<FileRouterState>,
++    AxumPath(upload_id): AxumPath<String>,
++) -> Result<Response, UploadRouteError> {
++    let session = state.upload_service.status(&upload_id).await?;
++    upload_status_response(&session)
++}
++
++async fn append_upload_chunk(
++    State(state): State<FileRouterState>,
++    AxumPath(upload_id): AxumPath<String>,
++    headers: HeaderMap,
++    body: Bytes,
++) -> Result<Response, UploadRouteError> {
++    let content_type = headers
++        .get(header::CONTENT_TYPE)
++        .and_then(|value| value.to_str().ok())
++        .unwrap_or("");
++    if content_type != UPLOAD_CHUNK_CONTENT_TYPE {
++        return Err(UploadError::BadRequest(format!("Content-Type must be {UPLOAD_CHUNK_CONTENT_TYPE}")).into());
++    }
++    let requested_offset = required_u64_header(&headers, UPLOAD_OFFSET_HEADER)?;
++    let expected_checksum = required_sha256_header(&headers)?;
++    let session = state
++        .upload_service
++        .append_chunk(&upload_id, requested_offset, body.to_vec(), Some(expected_checksum))
++        .await?;
++    upload_status_response(&session)
++}
++
++async fn complete_upload(
++    State(state): State<FileRouterState>,
++    AxumPath(upload_id): AxumPath<String>,
++) -> Result<Json<ApiResponse<String>>, UploadRouteError> {
++    let path = state.upload_service.complete(&upload_id).await?;
++    Ok(Json(ApiResponse::ok(path)))
++}
++
++async fn cancel_upload(
++    State(state): State<FileRouterState>,
++    AxumPath(upload_id): AxumPath<String>,
++) -> Result<StatusCode, UploadRouteError> {
++    state.upload_service.cancel(&upload_id).await?;
++    Ok(StatusCode::NO_CONTENT)
++}
++
++fn required_u64_header(headers: &HeaderMap, name: &'static str) -> Result<u64, UploadRouteError> {
++    let raw = headers
++        .get(name)
++        .ok_or_else(|| UploadError::BadRequest(format!("missing {name} header")))?
++        .to_str()
++        .map_err(|_| UploadError::BadRequest(format!("invalid {name} header")))?;
++    raw.parse::<u64>()
++        .map_err(|_| UploadError::BadRequest(format!("invalid {name} header")).into())
++}
++
++fn required_sha256_header(headers: &HeaderMap) -> Result<[u8; 32], UploadRouteError> {
++    use base64::Engine;
++
++    let raw = headers
++        .get(UPLOAD_CHECKSUM_HEADER)
++        .ok_or_else(|| UploadError::BadRequest(format!("missing {UPLOAD_CHECKSUM_HEADER} header")))?
++        .to_str()
++        .map_err(|_| UploadError::BadRequest(format!("invalid {UPLOAD_CHECKSUM_HEADER} header")))?;
++    let encoded = raw
++        .strip_prefix("sha256 ")
++        .ok_or_else(|| UploadError::BadRequest("upload-checksum must use sha256".to_owned()))?;
++    let decoded = base64::engine::general_purpose::STANDARD
++        .decode(encoded)
++        .map_err(|_| UploadError::BadRequest("upload-checksum is not valid base64".to_owned()))?;
++    decoded
++        .try_into()
++        .map_err(|_| UploadError::BadRequest("upload-checksum must contain a SHA-256 digest".to_owned()).into())
++}
++
++fn upload_status_response(session: &UploadSession) -> Result<Response, UploadRouteError> {
++    let mut response = StatusCode::NO_CONTENT.into_response();
++    insert_upload_header(
++        response.headers_mut(),
++        UPLOAD_OFFSET_HEADER,
++        &session.offset.to_string(),
++    )?;
++    insert_upload_header(
++        response.headers_mut(),
++        UPLOAD_LENGTH_HEADER,
++        &session.file_size.to_string(),
++    )?;
++    insert_upload_header(
++        response.headers_mut(),
++        UPLOAD_CHUNK_SIZE_HEADER,
++        &RESUMABLE_UPLOAD_CHUNK_SIZE.to_string(),
++    )?;
++    if let Some(fingerprint) = session.fingerprint.as_deref() {
++        insert_upload_header(response.headers_mut(), UPLOAD_FINGERPRINT_HEADER, fingerprint)?;
++    }
++    Ok(response)
++}
++
++fn insert_upload_header(headers: &mut HeaderMap, name: &'static str, value: &str) -> Result<(), UploadRouteError> {
++    let value = HeaderValue::from_str(value)
++        .map_err(|_| UploadError::Internal(format!("cannot encode {name} response header")))?;
++    headers.insert(name, value);
++    Ok(())
++}
++
++fn to_upload_session_response(session: UploadSession) -> UploadSessionResponse {
++    UploadSessionResponse {
++        upload_id: session.upload_id,
++        offset: session.offset,
++        file_size: session.file_size,
++        chunk_size: RESUMABLE_UPLOAD_CHUNK_SIZE,
++        fingerprint: session.fingerprint,
++        expires_at_unix_ms: session.expires_at_unix_ms,
++    }
++}
++
+ /// Fields extracted from a `/api/fs/upload` multipart request.
+ struct UploadMultipartFields {
+     file_data: Vec<u8>,
+diff --git a/crates/aionui-file/src/service.rs b/crates/aionui-file/src/service.rs
+index 421fc453984614922cb845104b524df610058ea5..816a2aeca5dcd4aff01dcc66ea0ab6c7af4bcdf6 100644
+--- a/crates/aionui-file/src/service.rs
++++ b/crates/aionui-file/src/service.rs
+@@ -2,20 +2,29 @@ use std::io::Write;
+ use std::path::{Path, PathBuf};
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicBool, Ordering};
+-use std::time::UNIX_EPOCH;
++use std::time::{SystemTime, UNIX_EPOCH};
+ 
+ use base64::Engine;
+ use dashmap::DashMap;
+ use ignore::WalkBuilder;
+-use tracing::warn;
++use serde::{Deserialize, Serialize};
++use sha2::{Digest, Sha256};
++use tokio::sync::{Mutex, Semaphore};
++use tracing::{info, warn};
++use uuid::Uuid;
+ 
+-use crate::error::FileError;
++use crate::error::{FileError, UploadError};
+ use aionui_api_types::WebSocketMessage;
++use aionui_common::constants::{
++    RESUMABLE_UPLOAD_CHUNK_SIZE, RESUMABLE_UPLOAD_MAX_CONCURRENT_CHUNKS, RESUMABLE_UPLOAD_MAX_RESERVED_BYTES,
++    RESUMABLE_UPLOAD_MAX_SIZE, RESUMABLE_UPLOAD_SESSION_TTL_SECS,
++};
+ use aionui_realtime::EventBroadcaster;
+ 
+ use crate::path_safety::{has_traversal, validate_path_for_write, validate_path_with_extra_root};
+ use crate::types::{
+-    ContentUpdateEvent, ContentUpdateOperation, CopyResult, DirOrFile, FileMetadata, WorkspaceFlatFile, ZipEntry,
++    ContentUpdateEvent, ContentUpdateOperation, CopyResult, DirOrFile, FileMetadata, UploadSession, WorkspaceFlatFile,
++    ZipEntry,
+ };
+ 
+ /// Maximum number of files returned by `list_workspace_files`.
+@@ -56,6 +65,579 @@ const PLACEHOLDER_SVG: &str = concat!(
+     "</svg>",
+ );
+ 
++const UPLOAD_SESSION_METADATA_FILE: &str = "session.json";
++const UPLOAD_SESSION_PAYLOAD_FILE: &str = "payload.part";
++const UPLOAD_SESSION_COMPLETION_FILE: &str = "completion.json";
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++struct UploadSessionMetadata {
++    upload_id: String,
++    file_name: String,
++    file_size: u64,
++    conversation_id: Option<String>,
++    fingerprint: Option<String>,
++    #[serde(default)]
++    client_request_id: Option<String>,
++    expires_at_unix_ms: u64,
++}
++
++/// Persistent, bounded resumable-upload storage.
++///
++/// Session metadata is immutable. The `.part` file length is the authoritative
++/// offset, so a process restart can resume without a database update after
++/// every chunk.
++#[derive(Clone)]
++pub struct UploadService {
++    root: PathBuf,
++    session_locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
++    create_lock: Arc<Mutex<()>>,
++    chunk_slots: Arc<Semaphore>,
++}
++
++impl Default for UploadService {
++    fn default() -> Self {
++        Self::new(std::env::temp_dir().join("aionui").join("upload-sessions"))
++    }
++}
++
++impl UploadService {
++    pub fn new(root: PathBuf) -> Self {
++        Self {
++            root,
++            session_locks: Arc::new(DashMap::new()),
++            create_lock: Arc::new(Mutex::new(())),
++            chunk_slots: Arc::new(Semaphore::new(RESUMABLE_UPLOAD_MAX_CONCURRENT_CHUNKS)),
++        }
++    }
++
++    pub async fn create_session(
++        &self,
++        file_name: String,
++        file_size: u64,
++        conversation_id: Option<String>,
++        fingerprint: Option<String>,
++        client_request_id: Option<String>,
++    ) -> Result<UploadSession, UploadError> {
++        validate_upload_component("file name", &file_name)?;
++        if file_size > RESUMABLE_UPLOAD_MAX_SIZE {
++            return Err(UploadError::PayloadTooLarge(format!(
++                "file exceeds the {} byte upload limit",
++                RESUMABLE_UPLOAD_MAX_SIZE
++            )));
++        }
++
++        let conversation_id = normalize_optional_component("conversation id", conversation_id)?;
++        let fingerprint = fingerprint.and_then(|value| {
++            let trimmed = value.trim();
++            (!trimmed.is_empty()).then(|| trimmed.to_owned())
++        });
++        if fingerprint.as_ref().is_some_and(|value| value.len() > 256) {
++            return Err(UploadError::BadRequest("fingerprint is too long".to_owned()));
++        }
++        if fingerprint.as_ref().is_some_and(|value| {
++            !value
++                .bytes()
++                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=' | b'-' | b'_'))
++        }) {
++            return Err(UploadError::BadRequest(
++                "fingerprint contains invalid characters".to_owned(),
++            ));
++        }
++        let client_request_id = normalize_client_request_id(client_request_id)?;
++
++        let _create_guard = self.create_lock.lock().await;
++        let root = self.root.clone();
++        let metadata = tokio::task::spawn_blocking(move || {
++            std::fs::create_dir_all(&root)
++                .map_err(|error| UploadError::Internal(format!("cannot create upload session directory: {error}")))?;
++            cleanup_expired_sessions(&root)?;
++
++            if let Some(existing) = find_upload_by_client_request(
++                &root,
++                client_request_id.as_deref(),
++                &file_name,
++                file_size,
++                conversation_id.as_deref(),
++                fingerprint.as_deref(),
++            )? {
++                return Ok(existing);
++            }
++
++            let active = active_upload_reservations(&root)?;
++            let reserved = active.bytes.checked_add(file_size).ok_or_else(|| {
++                UploadError::CapacityExceeded("active upload reservation exceeds the configured limit".to_owned())
++            })?;
++            if reserved > RESUMABLE_UPLOAD_MAX_RESERVED_BYTES {
++                return Err(UploadError::CapacityExceeded(format!(
++                    "active uploads may reserve at most {RESUMABLE_UPLOAD_MAX_RESERVED_BYTES} bytes"
++                )));
++            }
++
++            let upload_id = Uuid::now_v7().to_string();
++            let session_dir = root.join(&upload_id);
++            std::fs::create_dir(&session_dir)
++                .map_err(|error| UploadError::Internal(format!("cannot create upload session: {error}")))?;
++
++            let expires_at_unix_ms =
++                now_unix_ms().saturating_add(RESUMABLE_UPLOAD_SESSION_TTL_SECS.saturating_mul(1000));
++            let metadata = UploadSessionMetadata {
++                upload_id,
++                file_name,
++                file_size,
++                conversation_id,
++                fingerprint,
++                client_request_id,
++                expires_at_unix_ms,
++            };
++
++            let result = (|| {
++                let payload_path = session_dir.join(UPLOAD_SESSION_PAYLOAD_FILE);
++                std::fs::OpenOptions::new()
++                    .write(true)
++                    .create_new(true)
++                    .open(payload_path)
++                    .map_err(|error| UploadError::Internal(format!("cannot create upload payload: {error}")))?;
++
++                let encoded = serde_json::to_vec(&metadata)
++                    .map_err(|error| UploadError::Internal(format!("cannot encode upload session: {error}")))?;
++                std::fs::write(session_dir.join(UPLOAD_SESSION_METADATA_FILE), encoded)
++                    .map_err(|error| UploadError::Internal(format!("cannot persist upload session: {error}")))?;
++                Ok((metadata.clone(), 0))
++            })();
++            if result.is_err() {
++                let _ = std::fs::remove_dir_all(&session_dir);
++            }
++            result
++        })
++        .await
++        .map_err(upload_join_error)??;
++
++        let (metadata, offset) = metadata;
++        info!(
++            upload_id = %metadata.upload_id,
++            file_size = metadata.file_size,
++            "resumable upload initialized"
++        );
++        Ok(metadata_to_session(metadata, offset))
++    }
++
++    pub async fn status(&self, upload_id: &str) -> Result<UploadSession, UploadError> {
++        let (normalized_id, lock) = self.session_lock(upload_id)?;
++        let _guard = lock.lock().await;
++        let root = self.root.clone();
++        tokio::task::spawn_blocking(move || load_session(&root, &normalized_id))
++            .await
++            .map_err(upload_join_error)?
++    }
++
++    pub async fn append_chunk(
++        &self,
++        upload_id: &str,
++        requested_offset: u64,
++        chunk: Vec<u8>,
++        expected_checksum: Option<[u8; 32]>,
++    ) -> Result<UploadSession, UploadError> {
++        if chunk.is_empty() {
++            return Err(UploadError::BadRequest("upload chunk must not be empty".to_owned()));
++        }
++        if chunk.len() > RESUMABLE_UPLOAD_CHUNK_SIZE {
++            return Err(UploadError::PayloadTooLarge(format!(
++                "upload chunk exceeds {RESUMABLE_UPLOAD_CHUNK_SIZE} bytes"
++            )));
++        }
++        let _chunk_slot = self
++            .chunk_slots
++            .clone()
++            .acquire_owned()
++            .await
++            .map_err(|_| UploadError::Internal("upload concurrency limiter is unavailable".to_owned()))?;
++        if let Some(expected) = expected_checksum {
++            let actual = Sha256::digest(&chunk);
++            if actual.as_slice() != expected {
++                return Err(UploadError::ChecksumMismatch(
++                    "upload chunk checksum does not match".to_owned(),
++                ));
++            }
++        }
++
++        let (normalized_id, lock) = self.session_lock(upload_id)?;
++        let _guard = lock.lock().await;
++        let root = self.root.clone();
++        tokio::task::spawn_blocking(move || {
++            let (metadata, payload_path, offset) = load_session_parts(&root, &normalized_id)?;
++            if requested_offset != offset {
++                return Err(UploadError::OffsetMismatch { expected: offset });
++            }
++            let chunk_len = u64::try_from(chunk.len())
++                .map_err(|_| UploadError::PayloadTooLarge("upload chunk is too large".to_owned()))?;
++            let new_offset = offset
++                .checked_add(chunk_len)
++                .ok_or_else(|| UploadError::PayloadTooLarge("upload offset overflow".to_owned()))?;
++            if new_offset > metadata.file_size {
++                return Err(UploadError::PayloadTooLarge(
++                    "upload chunk exceeds the declared file size".to_owned(),
++                ));
++            }
++
++            let mut payload = std::fs::OpenOptions::new()
++                .append(true)
++                .open(&payload_path)
++                .map_err(|error| UploadError::Internal(format!("cannot open upload payload: {error}")))?;
++            if let Err(error) = payload.write_all(&chunk).and_then(|_| payload.sync_data()) {
++                let _ = payload.set_len(offset);
++                return Err(UploadError::Internal(format!("cannot persist upload chunk: {error}")));
++            }
++            Ok(metadata_to_session(metadata, new_offset))
++        })
++        .await
++        .map_err(upload_join_error)?
++    }
++
++    pub async fn complete(&self, upload_id: &str) -> Result<String, UploadError> {
++        let (normalized_id, lock) = self.session_lock(upload_id)?;
++        let _guard = lock.lock().await;
++        let root = self.root.clone();
++        let completed_id = normalized_id.clone();
++        let path = tokio::task::spawn_blocking(move || {
++            if let Some(path) = read_completed_upload(&root, &normalized_id)? {
++                return Ok(path);
++            }
++            let (metadata, payload_path, offset) = load_session_parts(&root, &normalized_id)?;
++            if offset != metadata.file_size {
++                return Err(UploadError::BadRequest(format!(
++                    "upload is incomplete: expected {} bytes, received {offset}",
++                    metadata.file_size
++                )));
++            }
++
++            let final_dir = upload_final_directory(&root, metadata.conversation_id.as_deref())?;
++            std::fs::create_dir_all(&final_dir)
++                .map_err(|error| UploadError::Internal(format!("cannot create upload destination: {error}")))?;
++            let (base, extension) = split_base_ext(&metadata.file_name);
++            let mut candidate = metadata.file_name.clone();
++            for suffix in 2..=1001 {
++                let destination = final_dir.join(&candidate);
++                let completion_path = payload_path
++                    .parent()
++                    .ok_or_else(|| UploadError::Internal("upload session path has no parent".to_owned()))?
++                    .join(UPLOAD_SESSION_COMPLETION_FILE);
++                let encoded_destination = serde_json::to_vec(&destination.to_string_lossy().into_owned())
++                    .map_err(|error| UploadError::Internal(format!("cannot encode upload completion: {error}")))?;
++                std::fs::write(&completion_path, encoded_destination)
++                    .map_err(|error| UploadError::Internal(format!("cannot persist upload completion: {error}")))?;
++                match std::fs::hard_link(&payload_path, &destination) {
++                    Ok(()) => {
++                        std::fs::remove_file(&payload_path).map_err(|error| {
++                            UploadError::Internal(format!("cannot finalize upload payload: {error}"))
++                        })?;
++                        return Ok(destination.to_string_lossy().into_owned());
++                    }
++                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
++                        let _ = std::fs::remove_file(&completion_path);
++                        candidate = format!("{base}({suffix}){extension}");
++                    }
++                    Err(error) => {
++                        let _ = std::fs::remove_file(&completion_path);
++                        return Err(UploadError::Internal(format!(
++                            "cannot atomically finalize upload: {error}"
++                        )));
++                    }
++                }
++            }
++            Err(UploadError::Internal(format!(
++                "too many name collisions for upload file '{}'",
++                metadata.file_name
++            )))
++        })
++        .await
++        .map_err(upload_join_error)??;
++
++        self.session_locks.remove(&completed_id);
++        info!(upload_id = %completed_id, "resumable upload completed");
++        Ok(path)
++    }
++
++    pub async fn cancel(&self, upload_id: &str) -> Result<(), UploadError> {
++        let (normalized_id, lock) = self.session_lock(upload_id)?;
++        let _guard = lock.lock().await;
++        let root = self.root.clone();
++        let removed_id = normalized_id.clone();
++        tokio::task::spawn_blocking(move || {
++            let session_dir = session_directory(&root, &normalized_id)?;
++            if !session_dir.is_dir() {
++                return Err(UploadError::NotFound("upload session not found".to_owned()));
++            }
++            std::fs::remove_dir_all(session_dir)
++                .map_err(|error| UploadError::Internal(format!("cannot remove upload session: {error}")))
++        })
++        .await
++        .map_err(upload_join_error)??;
++        self.session_locks.remove(&removed_id);
++        Ok(())
++    }
++
++    fn session_lock(&self, upload_id: &str) -> Result<(String, Arc<Mutex<()>>), UploadError> {
++        let normalized_id = normalize_upload_id(upload_id)?;
++        let lock = self
++            .session_locks
++            .entry(normalized_id.clone())
++            .or_insert_with(|| Arc::new(Mutex::new(())))
++            .clone();
++        Ok((normalized_id, lock))
++    }
++}
++
++#[derive(Default)]
++struct ActiveUploadReservations {
++    bytes: u64,
++}
++
++fn active_upload_reservations(root: &Path) -> Result<ActiveUploadReservations, UploadError> {
++    let mut reservations = ActiveUploadReservations::default();
++    for entry in std::fs::read_dir(root)
++        .map_err(|error| UploadError::Internal(format!("cannot inspect upload sessions: {error}")))?
++    {
++        let entry =
++            entry.map_err(|error| UploadError::Internal(format!("cannot inspect upload session entry: {error}")))?;
++        if !entry
++            .file_type()
++            .map_err(|error| UploadError::Internal(format!("cannot inspect upload session type: {error}")))?
++            .is_dir()
++        {
++            continue;
++        }
++        let Ok(metadata) = read_upload_metadata(&entry.path()) else {
++            continue;
++        };
++        if read_completed_upload(root, &metadata.upload_id)?.is_some() {
++            continue;
++        }
++        reservations.bytes = reservations.bytes.checked_add(metadata.file_size).ok_or_else(|| {
++            UploadError::CapacityExceeded("active upload reservation exceeds the configured limit".to_owned())
++        })?;
++    }
++    Ok(reservations)
++}
++
++fn find_upload_by_client_request(
++    root: &Path,
++    client_request_id: Option<&str>,
++    file_name: &str,
++    file_size: u64,
++    conversation_id: Option<&str>,
++    fingerprint: Option<&str>,
++) -> Result<Option<(UploadSessionMetadata, u64)>, UploadError> {
++    let Some(client_request_id) = client_request_id else {
++        return Ok(None);
++    };
++    for entry in std::fs::read_dir(root)
++        .map_err(|error| UploadError::Internal(format!("cannot inspect upload sessions: {error}")))?
++    {
++        let entry =
++            entry.map_err(|error| UploadError::Internal(format!("cannot inspect upload session entry: {error}")))?;
++        if !entry
++            .file_type()
++            .map_err(|error| UploadError::Internal(format!("cannot inspect upload session type: {error}")))?
++            .is_dir()
++        {
++            continue;
++        }
++        let Ok(metadata) = read_upload_metadata(&entry.path()) else {
++            continue;
++        };
++        if metadata.client_request_id.as_deref() != Some(client_request_id) {
++            continue;
++        }
++        if entry.path().join(UPLOAD_SESSION_COMPLETION_FILE).is_file() {
++            continue;
++        }
++        if metadata.file_name != file_name
++            || metadata.file_size != file_size
++            || metadata.conversation_id.as_deref() != conversation_id
++            || metadata.fingerprint.as_deref() != fingerprint
++        {
++            return Err(UploadError::BadRequest(
++                "client request id is already bound to a different upload".to_owned(),
++            ));
++        }
++        let offset = std::fs::symlink_metadata(entry.path().join(UPLOAD_SESSION_PAYLOAD_FILE))
++            .map_err(|error| UploadError::Internal(format!("cannot inspect upload payload: {error}")))?
++            .len();
++        return Ok(Some((metadata, offset)));
++    }
++    Ok(None)
++}
++
++fn cleanup_expired_sessions(root: &Path) -> Result<(), UploadError> {
++    let now = now_unix_ms();
++    let mut removed = 0usize;
++    for entry in std::fs::read_dir(root)
++        .map_err(|error| UploadError::Internal(format!("cannot inspect upload sessions: {error}")))?
++    {
++        let entry =
++            entry.map_err(|error| UploadError::Internal(format!("cannot inspect upload session entry: {error}")))?;
++        if !entry
++            .file_type()
++            .map_err(|error| UploadError::Internal(format!("cannot inspect upload session type: {error}")))?
++            .is_dir()
++        {
++            continue;
++        }
++        if read_upload_metadata(&entry.path()).is_ok_and(|metadata| metadata.expires_at_unix_ms <= now) {
++            std::fs::remove_dir_all(entry.path())
++                .map_err(|error| UploadError::Internal(format!("cannot remove expired upload session: {error}")))?;
++            removed += 1;
++        }
++    }
++    if removed > 0 {
++        info!(removed, "expired resumable upload sessions removed");
++    }
++    Ok(())
++}
++
++fn load_session(root: &Path, upload_id: &str) -> Result<UploadSession, UploadError> {
++    if read_completed_upload(root, upload_id)?.is_some() {
++        let session_dir = session_directory(root, upload_id)?;
++        let metadata = read_upload_metadata(&session_dir)?;
++        return Ok(metadata_to_session(metadata.clone(), metadata.file_size));
++    }
++    let (metadata, _, offset) = load_session_parts(root, upload_id)?;
++    Ok(metadata_to_session(metadata, offset))
++}
++
++fn read_completed_upload(root: &Path, upload_id: &str) -> Result<Option<String>, UploadError> {
++    let session_dir = session_directory(root, upload_id)?;
++    if !session_dir.is_dir() {
++        return Err(UploadError::NotFound("upload session not found".to_owned()));
++    }
++    let completion_path = session_dir.join(UPLOAD_SESSION_COMPLETION_FILE);
++    if !completion_path.is_file() {
++        return Ok(None);
++    }
++    let encoded = std::fs::read(&completion_path)
++        .map_err(|error| UploadError::Internal(format!("cannot read upload completion: {error}")))?;
++    let completed: String = serde_json::from_slice(&encoded)
++        .map_err(|error| UploadError::Internal(format!("cannot decode upload completion: {error}")))?;
++    if !Path::new(&completed).is_file() {
++        std::fs::remove_file(completion_path)
++            .map_err(|error| UploadError::Internal(format!("cannot repair upload completion: {error}")))?;
++        return Ok(None);
++    }
++    Ok(Some(completed))
++}
++
++fn load_session_parts(root: &Path, upload_id: &str) -> Result<(UploadSessionMetadata, PathBuf, u64), UploadError> {
++    let session_dir = session_directory(root, upload_id)?;
++    if !session_dir.is_dir() {
++        return Err(UploadError::NotFound("upload session not found".to_owned()));
++    }
++    let metadata = read_upload_metadata(&session_dir)?;
++    if metadata.upload_id != upload_id {
++        return Err(UploadError::Internal("upload session identity mismatch".to_owned()));
++    }
++    if metadata.expires_at_unix_ms <= now_unix_ms() {
++        let _ = std::fs::remove_dir_all(&session_dir);
++        return Err(UploadError::NotFound("upload session expired".to_owned()));
++    }
++    let payload_path = session_dir.join(UPLOAD_SESSION_PAYLOAD_FILE);
++    let offset = std::fs::symlink_metadata(&payload_path)
++        .map_err(|error| UploadError::Internal(format!("cannot inspect upload payload: {error}")))?
++        .len();
++    if offset > metadata.file_size {
++        return Err(UploadError::Internal(
++            "upload payload is larger than the declared file size".to_owned(),
++        ));
++    }
++    Ok((metadata, payload_path, offset))
++}
++
++fn read_upload_metadata(session_dir: &Path) -> Result<UploadSessionMetadata, UploadError> {
++    let encoded = std::fs::read(session_dir.join(UPLOAD_SESSION_METADATA_FILE))
++        .map_err(|error| UploadError::Internal(format!("cannot read upload session: {error}")))?;
++    serde_json::from_slice(&encoded)
++        .map_err(|error| UploadError::Internal(format!("cannot decode upload session: {error}")))
++}
++
++fn session_directory(root: &Path, upload_id: &str) -> Result<PathBuf, UploadError> {
++    Ok(root.join(normalize_upload_id(upload_id)?))
++}
++
++fn normalize_upload_id(upload_id: &str) -> Result<String, UploadError> {
++    Uuid::parse_str(upload_id.trim())
++        .map(|value| value.to_string())
++        .map_err(|_| UploadError::BadRequest("invalid upload id".to_owned()))
++}
++
++fn normalize_optional_component(label: &str, value: Option<String>) -> Result<Option<String>, UploadError> {
++    let Some(value) = value else {
++        return Ok(None);
++    };
++    let trimmed = value.trim();
++    if trimmed.is_empty() {
++        return Ok(None);
++    }
++    validate_upload_component(label, trimmed)?;
++    Ok(Some(trimmed.to_owned()))
++}
++
++fn normalize_client_request_id(value: Option<String>) -> Result<Option<String>, UploadError> {
++    let Some(value) = value else {
++        return Ok(None);
++    };
++    let trimmed = value.trim();
++    if trimmed.is_empty() {
++        return Ok(None);
++    }
++    if trimmed.len() > 128
++        || !trimmed
++            .bytes()
++            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=' | b'-' | b'_'))
++    {
++        return Err(UploadError::BadRequest("client request id is invalid".to_owned()));
++    }
++    Ok(Some(trimmed.to_owned()))
++}
++
++fn validate_upload_component(label: &str, value: &str) -> Result<(), UploadError> {
++    if value.trim().is_empty() {
++        return Err(UploadError::BadRequest(format!("{label} must not be empty")));
++    }
++    if has_traversal(value) || value.contains('/') || value.contains('\\') {
++        return Err(UploadError::BadRequest(format!("{label} contains invalid characters")));
++    }
++    Ok(())
++}
++
++fn upload_final_directory(root: &Path, conversation_id: Option<&str>) -> Result<PathBuf, UploadError> {
++    let aionui_root = root
++        .parent()
++        .ok_or_else(|| UploadError::Internal("upload session root has no parent".to_owned()))?;
++    Ok(aionui_root.join(conversation_id.unwrap_or("general")))
++}
++
++fn metadata_to_session(metadata: UploadSessionMetadata, offset: u64) -> UploadSession {
++    UploadSession {
++        upload_id: metadata.upload_id,
++        offset,
++        file_size: metadata.file_size,
++        fingerprint: metadata.fingerprint,
++        expires_at_unix_ms: metadata.expires_at_unix_ms,
++    }
++}
++
++fn now_unix_ms() -> u64 {
++    SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_millis()
++        .try_into()
++        .unwrap_or(u64::MAX)
++}
++
++fn upload_join_error(error: tokio::task::JoinError) -> UploadError {
++    UploadError::Internal(format!("upload filesystem task failed: {error}"))
++}
++
+ /// A concrete implementation of [`crate::traits::IFileService`].
+ pub struct FileService {
+     broadcaster: Arc<dyn EventBroadcaster>,
+diff --git a/crates/aionui-file/src/types.rs b/crates/aionui-file/src/types.rs
+index 99ff94a313c8fc3722f9c2fa2399941bb8c87ad2..c927f55888931b7787f3ae50cbcac09d10affa41 100644
+--- a/crates/aionui-file/src/types.rs
++++ b/crates/aionui-file/src/types.rs
+@@ -59,6 +59,16 @@ pub struct FileMetadata {
+     pub is_directory: bool,
+ }
+ 
++/// Durable state of an incomplete resumable upload.
++#[derive(Debug, Clone, PartialEq)]
++pub struct UploadSession {
++    pub upload_id: String,
++    pub offset: u64,
++    pub file_size: u64,
++    pub fingerprint: Option<String>,
++    pub expires_at_unix_ms: u64,
++}
++
+ // ---------------------------------------------------------------------------
+ // Events
+ // ---------------------------------------------------------------------------
+diff --git a/crates/aionui-file/tests/resumable_upload.rs b/crates/aionui-file/tests/resumable_upload.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..853885800b08b28f931f2d8207c10a9483709e2a
+--- /dev/null
++++ b/crates/aionui-file/tests/resumable_upload.rs
+@@ -0,0 +1,200 @@
++use std::path::PathBuf;
++
++use aionui_common::constants::{RESUMABLE_UPLOAD_CHUNK_SIZE, RESUMABLE_UPLOAD_MAX_SIZE};
++use aionui_file::{UploadError, UploadService};
++use sha2::{Digest, Sha256};
++
++fn upload_service(temp: &tempfile::TempDir) -> UploadService {
++    UploadService::new(temp.path().join("aionui").join("upload-sessions"))
++}
++
++#[tokio::test]
++async fn resumes_from_persisted_payload_length_after_service_restart() {
++    let temp = tempfile::tempdir().unwrap();
++    let first = upload_service(&temp);
++    let session = first
++        .create_session(
++            "report.bin".to_owned(),
++            6,
++            Some("conversation-1".to_owned()),
++            Some("fingerprint-1".to_owned()),
++            Some("request-1".to_owned()),
++        )
++        .await
++        .unwrap();
++    let chunk = b"abc".to_vec();
++    let checksum: [u8; 32] = Sha256::digest(&chunk).into();
++    first
++        .append_chunk(&session.upload_id, 0, chunk, Some(checksum))
++        .await
++        .unwrap();
++
++    let restarted = upload_service(&temp);
++    let resumed = restarted.status(&session.upload_id).await.unwrap();
++
++    assert_eq!(resumed.offset, 3);
++    assert_eq!(resumed.file_size, 6);
++    assert_eq!(resumed.fingerprint.as_deref(), Some("fingerprint-1"));
++}
++
++#[tokio::test]
++async fn reuses_the_session_when_initialization_response_is_retried() {
++    let temp = tempfile::tempdir().unwrap();
++    let service = upload_service(&temp);
++
++    let first = service
++        .create_session(
++            "report.bin".to_owned(),
++            6,
++            Some("conversation-1".to_owned()),
++            Some("fingerprint-1".to_owned()),
++            Some("request-1".to_owned()),
++        )
++        .await
++        .unwrap();
++    service
++        .append_chunk(&first.upload_id, 0, b"abc".to_vec(), None)
++        .await
++        .unwrap();
++    let retried = service
++        .create_session(
++            "report.bin".to_owned(),
++            6,
++            Some("conversation-1".to_owned()),
++            Some("fingerprint-1".to_owned()),
++            Some("request-1".to_owned()),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(retried.upload_id, first.upload_id);
++    assert_eq!(retried.offset, 3);
++}
++
++#[tokio::test]
++async fn completes_upload_without_overwriting_an_existing_file() {
++    let temp = tempfile::tempdir().unwrap();
++    let service = upload_service(&temp);
++    let final_dir = temp.path().join("aionui").join("general");
++    std::fs::create_dir_all(&final_dir).unwrap();
++    std::fs::write(final_dir.join("report.bin"), b"existing").unwrap();
++
++    let session = service
++        .create_session("report.bin".to_owned(), 3, None, None, None)
++        .await
++        .unwrap();
++    let chunk = b"new".to_vec();
++    let checksum: [u8; 32] = Sha256::digest(&chunk).into();
++    service
++        .append_chunk(&session.upload_id, 0, chunk, Some(checksum))
++        .await
++        .unwrap();
++    let completed = PathBuf::from(service.complete(&session.upload_id).await.unwrap());
++    let retried = service.complete(&session.upload_id).await.unwrap();
++
++    assert_eq!(completed.file_name().unwrap(), "report(2).bin");
++    assert_eq!(retried, completed.to_string_lossy());
++    assert_eq!(std::fs::read(final_dir.join("report.bin")).unwrap(), b"existing");
++    assert_eq!(std::fs::read(completed).unwrap(), b"new");
++}
++
++#[tokio::test]
++async fn rejects_offset_and_checksum_mismatches_without_advancing() {
++    let temp = tempfile::tempdir().unwrap();
++    let service = upload_service(&temp);
++    let session = service
++        .create_session("data.bin".to_owned(), 3, None, None, None)
++        .await
++        .unwrap();
++
++    let error = service
++        .append_chunk(&session.upload_id, 1, b"abc".to_vec(), None)
++        .await
++        .unwrap_err();
++    assert!(matches!(error, UploadError::OffsetMismatch { expected: 0 }));
++
++    let error = service
++        .append_chunk(&session.upload_id, 0, b"abc".to_vec(), Some([0; 32]))
++        .await
++        .unwrap_err();
++    assert!(matches!(error, UploadError::ChecksumMismatch(_)));
++    assert_eq!(service.status(&session.upload_id).await.unwrap().offset, 0);
++}
++
++#[tokio::test]
++async fn enforces_file_and_chunk_size_boundaries_before_writing() {
++    let temp = tempfile::tempdir().unwrap();
++    let service = upload_service(&temp);
++    let accepted = service
++        .create_session("one-gib.bin".to_owned(), RESUMABLE_UPLOAD_MAX_SIZE, None, None, None)
++        .await
++        .unwrap();
++    service.cancel(&accepted.upload_id).await.unwrap();
++
++    let error = service
++        .create_session(
++            "too-large.bin".to_owned(),
++            RESUMABLE_UPLOAD_MAX_SIZE + 1,
++            None,
++            None,
++            None,
++        )
++        .await
++        .unwrap_err();
++    assert!(matches!(error, UploadError::PayloadTooLarge(_)));
++
++    let small = service
++        .create_session(
++            "chunk.bin".to_owned(),
++            (RESUMABLE_UPLOAD_CHUNK_SIZE + 1) as u64,
++            None,
++            None,
++            None,
++        )
++        .await
++        .unwrap();
++    let error = service
++        .append_chunk(&small.upload_id, 0, vec![0; RESUMABLE_UPLOAD_CHUNK_SIZE + 1], None)
++        .await
++        .unwrap_err();
++    assert!(matches!(error, UploadError::PayloadTooLarge(_)));
++    assert_eq!(service.status(&small.upload_id).await.unwrap().offset, 0);
++}
++
++#[tokio::test]
++async fn upload_sessions_are_not_limited_by_the_chat_mode_pair_cap() {
++    let temp = tempfile::tempdir().unwrap();
++    let service = upload_service(&temp);
++
++    for index in 0..4 {
++        service
++            .create_session(format!("upload-{index}.bin"), 1, None, None, None)
++            .await
++            .unwrap();
++    }
++}
++
++#[tokio::test]
++async fn reserves_enough_space_for_three_maximum_size_uploads() {
++    let temp = tempfile::tempdir().unwrap();
++    let service = upload_service(&temp);
++
++    for index in 0..3 {
++        service
++            .create_session(
++                format!("maximum-{index}.bin"),
++                RESUMABLE_UPLOAD_MAX_SIZE,
++                None,
++                None,
++                None,
++            )
++            .await
++            .unwrap();
++    }
++
++    let error = service
++        .create_session("over-reservation.bin".to_owned(), 1, None, None, None)
++        .await
++        .unwrap_err();
++    assert!(matches!(error, UploadError::CapacityExceeded(_)));
++}
 diff --git a/crates/aionui-runtime/src/acp_tool_runtime/mod.rs b/crates/aionui-runtime/src/acp_tool_runtime/mod.rs
 index 21d17f4c76e9de8f894d15f4714b7ca4e1534cb5..90c04ebd7eb3d66ec453739b00e1a4ecd2fc57ac 100644
 --- a/crates/aionui-runtime/src/acp_tool_runtime/mod.rs

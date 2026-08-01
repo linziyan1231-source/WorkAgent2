@@ -42,4 +42,23 @@ Assert-Throws {
     Assert-PreservedComponentHashes -Before ([ordered]@{ portal = $a }) -After ([ordered]@{ portal = $c })
 } 'outside its declared scope'
 
-Write-Host 'Release scope, optimistic baseline, idempotence, and preserved-component tests passed.'
+$agentCliPublisher = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Publish-SharedAgentClis.ps1') -Raw
+if ($agentCliPublisher -notmatch 'Stop-PortalUserHosts\s+& \$launcher release activate') {
+    throw 'Agent CLI publisher must stop every Portal UserHost immediately before activating current.json.'
+}
+
+$upgrade = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Upgrade.ps1') -Raw
+foreach ($required in @(
+    "if (`$updatesUserHostBinary)",
+    "Wait-AllInstancesIdle.ps1",
+    "if (-not `$updatesUserHostBinary) { `$releaseInstallArguments += '--allow-running' }",
+    "if (`$portalServiceStoppedForUpgrade)"
+)) {
+    if (-not $upgrade.Contains($required)) { throw "Upgrade script is missing the non-interrupting cutover contract: $required" }
+}
+$stopAllInstancesCalls = ([regex]::Matches($upgrade, [regex]::Escape("'Stop-AllInstances.ps1'"))).Count
+if ($stopAllInstancesCalls -ne 1) {
+    throw "Upgrade script must stop all instances only in the UserHost-binary drain path; calls=$stopAllInstancesCalls."
+}
+
+Write-Host 'Release scope, optimistic baseline, idempotence, preserved-component, CLI cutover, and non-interrupting Web cutover tests passed.'

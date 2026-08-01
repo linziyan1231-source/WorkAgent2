@@ -60,6 +60,10 @@ type Host struct {
 	stopOnce     sync.Once
 	previousStat winutil.JobStats
 	previousAt   time.Time
+
+	storageMu      sync.Mutex
+	storageUsage   ipc.StorageUsage
+	storageUsageAt time.Time
 }
 
 func Run(ctx context.Context, cfg config.UserHost) error {
@@ -211,6 +215,13 @@ func (h *Host) initialize(ctx context.Context) error {
 	}
 	h.log.Printf("Startup phase completed phase=aioncore-migrations elapsed_ms=%d", time.Since(phaseStarted).Milliseconds())
 	dbPath := filepath.Join(h.dirs.Data, "aionui-backend.db")
+	brandingApplied, err := applyWorkAgentBranding(ctx, dbPath, h.dirs.Data, filepath.Join(h.dirs.Config, workagentBrandingMarkerName), time.Now())
+	if err != nil {
+		return err
+	}
+	if brandingApplied {
+		h.log.Printf("Updated the built-in WorkAgent AI assistant, prompt, and skill bindings")
+	}
 	if pendingModels == nil {
 		codexModelDefaultsApplied, err := applyCodexModelDefaults(h.cfg.DataRoot, h.dirs)
 		if err != nil {
@@ -286,14 +297,6 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	h.client, h.auth = client, material
-	brandingApplied, err := applyWorkAgentBranding(startupCtx, dbPath, h.dirs.Data, filepath.Join(h.dirs.Config, workagentBrandingMarkerName), time.Now())
-	if err != nil {
-		h.stopCommand(cmd, h.webDone, 5*time.Second)
-		return err
-	}
-	if brandingApplied {
-		h.log.Printf("Branded the built-in assistant, prompt, and product skills as WorkAgent AI")
-	}
 	if err := h.applyPendingModelBootstrap(startupCtx, pendingModels); err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
@@ -645,7 +648,7 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		responseIDs := ipc.ModelKeyIDs{CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID}
 		return ipc.Response{OK: true, ModelKeyIDs: &responseIDs}
 	case "storage_usage":
-		usage, err := measureStorageUsage(ctx, h.cfg.DataRoot)
+		usage, err := h.currentStorageUsage(ctx)
 		if err != nil {
 			return ipc.Response{OK: false, ErrorCode: "STORAGE_USAGE_UNAVAILABLE", ErrorMessage: "private storage usage is unavailable"}
 		}
@@ -757,6 +760,26 @@ func (h *Host) snapshot() ipc.Status {
 }
 
 const userStorageLimitBytes = uint64(20 * 1024 * 1024 * 1024)
+const storageUsageCacheTTL = 5 * time.Minute
+
+func (h *Host) currentStorageUsage(ctx context.Context) (ipc.StorageUsage, error) {
+	h.storageMu.Lock()
+	defer h.storageMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return ipc.StorageUsage{}, err
+	}
+	now := time.Now()
+	if h.storageUsage.MeasuredAt != "" && now.Sub(h.storageUsageAt) < storageUsageCacheTTL {
+		return h.storageUsage, nil
+	}
+	usage, err := measureStorageUsage(ctx, h.cfg.DataRoot)
+	if err != nil {
+		return ipc.StorageUsage{}, err
+	}
+	h.storageUsage = usage
+	h.storageUsageAt = now
+	return usage, nil
+}
 
 func measureStorageUsage(ctx context.Context, root string) (ipc.StorageUsage, error) {
 	var used uint64

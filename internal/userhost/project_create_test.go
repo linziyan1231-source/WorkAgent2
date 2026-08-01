@@ -9,8 +9,8 @@ import (
 )
 
 func TestCreateProjectCreatesProtectedDirectory(t *testing.T) {
-	workspace := projectCreateWorkspace(t)
-	result, code, err := createProjectState(workspace, projectRenameTestSID, "网站项目")
+	workspace, sid := projectCreateWorkspace(t)
+	result, code, err := createProjectState(workspace, sid, "网站项目")
 	if err != nil || code != "" {
 		t.Fatalf("create failed: code=%s err=%v", code, err)
 	}
@@ -21,19 +21,19 @@ func TestCreateProjectCreatesProtectedDirectory(t *testing.T) {
 	if info, err := os.Stat(target); err != nil || !info.IsDir() {
 		t.Fatalf("created directory is unavailable: info=%v err=%v", info, err)
 	}
-	if err := winutil.VerifyDescendantACL(target, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
+	if err := winutil.VerifyDescendantACL(target, winutil.PrivateTreePolicy(sid)); err != nil {
 		t.Fatalf("created directory ACL is invalid: %v", err)
 	}
 }
 
 func TestCreateProjectConflictLeavesExistingDirectory(t *testing.T) {
-	workspace := projectCreateWorkspace(t)
+	workspace, sid := projectCreateWorkspace(t)
 	target := filepath.Join(workspace, "existing")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	_, code, err := createProjectState(workspace, projectRenameTestSID, "existing")
+	_, code, err := createProjectState(workspace, sid, "existing")
 	if err == nil || code != "PROJECT_EXISTS" {
 		t.Fatalf("conflict result: code=%s err=%v", code, err)
 	}
@@ -43,14 +43,18 @@ func TestCreateProjectConflictLeavesExistingDirectory(t *testing.T) {
 	}
 }
 
-func projectCreateWorkspace(t *testing.T) string {
+func projectCreateWorkspace(t *testing.T) (string, string) {
 	t.Helper()
+	identity, err := winutil.CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := winutil.ApplyACL(workspace, winutil.PrivateTreePolicy(projectRenameTestSID)); err != nil {
+	if err := winutil.ApplyACL(workspace, winutil.PrivateTreePolicy(identity.SID)); err != nil {
 		t.Fatal(err)
 	}
-	return workspace
+	return workspace, identity.SID
 }

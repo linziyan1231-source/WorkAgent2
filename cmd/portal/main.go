@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -38,6 +39,9 @@ func run(arguments []string) int {
 		usage()
 		return 2
 	}
+	if global.Args()[0] == "service" {
+		return provisionServiceCommand(*configPath, global.Args()[1:])
+	}
 	if _, err := winutil.RequireAdministrator(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -59,6 +63,8 @@ func run(arguments []string) int {
 
 func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) error {
 	switch arguments[0] {
+	case "admin":
+		return administratorCommand(ctx, manager, arguments[1:])
 	case "user":
 		return userCommand(ctx, manager, arguments[1:])
 	case "windows-password":
@@ -98,6 +104,27 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func administratorCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
+	if len(arguments) == 0 || arguments[0] != "create" {
+		return errors.New("usage: portal --config <path> admin create")
+	}
+	flags := newFlags("admin create")
+	username := flags.String("username", "admin", "Portal administrator username")
+	if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: portal --config <path> admin create [--username <name>]")
+	}
+	password, err := readSecretTwice("New administrator Portal password: ", "Confirm administrator Portal password: ")
+	if err != nil {
+		return err
+	}
+	user, err := manager.AddAdministrator(ctx, *username, password)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Created Portal administrator %s without a Windows account or UserHost.\n", user.Username)
+	return nil
 }
 
 func chatGPTProLimitCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
@@ -287,7 +314,7 @@ func seedKimiOAuthUsers(ctx context.Context, manager *admin.Manager, sourceOAuth
 	if err != nil {
 		return err
 	}
-	users, err := manager.Store.ListUsers(ctx)
+	users, err := manager.Store.ListManagedUsers(ctx)
 	if err != nil {
 		return err
 	}
@@ -492,7 +519,7 @@ func instanceCommand(ctx context.Context, manager *admin.Manager, arguments []st
 		return nil
 	}
 	if len(arguments) != 2 {
-		return errors.New("usage: portal --config <path> instance <list|status|start|stop|restart> [portal-username]")
+		return errors.New("usage: portal --config <path> instance <list|status|activity|start|stop|restart> [portal-username]")
 	}
 	user, err := manager.Store.UserByUsername(ctx, arguments[1])
 	if err != nil {
@@ -505,6 +532,14 @@ func instanceCommand(ctx context.Context, manager *admin.Manager, arguments []st
 			return err
 		}
 		printStatus(*item.Status, item.Sessions, item.Requests, item.WebSockets)
+		return nil
+	case "activity":
+		activity, err := manager.Instances.ProbeActivity(ctx, user.WindowsSID)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("known=%t active=%t checked_at=%s reason=%q\n", activity.Known, activity.Active,
+			time.Unix(activity.CheckedAtUnix, 0).UTC().Format(time.RFC3339), activity.Reason)
 		return nil
 	case "start":
 		if !user.Enabled {
@@ -590,11 +625,6 @@ func releaseCommand(ctx context.Context, manager *admin.Manager, arguments []str
 	if len(arguments) == 0 {
 		return errors.New("release subcommand is required")
 	}
-	if running, err := anyRunning(ctx, manager); err != nil {
-		return err
-	} else if running {
-		return errors.New("all UserHost instances must be drained or stopped before release switching")
-	}
 	previous := filepath.Join(filepath.Dir(manager.Config.CurrentReleaseFile), "previous.json")
 	switch arguments[0] {
 	case "install":
@@ -602,10 +632,24 @@ func releaseCommand(ctx context.Context, manager *admin.Manager, arguments []str
 		source := flags.String("source", "", "packed AionUi Web CLI directory")
 		version := flags.String("version", "", "immutable release version")
 		coreVersion := flags.String("aioncore-version", "", "bundled aioncore version")
+		allowRunning := flags.Bool("allow-running", false, "activate for future UserHost starts while existing instances retain their immutable release")
 		if err := flags.Parse(arguments[1:]); err != nil || *source == "" || *version == "" || *coreVersion == "" || flags.NArg() != 0 {
-			return errors.New("usage: portal --config <path> release install --source <dir> --version <version> --aioncore-version <version>")
+			return errors.New("usage: portal --config <path> release install --source <dir> --version <version> --aioncore-version <version> [--allow-running]")
 		}
-		if err := backupUserDatabases(ctx, manager, "pre-release-"+time.Now().UTC().Format("20060102T150405Z")); err != nil {
+		running, err := anyRunning(ctx, manager)
+		if err != nil {
+			return err
+		}
+		if running && !*allowRunning {
+			return errors.New("all UserHost instances must be drained or stopped before release switching")
+		}
+		backupLabel := "pre-release-" + time.Now().UTC().Format("20060102T150405Z")
+		if *allowRunning {
+			err = backupRunningUserDatabases(ctx, manager, backupLabel)
+		} else {
+			err = backupUserDatabases(ctx, manager, backupLabel)
+		}
+		if err != nil {
 			return err
 		}
 		verified, err := release.Install(*source, manager.Config.ReleasesRoot, *version, *coreVersion, manager.Config.SupportedAionCore)
@@ -626,6 +670,11 @@ func releaseCommand(ctx context.Context, manager *admin.Manager, arguments []str
 	case "rollback":
 		if len(arguments) != 1 {
 			return errors.New("usage: portal --config <path> release rollback")
+		}
+		if running, err := anyRunning(ctx, manager); err != nil {
+			return err
+		} else if running {
+			return errors.New("all UserHost instances must be drained or stopped before release switching")
 		}
 		if err := backupUserDatabases(ctx, manager, "pre-rollback-"+time.Now().UTC().Format("20060102T150405Z")); err != nil {
 			return err
@@ -700,7 +749,7 @@ func anyRunning(ctx context.Context, manager *admin.Manager) (bool, error) {
 }
 
 func backupUserDatabases(ctx context.Context, manager *admin.Manager, label string) error {
-	users, err := manager.Store.ListUsers(ctx)
+	users, err := manager.Store.ListManagedUsers(ctx)
 	if err != nil {
 		return err
 	}
@@ -740,6 +789,86 @@ func backupUserDatabases(ctx context.Context, manager *admin.Manager, label stri
 		fmt.Printf("Backed up and hash-verified %s database to %s (%s).\n", user.Username, directory, strings.Join(copied, ", "))
 	}
 	return nil
+}
+
+func backupRunningUserDatabases(ctx context.Context, manager *admin.Manager, label string) error {
+	users, err := manager.Store.ListManagedUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, user := range users {
+		dataRoot, err := manager.UserDataRootForSID(user.WindowsSID)
+		if err != nil {
+			return fmt.Errorf("resolve private data root for %s: %w", user.Username, err)
+		}
+		source := filepath.Join(dataRoot, "data", "aionui-backend.db")
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			fmt.Printf("Backup skipped for %s: database does not exist yet.\n", user.Username)
+			continue
+		} else if err != nil {
+			return err
+		}
+		directory := filepath.Join(dataRoot, "backups", label)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return err
+		}
+		destination := filepath.Join(directory, filepath.Base(source))
+		hash, err := snapshotSQLiteDatabase(ctx, source, destination)
+		if err != nil {
+			return fmt.Errorf("create consistent online backup for %s: %w", user.Username, err)
+		}
+		if err := winutil.ApplyTreeACL(directory, winutil.PrivateTreePolicy(user.WindowsSID)); err != nil {
+			return err
+		}
+		fmt.Printf("Backed up and integrity-checked live %s database to %s (%s sha256=%s).\n", user.Username, directory, filepath.Base(destination), hash)
+	}
+	return nil
+}
+
+func snapshotSQLiteDatabase(ctx context.Context, source, destination string) (string, error) {
+	if !filepath.IsAbs(source) || !filepath.IsAbs(destination) {
+		return "", errors.New("SQLite snapshot paths must be absolute")
+	}
+	if _, err := os.Stat(destination); err == nil {
+		return "", errors.New("immutable SQLite snapshot already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	dsn := "file:" + filepath.ToSlash(source) + "?_pragma=busy_timeout(10000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return "", err
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", filepath.ToSlash(destination)); err != nil {
+		return "", err
+	}
+	backup, err := sql.Open("sqlite", "file:"+filepath.ToSlash(destination)+"?mode=ro")
+	if err != nil {
+		return "", err
+	}
+	defer backup.Close()
+	var integrity string
+	if err := backup.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&integrity); err != nil {
+		return "", err
+	}
+	if integrity != "ok" {
+		return "", fmt.Errorf("SQLite quick_check returned %q", integrity)
+	}
+	file, err := os.OpenFile(destination, os.O_RDWR, 0)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func copyFile(source, destination string) (string, error) {
@@ -883,5 +1012,5 @@ func newFlags(name string) *flag.FlagSet {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <user|windows-password|task|instance|model-bootstrap|limits|chatgpt-pro-limit|logs|release|acl|readiness> ...")
+	fmt.Fprintln(os.Stderr, "usage: portal --config <absolute-path> <admin|user|windows-password|task|instance|model-bootstrap|limits|chatgpt-pro-limit|logs|release|acl|readiness> ...")
 }

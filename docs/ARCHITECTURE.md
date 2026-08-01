@@ -43,10 +43,12 @@ sequenceDiagram
 4. **Secrets use bounded channels.** Plaintext secrets are not accepted in shared files, process arguments, logs, or browser-visible data.
 5. **Internal listeners are loopback-only.** Public origin, cookies, TLS, callbacks, and proxy behavior form one transport contract.
 6. **Lifecycle is explicit.** Start, health, idle collection, rename, upgrade, rollback, and failure recovery are modeled as state transitions rather than best-effort shell actions.
+7. **Provisioning is per account.** Each username has at most one active provisioning job, passwords stay outside job state, and unrelated employee accounts may initialize concurrently.
 
 ## Package responsibilities
 
 - `internal/portal`: login and sessions, proxying, OAuth-facing routes, notifications, quotas, static content.
+- `internal/admin` and `internal/provisionipc`: privileged account creation, resumable milestones, duplicate-job rejection, and bounded progress streaming.
 - `internal/instance`: mapping managed users to UserHost routes and lifecycle state.
 - `internal/ipc` and `internal/adminipc`: typed named-pipe protocols and servers.
 - `internal/userhost`: private credentials, projects, runtime launch, activity, OAuth, and model defaults.

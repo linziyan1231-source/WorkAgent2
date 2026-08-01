@@ -37,6 +37,12 @@ if ($declaredBinaryComponents.Count -ne 0) {
 }
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$tarExe = if ($env:OS -eq 'Windows_NT') {
+    Join-Path $env:SystemRoot 'System32\tar.exe'
+} else {
+    (Get-Command tar -ErrorAction Stop).Source
+}
+if (-not (Test-Path -LiteralPath $tarExe -PathType Leaf)) { throw "Native tar executable is missing: $tarExe" }
 $resolvedOutputRoot = [IO.Path]::GetFullPath($OutputRoot)
 New-Item -ItemType Directory -Path $resolvedOutputRoot -Force | Out-Null
 $outputRootItem = Get-Item -LiteralPath $resolvedOutputRoot -Force
@@ -56,10 +62,23 @@ $published = $false
 try {
 
 $baseline = $null
+$baselineCapturedAtUtc = $null
 if (-not $FreshInstall) {
     if (-not (Test-Path -LiteralPath $UpgradeBaselinePath -PathType Leaf)) { throw "Upgrade baseline is missing: $UpgradeBaselinePath" }
     $baseline = Get-Content -LiteralPath $UpgradeBaselinePath -Raw | ConvertFrom-Json
     if ($baseline.format_version -ne 1 -or $null -eq $baseline.components) { throw 'Upgrade baseline format is invalid.' }
+    $capturedValue = $baseline.captured_at_utc
+    if ($capturedValue -is [DateTime]) {
+        $baselineCapturedAtUtc = $capturedValue.ToUniversalTime().ToString('o')
+    } else {
+        $parsedCapturedAt = [DateTimeOffset]::ParseExact(
+            [string]$capturedValue,
+            'o',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        $baselineCapturedAtUtc = $parsedCapturedAt.UtcDateTime.ToString('o')
+    }
 }
 
 $webManifest = $null
@@ -99,7 +118,7 @@ if ('web' -cin $IncludedComponents) {
 
     $managedResourcesRoot = Join-Path $packedDirectory 'bundled-aioncore\win32-x64\managed-resources'
     & (Join-Path $PSScriptRoot 'Patch-CodexAcpSessionFork.ps1') -ManagedResourcesRoot $managedResourcesRoot
-    & tar -czf $archive -C (Join-Path $dist 'staging') 'aionui-web'
+    & $tarExe -czf $archive -C (Join-Path $dist 'staging') 'aionui-web'
     if ($LASTEXITCODE -ne 0) { throw "Repack patched AionUi archive failed with exit code $LASTEXITCODE" }
     $actualArchiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText(
@@ -185,7 +204,7 @@ if (-not $FreshInstall) {
     }
     $upgradeContract = [ordered]@{
         baseline_id = [string]$baseline.baseline_id
-        captured_at_utc = [string]$baseline.captured_at_utc
+        captured_at_utc = $baselineCapturedAtUtc
         expected_installed_sha256 = $expected
     }
 }

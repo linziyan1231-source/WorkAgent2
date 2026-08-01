@@ -22,6 +22,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
 		return
 	}
+	if session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator accounts do not have an AionUi instance"})
+		return
+	}
 	if r.URL.Path == "/api/fs/browse" {
 		root, err := s.userFilesystemRoot(session.User.WindowsSID)
 		if err != nil {

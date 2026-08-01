@@ -24,6 +24,7 @@ import (
 	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/portalusage"
+	"aionuiportal/internal/provisionipc"
 	"aionuiportal/internal/store"
 	"aionuiportal/internal/winutil"
 )
@@ -35,6 +36,7 @@ const (
 
 type InstanceManager interface {
 	Ensure(context.Context, string) (ipc.Status, error)
+	Status(context.Context, string) (ipc.Status, error)
 	Route(context.Context, string) (instance.Route, error)
 	Touch(context.Context, string) error
 	OAuthStart(context.Context, string, ipc.OAuthStartRequest) (ipc.OAuthResult, error)
@@ -46,6 +48,7 @@ type InstanceManager interface {
 	ModelKeyIDs(context.Context, string) (modelbootstrap.KeyIDs, error)
 	StorageUsage(context.Context, string) (ipc.StorageUsage, error)
 	WriteUsageSnapshot(context.Context, string, []byte) error
+	Stop(context.Context, string) error
 }
 
 type UsageService interface {
@@ -71,6 +74,8 @@ type Server struct {
 	chatForwardSecret  []byte
 	notificationTarget *url.URL
 	notificationClient *http.Client
+	provision          func(context.Context, provisionipc.Request, func(provisionipc.Progress)) (provisionipc.Response, error)
+	provisionJobs      provisionJobStore
 }
 
 func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage UsageService, staticDir string, logger *log.Logger) (*Server, error) {
@@ -118,7 +123,8 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	}
 	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, adminMasterHash: adminMasterHash, logger: logger, now: time.Now,
 		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatForwardTarget: chatForwardTarget, chatForwardSecret: chatForwardSecret,
-		notificationTarget: notificationTarget, notificationClient: notificationClient}, nil
+		notificationTarget: notificationTarget, notificationClient: notificationClient, provision: provisionipc.CallWithProgress,
+		provisionJobs: provisionJobStore{items: make(map[string]provisionJob)}}, nil
 }
 
 func (s *Server) userFilesystemRoot(sid string) (string, error) {
@@ -210,6 +216,24 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/portal/me/notifications":
 		s.currentNotifications(w, r)
+		return
+	case "/api/portal/admin/users":
+		s.adminUsers(w, r)
+		return
+	case "/api/portal/admin/users/usage":
+		s.adminUserUsage(w, r)
+		return
+	case "/api/portal/admin/user-jobs":
+		s.adminUserJob(w, r)
+		return
+	case "/api/portal/admin/users/disable":
+		s.disableUser(w, r)
+		return
+	case "/api/portal/admin/users/enable":
+		s.enableUser(w, r)
+		return
+	case "/api/portal/admin/users/reset-password":
+		s.resetUserPassword(w, r)
 		return
 	case "/internal/chatforward/quota/reserve":
 		s.chatForwardQuotaReserve(w, r)
@@ -327,19 +351,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Invalid username or password"})
 		return
 	}
-	finish, err := s.instances.BeginRequest(user.WindowsSID, false)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Your AionUi instance is draining"})
-		return
-	}
-	defer finish()
-	if _, err := s.instances.Ensure(r.Context(), user.WindowsSID); err != nil {
-		if auditErr := s.audit(r.Context(), "portal.login", "instance_failed", user.Username, user.WindowsSID, remoteIP, map[string]any{"reason": safeReason(err)}); auditErr != nil {
-			s.internalError(w, "audit failed instance start", auditErr)
+	if !user.Admin {
+		finish, err := s.instances.BeginRequest(user.WindowsSID, false)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Your AionUi instance is draining"})
 			return
 		}
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Your AionUi instance could not be started"})
-		return
+		defer finish()
+		if _, err := s.instances.Ensure(r.Context(), user.WindowsSID); err != nil {
+			if auditErr := s.audit(r.Context(), "portal.login", "instance_failed", user.Username, user.WindowsSID, remoteIP, map[string]any{"reason": safeReason(err)}); auditErr != nil {
+				s.internalError(w, "audit failed instance start", auditErr)
+				return
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Your AionUi instance could not be started"})
+			return
+		}
 	}
 	if old, err := r.Cookie(s.cookieName); err == nil {
 		if err := s.store.DeleteSession(r.Context(), old.Value); err != nil {
@@ -375,7 +401,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: s.cookieName, Value: token, Path: "/", Secure: s.cookieSecure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Expires: now.Add(time.Duration(s.cfg.SessionTTLSeconds) * time.Second), MaxAge: s.cfg.SessionTTLSeconds})
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "user": map[string]string{"id": strconv.FormatInt(user.ID, 10), "username": user.Username}})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "user": authUserPayload(user)})
 }
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
@@ -541,7 +567,276 @@ func (s *Server) authUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "user": map[string]string{"id": strconv.FormatInt(session.User.ID, 10), "username": session.User.Username}})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "user": authUserPayload(session.User)})
+}
+
+func authUserPayload(user store.User) map[string]any {
+	return map[string]any{"id": strconv.FormatInt(user.ID, 10), "username": user.Username, "admin": user.Admin}
+}
+
+func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return
+	}
+	if !session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		users, err := s.store.ListManagedUsers(r.Context())
+		if err != nil {
+			s.internalError(w, "list managed users", err)
+			return
+		}
+		items := make([]map[string]any, len(users))
+		for index, user := range users {
+			items[index] = managedUserPayload(user)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "users": items})
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.validBrowserOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Security origin validation failed"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var request struct {
+		Username       string `json:"username"`
+		PortalPassword string `json:"portal_password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid account request"})
+		return
+	}
+	password := []byte(request.PortalPassword)
+	request.PortalPassword = ""
+	defer auth.Zero(password)
+	if err := winutil.ValidateLocalUsername(request.Username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	if err := auth.ValidatePortalPassword(password); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	s.startProvisionJob(w, request.Username, password, session.User.Username, peerIP(r.RemoteAddr))
+}
+
+func (s *Server) adminUserUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return
+	}
+	if !session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
+		return
+	}
+	query := r.URL.Query()
+	usernames, valid := query["username"]
+	if !valid || len(query) != 1 || len(usernames) != 1 || strings.TrimSpace(usernames[0]) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Exactly one managed username is required"})
+		return
+	}
+	user, err := s.store.UserByUsername(r.Context(), usernames[0])
+	if err != nil || user.Admin {
+		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	if !user.Enabled {
+		writeJSON(w, http.StatusConflict, map[string]any{"success": false, "message": "Managed user is disabled"})
+		return
+	}
+	usageCtx, cancel := context.WithTimeout(r.Context(), time.Duration(s.cfg.UsageQueryTimeoutSecs)*time.Second)
+	defer cancel()
+	summary, err := s.managedUserUsage(usageCtx, user)
+	if err != nil {
+		s.logger.Printf("Administrator resource usage unavailable username=%s", user.Username)
+		if errors.Is(usageCtx.Err(), context.DeadlineExceeded) {
+			writeJSON(w, http.StatusGatewayTimeout, map[string]any{"success": false, "message": "Resource usage request timed out"})
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Resource usage is unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "username": user.Username, "resource_usage": summary})
+}
+
+func managedUserPayload(user store.User) map[string]any {
+	item := map[string]any{"username": user.Username, "windows_username": user.WindowsUsername, "windows_sid": user.WindowsSID, "enabled": user.Enabled,
+		"created_at": user.CreatedAt.UTC().Format(time.RFC3339)}
+	if user.LastLoginAt != nil {
+		item["last_login_at"] = user.LastLoginAt.UTC().Format(time.RFC3339)
+	}
+	return item
+}
+
+func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.validBrowserOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Security origin validation failed"})
+		return
+	}
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return
+	}
+	if !session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+	var request struct {
+		Username string `json:"username"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid disable request"})
+		return
+	}
+	user, err := s.store.UserByUsername(r.Context(), request.Username)
+	if err != nil || user.Admin {
+		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	if err := s.store.SetUserEnabled(r.Context(), user.Username, false, s.now()); err != nil {
+		s.internalError(w, "disable managed user", err)
+		return
+	}
+	if err := s.instances.Stop(r.Context(), user.WindowsSID); err != nil && !isUnavailableInstance(err) {
+		s.internalError(w, "stop disabled user", err)
+		return
+	}
+	if err := s.audit(r.Context(), "portal.admin.user.disable", "success", user.Username, user.WindowsSID, peerIP(r.RemoteAddr), map[string]any{"actor": session.User.Username}); err != nil {
+		s.internalError(w, "audit administrator user disable", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+func (s *Server) enableUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.validBrowserOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Security origin validation failed"})
+		return
+	}
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return
+	}
+	if !session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+	var request struct {
+		Username string `json:"username"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid enable request"})
+		return
+	}
+	user, err := s.store.UserByUsername(r.Context(), request.Username)
+	if err != nil || user.Admin {
+		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	if !user.Enabled {
+		if err := s.store.SetUserEnabled(r.Context(), user.Username, true, s.now()); err != nil {
+			s.internalError(w, "enable managed user", err)
+			return
+		}
+		if err := s.audit(r.Context(), "portal.admin.user.enable", "success", user.Username, user.WindowsSID, peerIP(r.RemoteAddr), map[string]any{"actor": session.User.Username}); err != nil {
+			s.internalError(w, "audit administrator user enable", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.validBrowserOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Security origin validation failed"})
+		return
+	}
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return
+	}
+	if !session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var request struct {
+		Username       string `json:"username"`
+		PortalPassword string `json:"portal_password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid password reset request"})
+		return
+	}
+	password := []byte(request.PortalPassword)
+	request.PortalPassword = ""
+	defer auth.Zero(password)
+	if err := auth.ValidatePortalPassword(password); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	user, err := s.store.UserByUsername(r.Context(), request.Username)
+	if err != nil || user.Admin {
+		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		s.internalError(w, "hash managed user password", err)
+		return
+	}
+	if err := s.store.ResetPassword(r.Context(), user.Username, hash, s.now()); err != nil {
+		s.internalError(w, "reset managed user password", err)
+		return
+	}
+	if err := s.audit(r.Context(), "portal.admin.user.reset_password", "success", user.Username, user.WindowsSID, peerIP(r.RemoteAddr), map[string]any{"actor": session.User.Username}); err != nil {
+		s.internalError(w, "audit administrator password reset", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+func isUnavailableInstance(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "pipe") && (strings.Contains(message, "not found") || strings.Contains(message, "cannot find") || strings.Contains(message, "找不到"))
 }
 
 func (s *Server) session(r *http.Request) (store.Session, string, error) {

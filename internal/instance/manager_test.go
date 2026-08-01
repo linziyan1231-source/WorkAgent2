@@ -185,6 +185,28 @@ func TestIdleReapFailsSafeOnUnknownActivity(t *testing.T) {
 	}
 }
 
+func TestProbeActivityRefreshesAndValidatesUserHostIdentity(t *testing.T) {
+	data, cfg := managerStore(t)
+	activity := ipc.Activity{Known: true, Active: false, Reason: "idle", CheckedAtUnix: time.Now().Unix()}
+	wrongIdentity := false
+	manager := NewWithIPC(cfg, data, &fakeTask{}, func(_ context.Context, _ string, request ipc.Request) (ipc.Response, error) {
+		sid := managerSID
+		if wrongIdentity {
+			sid = "S-1-5-21-1988320210-1174886911-1684912000-8042"
+		}
+		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true,
+			Status: &ipc.Status{WindowsSID: sid, Activity: activity}}, nil
+	})
+	got, err := manager.ProbeActivity(context.Background(), managerSID)
+	if err != nil || got != activity {
+		t.Fatalf("activity=%+v err=%v", got, err)
+	}
+	wrongIdentity = true
+	if _, err := manager.ProbeActivity(context.Background(), managerSID); err == nil {
+		t.Fatal("activity probe accepted a mismatched UserHost SID")
+	}
+}
+
 func TestOAuthIPCRequestsStayBoundToTheRequestedSIDAndInstance(t *testing.T) {
 	data, cfg := managerStore(t)
 	var seen []ipc.Request

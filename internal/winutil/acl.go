@@ -12,15 +12,18 @@ import (
 )
 
 const (
-	SystemSID         = "S-1-5-18"
-	AdministratorsSID = "S-1-5-32-544"
-	UsersSID          = "S-1-5-32-545"
-	EveryoneSID       = "S-1-1-0"
-	OwnerRightsSID    = "S-1-3-4"
+	SystemSID           = "S-1-5-18"
+	AdministratorsSID   = "S-1-5-32-544"
+	UsersSID            = "S-1-5-32-545"
+	EveryoneSID         = "S-1-1-0"
+	OwnerRightsSID      = "S-1-3-4"
+	capabilitySIDPrefix = "S-1-15-3-1024-"
 
 	fileAllAccess windows.ACCESS_MASK = 0x001F01FF
 	fileWriteBits windows.ACCESS_MASK = windows.GENERIC_ALL | windows.GENERIC_WRITE | windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA |
 		windows.FILE_WRITE_EA | windows.FILE_WRITE_ATTRIBUTES | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER
+	cacheCapabilityAccess windows.ACCESS_MASK = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.DELETE |
+		windows.GENERIC_READ | windows.GENERIC_WRITE | windows.GENERIC_EXECUTE
 )
 
 type ACLPermission int
@@ -31,15 +34,16 @@ const (
 )
 
 type ACLPolicy struct {
-	OwnerSID                       string
-	AllowedOwnerSIDs               []string
-	DescendantsMayInherit          bool
-	Principals                     map[string]ACLPermission
-	allowOwnerRightsForDescendants bool
+	OwnerSID                             string
+	AllowedOwnerSIDs                     []string
+	DescendantsMayInherit                bool
+	Principals                           map[string]ACLPermission
+	allowOwnerRightsForDescendants       bool
+	allowHeadlessChromeCacheCapabilities bool
 }
 
 func PrivateTreePolicy(userSID string) ACLPolicy {
-	return ACLPolicy{OwnerSID: AdministratorsSID, AllowedOwnerSIDs: []string{userSID, SystemSID}, DescendantsMayInherit: true, allowOwnerRightsForDescendants: true, Principals: map[string]ACLPermission{
+	return ACLPolicy{OwnerSID: AdministratorsSID, AllowedOwnerSIDs: []string{userSID, SystemSID}, DescendantsMayInherit: true, allowOwnerRightsForDescendants: true, allowHeadlessChromeCacheCapabilities: true, Principals: map[string]ACLPermission{
 		SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, userSID: ACLFullControl,
 	}}
 }
@@ -99,7 +103,7 @@ func VerifyACL(path string, policy ACLPolicy) error {
 	} else if reparse {
 		return fmt.Errorf("ACL path is a reparse point: %s", path)
 	}
-	return verifyPathACL(path, policy, true)
+	return verifyPathACL(path, policy, true, "")
 }
 
 func VerifyDescendantACL(path string, policy ACLPolicy) error {
@@ -114,7 +118,7 @@ func VerifyDescendantACL(path string, policy ACLPolicy) error {
 	} else if reparse {
 		return fmt.Errorf("ACL path is a reparse point: %s", path)
 	}
-	return verifyPathACL(path, policy, false)
+	return verifyPathACL(path, policy, false, "")
 }
 
 func ApplyTreeACL(root string, policy ACLPolicy) error {
@@ -174,7 +178,7 @@ func VerifyTreeACL(root string, policy ACLPolicy) error {
 			return nil
 		}
 		requireProtected := !policy.DescendantsMayInherit || strings.EqualFold(filepath.Clean(path), cleanRoot)
-		if err := verifyPathACL(path, policy, requireProtected); err != nil {
+		if err := verifyPathACL(path, policy, requireProtected, cleanRoot); err != nil {
 			return fmt.Errorf("ACL verification failed for %s: %w", path, err)
 		}
 		return nil
@@ -230,7 +234,7 @@ func applyPathACL(path string, directory bool, policy ACLPolicy) error {
 	return nil
 }
 
-func verifyPathACL(path string, policy ACLPolicy, requireProtected bool) error {
+func verifyPathACL(path string, policy ACLPolicy, requireProtected bool, treeRoot string) error {
 	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
@@ -275,6 +279,9 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool) error {
 			principalSID = ownerSID
 			permission, allowed = permissionForSID(policy, principalSID)
 		}
+		if !allowed && policy.allowHeadlessChromeCacheCapabilities && allowedHeadlessChromeCacheCapability(path, treeRoot, sidText, ace.Mask) {
+			continue
+		}
 		if !allowed {
 			return fmt.Errorf("unexpected allowed principal %s", sidText)
 		}
@@ -301,6 +308,30 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool) error {
 		}
 	}
 	return nil
+}
+
+func allowedHeadlessChromeCacheCapability(path, treeRoot, sidText string, mask windows.ACCESS_MASK) bool {
+	if treeRoot == "" || !strings.HasPrefix(sidText, capabilitySIDPrefix) || mask&^cacheCapabilityAccess != 0 {
+		return false
+	}
+	relative, err := filepath.Rel(treeRoot, path)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if len(parts) < 4 || !strings.EqualFold(parts[0], "temp") || !strings.EqualFold(parts[2], "Default") || !strings.EqualFold(parts[3], "Cache") {
+		return false
+	}
+	const prefix = "HeadlessChrome"
+	if len(parts[1]) <= len(prefix) || !strings.EqualFold(parts[1][:len(prefix)], prefix) {
+		return false
+	}
+	for _, character := range parts[1][len(prefix):] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateACLPolicy(policy ACLPolicy) error {
