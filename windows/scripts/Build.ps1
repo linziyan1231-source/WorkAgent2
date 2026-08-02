@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9._-]{2,79}$')][string]$ReleaseId,
     [Parameter(Mandatory)][ValidateSet('web-only', 'runtime-only', 'backend-only', 'combined')][string]$ReleaseScope,
     [string[]]$IncludedComponents,
-    [string]$AionUiSource = (Join-Path $PSScriptRoot '..\..\AionUi'),
+    [string]$AionUiSource = (Join-Path $PSScriptRoot '..\..\..\AionUi'),
     [string]$GoExe = 'go',
     [string]$UpgradeBaselinePath,
     [switch]$FreshInstall,

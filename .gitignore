@@ -2,6 +2,9 @@
 /artifacts/
 /dist/
 /bin/
+/windows/artifacts/
+/windows/dist/
+/windows/bin/
 /.tools/
 *.exe
 *.dll
