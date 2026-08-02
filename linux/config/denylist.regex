@@ -1,0 +1,11 @@
+# Public, non-customer-specific release deny-list. One extended regular
+# expression per line. Organization-specific names and identifiers belong in
+# a protected WORKAGENT_AI_DENYLIST file supplied by the release environment.
+-----BEGIN[[:space:]]+(RSA[[:space:]]+|EC[[:space:]]+|OPENSSH[[:space:]]+)?PRIVATE KEY-----
+AKIA[0-9A-Z]{16}
+ASIA[0-9A-Z]{16}
+gh[pousr]_[A-Za-z0-9]{36,255}
+github_pat_[A-Za-z0-9_]{80,255}
+xox[baprs]-[A-Za-z0-9-]{20,255}
+sk-[A-Za-z0-9]{32,255}
+[A-Za-z]:\\Users\\[^\\[:space:]]+

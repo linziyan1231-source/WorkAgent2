@@ -1,0 +1,47 @@
+[Unit]
+Description=WorkAgent2 privileged employee provisioning service
+Requires=workagent-provision.socket
+After=workagent-tenant-catalog-ready.target
+PartOf=workagent-portal.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-provision
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-admin
+ConditionPathExists=/opt/workagent/control/manifest.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStartPre=/opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-admin --required-executable bin/workagent-provision
+ExecStart=/opt/workagent/control/bin/workagent-provision serve --config /etc/workagent/portal.json
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-provision
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_SETGID CAP_SETUID CAP_SYS_ADMIN
+AmbientCapabilities=
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=full
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/etc /srv/workagent/users /var/lib/workagent /run/workagent
+
+MemoryMax=512M
+CPUQuota=200%
+TasksMax=256

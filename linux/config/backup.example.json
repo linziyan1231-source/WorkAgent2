@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "local_directory": "/var/lib/workagent-backup/local",
+  "off_host_directory": "/mnt/workagent-backup/off-host",
+  "require_remote_filesystem": true,
+  "encryption_key_file": "/etc/workagent-backup/encryption.key",
+  "metrics_file": "/var/lib/node_exporter/textfile_collector/workagent_backup.prom",
+  "retention_count": 14,
+  "additional_sources": []
+}

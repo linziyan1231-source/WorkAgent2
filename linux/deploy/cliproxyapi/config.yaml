@@ -1,0 +1,28 @@
+# CLIProxyAPI 7.2.81 / per-key-models.4 production template.
+# workagent-cliproxy prepare replaces only the empty secret-key with a bcrypt
+# hash sourced from the service's encrypted systemd credential.
+host: "127.0.0.1"
+port: 8317
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+  disable-auto-update-panel: true
+auth-dir: "/var/lib/cliproxyapi/auth"
+api-keys: []
+debug: false
+logging-to-file: false
+logs-max-total-size-mb: 256
+error-logs-max-files: 10
+usage-statistics-enabled: false
+# The migrated host's only approved provider egress path. This remains a
+# non-secret loopback origin and is enforced by the runtime template validator.
+proxy-url: "http://127.0.0.1:8118"
+plugins:
+  enabled: true
+  dir: "/opt/workagent/shared/cliproxyapi/plugins"
+  configs:
+    cpa-key-policy:
+      enabled: true
+      priority: 10
+      state_file: "/var/lib/cliproxyapi/policy/cpa-key-policy-state.json"

@@ -1,0 +1,12 @@
+# These eight byte-pinned unified diffs intentionally preserve upstream patch
+# whitespace. Their exact bytes are checked by component SHA-256 pins and build
+# scripts; disabling Git's text-whitespace heuristic here prevents the initial
+# tree diff from treating valid diff markers as repository-source whitespace.
+components/aioncore/codex-acp-1.1.2-aionui-fork-steer.6.patch -whitespace
+components/aionui/aionui-webhost-workagent-runtime-auth.patch -whitespace
+components/kimi-code/kimi-code-0.29.1-acp-session-fork-steer.patch -whitespace
+components/kimi-code/kimi-code-0.29.1-minidb-resp-recovery.patch -whitespace
+third_party/cliproxyapi/patches/cliproxyapi-go1.26-hardening.patch -whitespace
+third_party/cliproxyapi/patches/cliproxyapi-per-key-models.patch -whitespace
+third_party/cliproxyapi/patches/cpa-key-policy-0.4.4-state-concurrency.patch -whitespace
+third_party/cliproxyapi/patches/cpa-key-policy-0.4.5-linux-directory-fsync.patch -whitespace

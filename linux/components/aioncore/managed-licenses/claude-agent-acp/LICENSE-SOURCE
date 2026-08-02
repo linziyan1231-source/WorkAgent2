@@ -1,0 +1,7 @@
+component=@agentclientprotocol/claude-agent-acp
+version=0.39.0
+repository=https://github.com/agentclientprotocol/claude-agent-acp.git
+tag=v0.39.0
+commit=edde96ebafac2ea5d1c879c17459453472d82916
+license_url=https://raw.githubusercontent.com/agentclientprotocol/claude-agent-acp/edde96ebafac2ea5d1c879c17459453472d82916/LICENSE
+license_sha256=6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a

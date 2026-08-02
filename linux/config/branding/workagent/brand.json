@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "brand_id": "workagent",
+  "company_name": "WorkAgent",
+  "platform_name": "WorkAgent2",
+  "primary_color": "#EA3E00",
+  "assets": {
+    "logo": "workagent-logo.png",
+    "logo_dark": "workagent-logo.png",
+    "favicon": "workagent-logo.png",
+    "app_icon": "workagent-logo.png"
+  },
+  "help_url": null,
+  "support_url": null
+}

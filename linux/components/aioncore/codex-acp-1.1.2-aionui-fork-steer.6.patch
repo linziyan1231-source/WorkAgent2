@@ -1,0 +1,198 @@
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -25671,6 +25671,31 @@ var CodexAcpClient = class {
+       additionalDirectories
+     };
+   }
++  async forkSession(request) {
++    const turnIndex = request._meta?.aionui?.turnIndex;
++    if (!Number.isInteger(turnIndex) || turnIndex < 0) {
++      throw RequestError.invalidParams(
++        { _meta: request._meta },
++        "AionUI session/fork requires a non-negative _meta.aionui.turnIndex"
++      );
++    }
++    const historyResponse = await this.codexClient.threadRead({
++      threadId: request.sessionId,
++      includeTurns: true
++    });
++    const turn = historyResponse.thread.turns?.[turnIndex];
++    if (!turn?.id) {
++      throw RequestError.invalidParams(
++        { sessionId: request.sessionId, turnIndex },
++        "The requested Codex turn checkpoint does not exist"
++      );
++    }
++    const response = await this.codexClient.threadFork({
++      threadId: request.sessionId,
++      lastTurnId: turn.id
++    });
++    return { sessionId: response.thread.id };
++  }
+   async newSession(request) {
+     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
+     await this.refreshSkills(request.cwd, additionalDirectories);
+@@ -26003,6 +26028,9 @@ var CodexAcpClient = class {
+       nextCursor: listResponse.nextCursor ?? null
+     };
+   }
++  async turnSteer(params) {
++    return await this.codexClient.turnSteer(params);
++  }
+   async turnInterrupt(params) {
+     await this.codexClient.turnInterrupt({
+       threadId: params.threadId,
+@@ -27628,7 +27656,7 @@ function numberValue(value) {
+ // src/AcpExtensions.ts
+ var LEGACY_SET_SESSION_MODEL_METHOD = "session/set_model";
+ function isExtMethodRequest(request) {
+-  return request.method === "authentication/status" || request.method === "authentication/logout" || request.method === LEGACY_SET_SESSION_MODEL_METHOD;
++  return request.method === "authentication/status" || request.method === "authentication/logout" || request.method === LEGACY_SET_SESSION_MODEL_METHOD || request.method === "_aionui/session/steer";
+ }
+ 
+ // src/FastModeConfig.ts
+@@ -27764,6 +27792,7 @@ var CodexAcpServer = class _CodexAcpServer {
+         sessionCapabilities: {
+           resume: {},
+           list: {},
++          fork: {},
+           close: {},
+           delete: {},
+           additionalDirectories: {}
+@@ -27783,6 +27812,8 @@ var CodexAcpServer = class _CodexAcpServer {
+       return {};
+     }
+     switch (methodRequest.method) {
++      case "_aionui/session/steer":
++        return await this.steerSession(methodRequest.params);
+       case "authentication/status":
+         return await this.runWithProcessCheck(() => this.codexAcpClient.getAuthenticationStatus());
+       case "authentication/logout": {
+@@ -28023,6 +28054,19 @@ You have been logged out. Please try again.`);
+       ...this.createSessionConfigOptionsResponse(this.getSessionState(sessionId))
+     };
+   }
++  async forkSession(params) {
++    logger.log("Forking session...", { sessionId: params.sessionId });
++    if (this.activePrompts.has(params.sessionId)) {
++      throw RequestError.invalidRequest(`Session ${params.sessionId} has an active prompt`);
++    }
++    await this.checkAuthorization();
++    const response = await this.runWithProcessCheck(() => this.codexAcpClient.forkSession(params));
++    logger.log("Session forked", {
++      sourceSessionId: params.sessionId,
++      sessionId: response.sessionId
++    });
++    return response;
++  }
+   async listSessions(params) {
+     logger.log("Listing sessions...", { cwd: params.cwd, cursor: params.cursor });
+     await this.checkAuthorization();
+@@ -28787,6 +28831,64 @@ ${item.text}`
+     }
+     return turnId;
+   }
++  async steerSession(params) {
++    if (!Array.isArray(params.prompt) || params.prompt.length === 0) {
++      throw RequestError.invalidParams(params, "AionUI steer requires a non-empty ACP prompt");
++    }
++    const activePrompt = this.activePrompts.get(params.sessionId);
++    if (!activePrompt) {
++      throw RequestError.invalidRequest(`Session ${params.sessionId} has no active prompt`);
++    }
++    const sessionState = this.getSessionState(params.sessionId);
++    const activeTurn = activePrompt.currentTurn;
++    const initialTurnId = activeTurn?.turnId ?? await this.getInterruptibleTurnId(sessionState, "Steer");
++    if (!initialTurnId || this.activePrompts.get(params.sessionId) !== activePrompt) {
++      throw RequestError.invalidRequest(`Session ${params.sessionId} has no active turn`);
++    }
++    const input = buildPromptItems(params.prompt);
++    const maxAttempts = 41;
++    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
++      if (this.activePrompts.get(params.sessionId) !== activePrompt) {
++        break;
++      }
++      const currentTurn = activePrompt.currentTurn;
++      const turnId = currentTurn?.turnId ?? initialTurnId;
++      const threadId = currentTurn?.threadId ?? params.sessionId;
++      try {
++        const response = await this.runWithProcessCheck(() => this.codexAcpClient.turnSteer({
++          threadId,
++          expectedTurnId: turnId,
++          input
++        }));
++        logger.log("Active turn steered", {
++          sessionId: params.sessionId,
++          turnId: response.turnId,
++          attempt
++        });
++        return { turnId: response.turnId };
++      } catch (err) {
++        const message = err instanceof Error ? err.message : String(err);
++        const isActiveTurnRace = message === "no active turn to steer" || message.startsWith("expected active turn id `");
++        if (!isActiveTurnRace) {
++          throw err;
++        }
++        if (attempt === 1) {
++          logger.log("Native turn steer raced active-turn registration; retrying", {
++            sessionId: params.sessionId,
++            turnId,
++            error: message
++          });
++        }
++        if (attempt < maxAttempts) {
++          await new Promise((resolve) => setTimeout(resolve, 25));
++        }
++      }
++    }
++    throw RequestError.invalidRequest(
++      { sessionId: params.sessionId, turnId: initialTurnId },
++      "AIONUI_STEER_TURN_ENDED: the active response ended before guidance could be applied"
++    );
++  }
+   async prompt(params, signal) {
+     logger.log("Prompt received", {
+       sessionId: params.sessionId,
+@@ -29414,6 +29516,9 @@ var CodexAppServerClient = class {
+     await this.threadCompactStart(params);
+     return await compactionCompleted;
+   }
++  async turnSteer(params) {
++    return await this.sendRequest({ method: "turn/steer", params });
++  }
+   async turnInterrupt(params) {
+     return await this.sendRequest({ method: "turn/interrupt", params });
+   }
+@@ -29440,6 +29545,9 @@ var CodexAppServerClient = class {
+   async threadRead(params) {
+     return await this.sendRequest({ method: "thread/read", params });
+   }
++  async threadFork(params) {
++    return await this.sendRequest({ method: "thread/fork", params });
++  }
+   async threadArchive(params) {
+     return await this.sendRequest({ method: "thread/archive", params });
+   }
+@@ -29981,6 +30089,13 @@ var legacySetSessionModelParamsParser = external_exports.object({
+   sessionId: external_exports.string(),
+   modelId: external_exports.string()
+ }).passthrough();
++var steerExtensionParamsParser = external_exports.object({
++  sessionId: external_exports.string(),
++  prompt: external_exports.array(external_exports.object({
++    type: external_exports.literal("text"),
++    text: external_exports.string().min(1)
++  }).passthrough()).min(1)
++}).passthrough();
+ if (process.argv.includes("--version")) {
+   console.log(`${package_default.name} ${package_default.version}`);
+   process.exit(0);
+@@ -30053,5 +30168,5 @@ function startAcpServer() {
+         codexAcpServer = null;
+       }
+     });
+-  }).onRequest(methods.agent.initialize, (ctx) => getAgent().initialize(ctx.params)).onRequest(methods.agent.session.new, (ctx) => getAgent().newSession(ctx.params)).onRequest(methods.agent.session.load, (ctx) => getAgent().loadSession(ctx.params)).onRequest(methods.agent.session.list, (ctx) => getAgent().listSessions(ctx.params)).onRequest(methods.agent.session.delete, (ctx) => getAgent().deleteSession(ctx.params)).onRequest(methods.agent.session.resume, (ctx) => getAgent().resumeSession(ctx.params)).onRequest(methods.agent.session.close, (ctx) => getAgent().closeSession(ctx.params)).onRequest(methods.agent.session.setMode, (ctx) => getAgent().setSessionMode(ctx.params)).onRequest(methods.agent.session.setConfigOption, (ctx) => getAgent().setSessionConfigOption(ctx.params)).onRequest(methods.agent.authenticate, (ctx) => getAgent().authenticate(ctx.params)).onRequest(methods.agent.logout, (ctx) => getAgent().logout(ctx.params)).onRequest(methods.agent.session.prompt, (ctx) => getAgent().prompt(ctx.params, ctx.signal)).onNotification(methods.agent.session.cancel, (ctx) => getAgent().cancel(ctx.params)).onRequest("authentication/status", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/status", ctx.params)).onRequest("authentication/logout", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/logout", ctx.params)).onRequest(LEGACY_SET_SESSION_MODEL_METHOD, legacySetSessionModelParamsParser, (ctx) => getAgent().extMethod(LEGACY_SET_SESSION_MODEL_METHOD, ctx.params)).connect(acpJsonStream);
++  }).onRequest(methods.agent.initialize, (ctx) => getAgent().initialize(ctx.params)).onRequest(methods.agent.session.new, (ctx) => getAgent().newSession(ctx.params)).onRequest(methods.agent.session.load, (ctx) => getAgent().loadSession(ctx.params)).onRequest(methods.agent.session.list, (ctx) => getAgent().listSessions(ctx.params)).onRequest(methods.agent.session.delete, (ctx) => getAgent().deleteSession(ctx.params)).onRequest(methods.agent.session.fork, (ctx) => getAgent().forkSession(ctx.params)).onRequest(methods.agent.session.resume, (ctx) => getAgent().resumeSession(ctx.params)).onRequest(methods.agent.session.close, (ctx) => getAgent().closeSession(ctx.params)).onRequest(methods.agent.session.setMode, (ctx) => getAgent().setSessionMode(ctx.params)).onRequest(methods.agent.session.setConfigOption, (ctx) => getAgent().setSessionConfigOption(ctx.params)).onRequest(methods.agent.authenticate, (ctx) => getAgent().authenticate(ctx.params)).onRequest(methods.agent.logout, (ctx) => getAgent().logout(ctx.params)).onRequest(methods.agent.session.prompt, (ctx) => getAgent().prompt(ctx.params, ctx.signal)).onNotification(methods.agent.session.cancel, (ctx) => getAgent().cancel(ctx.params)).onRequest("authentication/status", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/status", ctx.params)).onRequest("authentication/logout", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/logout", ctx.params)).onRequest("__aionui/session/steer", steerExtensionParamsParser, (ctx) => getAgent().extMethod("_aionui/session/steer", ctx.params)).onRequest("_aionui/session/steer", steerExtensionParamsParser, (ctx) => getAgent().extMethod("_aionui/session/steer", ctx.params)).onRequest(LEGACY_SET_SESSION_MODEL_METHOD, legacySetSessionModelParamsParser, (ctx) => getAgent().extMethod(LEGACY_SET_SESSION_MODEL_METHOD, ctx.params)).connect(acpJsonStream);
+ }
+

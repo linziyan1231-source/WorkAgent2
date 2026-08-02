@@ -1,0 +1,37 @@
+[
+  {
+    "name": "chatforward",
+    "version": "zombie-reap-20260725-2329",
+    "source_revision": "a1b4d643c0cccde0f7d99483963974f0edb2c8107099627273534da7c0c054fe"
+  },
+  {
+    "name": "chatforward-extension",
+    "version": "0.16.0",
+    "source_revision": "a1b4d643c0cccde0f7d99483963974f0edb2c8107099627273534da7c0c054fe"
+  },
+  {
+    "name": "cliproxyapi",
+    "version": "7.2.81",
+    "source_revision": "ca52365d3d123a1cff34a5020ce16507e3c2ef1032d57f171b9c26d2cd97eb16"
+  },
+  {
+    "name": "cliproxyapi-patch",
+    "version": "per-key-models.4",
+    "source_revision": "cd8bcc9c683ed394ef4f58c90b3c61e9a5fea0265b9ae91a68259a16e7b43da8"
+  },
+  {
+    "name": "cpa-key-policy",
+    "version": "0.4.5",
+    "source_revision": "bc0081c77764312a604add1013d9cb642f628978d967a46ca3f8159c63fa1a8f"
+  },
+  {
+    "name": "node",
+    "version": "24.15.0",
+    "source_revision": "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6"
+  },
+  {
+    "name": "ws",
+    "version": "8.21.1",
+    "source_revision": "bb0f7e58ba1f64746672734d36175fe185f226491e336abc0743e2a8f4472ec1"
+  }
+]

@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "scope": "aioncore-managed-resources",
+  "components": [
+    {
+      "name": "node",
+      "version": "24.11.0",
+      "runtime_root": "node/node-v24.11.0-linux-x64",
+      "source": "https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-x64.tar.gz",
+      "source_sha256": "b3c071cdf47aab867c3b2aa287257df12ec5d7c962bf922b32fd33226c4295fd",
+      "license": "node/node-v24.11.0-linux-x64/LICENSE",
+      "license_sha256": "537308465103a306d0e3eecf42632b4ff1b48aaaec044e9fc10a78c81fd00b34",
+      "dependency_inventory": "node/node-v24.11.0-linux-x64/lib/node_modules/npm/package.json"
+    },
+    {
+      "name": "@agentclientprotocol/codex-acp",
+      "version": "1.1.2",
+      "compatibility_slot": "0.16.0-aion-fork-steer.6",
+      "runtime_root": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64",
+      "entrypoint": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+      "source": "https://github.com/agentclientprotocol/codex-acp.git",
+      "source_tag": "v1.1.2",
+      "source_commit": "8aff492d4b033ff2c02ad3b9d591994d57617463",
+      "npm_integrity": "sha512-qE/R1WdqJJ9OFHsHGvbmVmS2j9iCMZzpWT3g2XIViXrGHu1fLOALLINBIlW+WzKDllCh131aB6cqcIWSt0otbw==",
+      "npm_tarball_sha256": "fb5892908471f1cd63e970817e4df1b821a54ffc45759516201c26ce8b4fd24c",
+      "base_entrypoint_sha256": "d05351bc8c47367969a340ac92b013f6fdce538cdf89f38ec046847bd6c2ef84",
+      "patch": "codex-acp-1.1.2-aionui-fork-steer.6.patch",
+      "patch_sha256": "f52e4ab6d6616df1572282ade8280465c26f842be0d6f8c86b13173e73942879",
+      "patched_entrypoint_sha256": "53db7dc43339e67ecfff817c35c822c35637695a119e77199b92e4d8ad08bdf9",
+      "license": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64/LICENSE",
+      "license_sha256": "72ea310b40e1ee2c4aa61935d22065155c50bfde288b114c9cfd3e1fa34f8049",
+      "dependency_inventory": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64/package-lock.json",
+      "embedded_dependency_licenses": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64/licenses/npm",
+      "runtime_pruning": "Only duplicate unbundled transitive code, declarations, maps, tests, and docs are removed; exact lock inventory and license texts remain.",
+      "protocol_gate": "tests/codex-acp-wire-smoke.mjs"
+    },
+    {
+      "name": "@openai/codex",
+      "version": "0.144.4",
+      "runtime_root": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64/node_modules/@openai",
+      "source": "https://github.com/openai/codex.git",
+      "source_tag": "rust-v0.144.4",
+      "source_commit": "8c68d4c87dc54d38861f5114e920c3de2efa5876",
+      "npm_integrity": "sha512-DTHzYatlKq9dw55E0/HsbK4tRCEKabuJ10ybbqpsG8gVv/kvwEdg3Z4OI3cvLXKa21xkIa4lkGlZoO/HmqmFFw==",
+      "npm_tarball_sha256": "613aadb30be4b6a6daa45cbd086f5d4a84636bcd8c036510c106464bd087f193",
+      "platform_package": "@openai/codex@0.144.4-linux-x64",
+      "platform_npm_integrity": "sha512-2jxrmV6+/7eBNdg5uhhmOEPFu2o28eYY/ClLzWhSBHH8uo3f2KA1z9JQcVtwlbToW03nEPlEzYNYfCF1UBqsVQ==",
+      "platform_tarball_sha256": "9a4a45314e80b53c4761b80067e3a68c2302f9a9026059b5f54f22dec8f34323",
+      "binary_sha256": "2b3edc9cdfd1717fba3dbc92817205a8a2c7511d459e456d4817eeff6f78ed7a",
+      "license": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64/LICENSE.openai-codex",
+      "license_sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+      "dependency_inventory": "acp/codex-acp/0.16.0-aion-fork-steer.6/linux-x64/package-lock.json"
+    },
+    {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.39.0",
+      "runtime_root": "acp/claude-agent-acp/0.39.0/linux-x64",
+      "source": "https://github.com/agentclientprotocol/claude-agent-acp.git",
+      "source_tag": "v0.39.0",
+      "source_commit": "edde96ebafac2ea5d1c879c17459453472d82916",
+      "npm_integrity": "sha512-+tCm5v32L0R3zE4qjZQowfO1L/zqvQ5FapmsMSIf4gawXfTf26CG5hgz99wARdo0zn20/1eP80gzx7PbZlSX9A==",
+      "license": "acp/claude-agent-acp/0.39.0/linux-x64/node_modules/@agentclientprotocol/claude-agent-acp/LICENSE",
+      "license_sha256": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a",
+      "dependency_inventory": "acp/claude-agent-acp/0.39.0/linux-x64/package-lock.json"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.156",
+      "runtime_root": "acp/claude-agent-acp/0.39.0/linux-x64/node_modules/@anthropic-ai",
+      "npm_integrity": "sha512-6nM/Dj+VMds52UXJ2YaV4IKhYamlUqN0HtdDrFzYz5lvPMpDS935qD8YZDAUpy+ltdoD6PJMd1V/CKFY3/oWCQ==",
+      "platform_package": "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.156",
+      "platform_npm_integrity": "sha512-ymhrdlbWoYvTACUdaGdhrEv+ZMfwXLsf0BRLkr/IvY5aqybP7URzWmmZGOtDQpqkT/8xu/UCGqUYH3woJwUxfg==",
+      "binary_sha256": "6d83cd2264450c5e54fc988be1032c288cf418ee604294acfb8fc4ac28f5f7a3",
+      "license": "acp/claude-agent-acp/0.39.0/linux-x64/node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md",
+      "license_sha256": "8ce94b9478bb9868f9641f818e06cd722fbe55d4c22e2d2ed11971b20146173a",
+      "dependency_inventory": "acp/claude-agent-acp/0.39.0/linux-x64/package-lock.json"
+    }
+  ]
+}

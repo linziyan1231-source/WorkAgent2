@@ -1,0 +1,6 @@
+Windows production migration reference: AionUi Web 2.1.0-beta.editfork.28 read-only snapshot from AionUi source revision 1694a28a5a265a552c3bba745d3648514dea72ff with recorded uncommitted source changes
+Reference file manifest SHA-256: 975fb6f54c6debdb06934bb3f4d24142cbffa7b2e9b391a9795a7fea07058776
+Linux web-host compatibility base: the corresponding 2.1.0-beta.editfork.28 read-only source snapshot, pinned by WEB-HOST-BASE.sha256 and WEB-HOST-BASE-ABSENT
+Linux release identity: AionUi 2.1.0-beta.editfork.29 (Windows feature parity plus the Linux fd3 SOCK_SEQPACKET possession-channel contract)
+WorkAgent runtime-auth and qualification-stability patch SHA-256: e30d4397524a66067ec228dcf58838c448687954e5d09fa98ddd25ba14f84c16
+Linux web-host patched source manifest SHA-256: cea37a6fba78fddcae95564cb1f89d794051163b2481b318e6932cd76023dd52

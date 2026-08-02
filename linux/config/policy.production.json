@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "policy_id": "workagent-models-v1",
+  "default_action": "deny",
+  "models": [
+    {
+      "id": "gpt-5.6-luna",
+      "display_name": "GPT-5.6 Luna",
+      "provider": "codex",
+      "enabled": true
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol",
+      "provider": "codex",
+      "enabled": true,
+      "default": true
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "display_name": "GPT-5.6 Terra",
+      "provider": "codex",
+      "enabled": true
+    },
+    {
+      "id": "kimi-for-coding",
+      "display_name": "Kimi K2.7 Code",
+      "provider": "kimi",
+      "enabled": true
+    },
+    {
+      "id": "kimi-for-coding-highspeed",
+      "display_name": "Kimi K2.7 Code HighSpeed",
+      "provider": "kimi",
+      "enabled": true
+    },
+    {
+      "id": "kimi-k3",
+      "display_name": "Kimi K3",
+      "provider": "kimi",
+      "enabled": true,
+      "default": true
+    }
+  ],
+  "aliases": {},
+  "pricing": {
+    "gpt-5.6-luna": {
+      "input_per_million": "1",
+      "output_per_million": "6",
+      "currency": "USD"
+    },
+    "gpt-5.6-sol": {
+      "input_per_million": "5",
+      "output_per_million": "30",
+      "currency": "USD"
+    },
+    "gpt-5.6-terra": {
+      "input_per_million": "2.5",
+      "output_per_million": "15",
+      "currency": "USD"
+    },
+    "kimi-for-coding": {
+      "input_per_million": "0.95",
+      "output_per_million": "4",
+      "currency": "USD"
+    },
+    "kimi-for-coding-highspeed": {
+      "input_per_million": "1.9",
+      "output_per_million": "8",
+      "currency": "USD"
+    },
+    "kimi-k3": {
+      "input_per_million": "3",
+      "output_per_million": "15",
+      "currency": "USD"
+    }
+  },
+  "quotas": {
+    "gpt-5.6-luna": {
+      "requests_per_minute": 0,
+      "daily_requests": 0,
+      "weekly_requests": 0,
+      "daily_usd": "20",
+      "weekly_usd": "40"
+    },
+    "gpt-5.6-sol": {
+      "requests_per_minute": 0,
+      "daily_requests": 0,
+      "weekly_requests": 0,
+      "daily_usd": "20",
+      "weekly_usd": "40"
+    },
+    "gpt-5.6-terra": {
+      "requests_per_minute": 0,
+      "daily_requests": 0,
+      "weekly_requests": 0,
+      "daily_usd": "20",
+      "weekly_usd": "40"
+    },
+    "kimi-for-coding": {
+      "requests_per_minute": 0,
+      "daily_requests": 0,
+      "weekly_requests": 0,
+      "daily_usd": "5",
+      "weekly_usd": "10"
+    },
+    "kimi-for-coding-highspeed": {
+      "requests_per_minute": 0,
+      "daily_requests": 0,
+      "weekly_requests": 0,
+      "daily_usd": "5",
+      "weekly_usd": "10"
+    },
+    "kimi-k3": {
+      "requests_per_minute": 0,
+      "daily_requests": 0,
+      "weekly_requests": 0,
+      "daily_usd": "5",
+      "weekly_usd": "10"
+    }
+  },
+  "approval_required": false
+}

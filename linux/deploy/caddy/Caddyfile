@@ -1,0 +1,49 @@
+{
+	# Tenant runtimes can reach loopback TCP. Keep the administrative API behind
+	# a caddy-owned mode-0700 RuntimeDirectory instead.
+	admin unix//run/caddy-admin/admin.sock
+	auto_https off
+	servers {
+		protocols h1 h2
+	}
+}
+
+# Interim owner-approved plain-HTTP edge: the cloud middlebox kills TLS-ALPN-01
+# handshakes and port 80 belongs to an unrelated workload, so no public ACME
+# path exists on this host. Until the owner brings a real domain with a
+# verifiable certificate path, the edge serves cleartext HTTP on the public
+# IP. Passwords and session credentials cross the network unencrypted; this is
+# accepted only as a temporary state.
+:8443 {
+	encode zstd gzip
+	log {
+		output file /var/log/caddy/workagent-access.log {
+			mode 0640
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		# OAuth callbacks and chat routes can carry sensitive values. Retain
+		# status/timing evidence while dropping request URI and all headers.
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				resp_headers delete
+			}
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+	}
+
+	@internal path /internal /internal/*
+	respond @internal 404
+
+	reverse_proxy 127.0.0.1:42580
+}

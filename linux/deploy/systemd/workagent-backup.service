@@ -1,0 +1,66 @@
+[Unit]
+Description=WorkAgent2 verified encrypted backup
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/workagent-backup
+AssertPathIsMountPoint=/mnt/workagent-backup
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-backup
+ConditionFileIsExecutable=/usr/libexec/workagent-fixed-root-exec-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionPathExists=/run/workagent/activation.lock
+ConditionPathExists=/opt/workagent/control/manifest.json
+ConditionPathExists=/run/workagent/release-config.lock
+ConditionPathExists=/opt/workagent/control.lock
+ConditionPathExists=/etc/workagent/backup.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=WORKAGENT_EXTERNAL_ACTIVATION_LOCK=1
+# OpenFile order is a startup ABI: fd 3 is catalog, fd 4 is control.
+OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only
+OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only
+ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-backup --required-executable bin/workagent-release
+ExecStart=/usr/bin/flock --exclusive --no-fork /run/workagent/activation.lock /usr/libexec/workagent-fixed-root-exec-v1 backup /opt/workagent/control/bin/workagent-backup create --portal-config /etc/workagent/portal.json --config /etc/workagent/backup.json --quiesce-systemd
+# A timer that fires while the core transaction owns A_EX can leave the main
+# flock waiting. Stop/rollback must never self-deadlock in ExecStopPost: a
+# conflict exits successfully without running resume. The next clean backup
+# invocation replays the retained quiesce journal before taking a snapshot.
+ExecStopPost=/usr/bin/flock --exclusive --nonblock --conflict-exit-code 0 /run/workagent/activation.lock /usr/bin/flock --shared /run/workagent/release-config.lock /usr/bin/flock --shared /opt/workagent/control.lock /opt/workagent/control/bin/workagent-backup resume
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-backup
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/workagent-backup /mnt/workagent-backup /var/lib/node_exporter/textfile_collector /run/workagent-backup
+
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=128

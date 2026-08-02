@@ -1,0 +1,78 @@
+[Unit]
+Description=WorkAgent2 ChatForward loopback bridge
+After=network-online.target mihomo.service
+Wants=network-online.target
+Requires=mihomo.service
+Before=workagent-chatforward-browser.service workagent-portal.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-release
+ConditionFileIsExecutable=/opt/workagent/shared/chatforward/integration/run-server.sh
+ConditionFileIsExecutable=/usr/libexec/workagent-fixed-root-exec-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
+ConditionPathExists=/opt/workagent/control/manifest.json
+ConditionPathExists=/opt/workagent/shared/manifest.json
+ConditionPathExists=/run/workagent/release-config.lock
+ConditionPathExists=/run/workagent/activation.lock
+ConditionPathExists=/opt/workagent/control.lock
+ConditionPathExists=/opt/workagent/shared.lock
+ConditionPathExists=/etc/workagent/chatforward.env
+
+[Service]
+Type=exec
+User=workagent-chatforward
+Group=workagent-chatforward
+WorkingDirectory=/var/lib/workagent/chatforward
+EnvironmentFile=/etc/workagent/chatforward.env
+LoadCredentialEncrypted=chatforward-key:/etc/credstore.encrypted/workagent/chatforward-key.cred
+# OpenFile order is a startup ABI: fd 3 is catalog, fd 4 is control, fd 5 is shared.
+OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only
+OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only
+OpenFile=/opt/workagent/shared.lock:workagent-shared-release-lock:read-only
+ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
+ExecStartPre=+/usr/libexec/workagent-recovery-activation-admission-v1
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-release
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/shared --scope shared --required chatforward/app/src/server.js --required-executable chatforward/integration/run-server.sh --required-executable chatforward/node/bin/node --required-executable chatforward/integration/readiness.mjs
+ExecStart=/usr/libexec/workagent-fixed-root-exec-v1 chatforward /opt/workagent/shared/chatforward/integration/run-server.sh %d/chatforward-key
+ExecStartPost=/opt/workagent/shared/chatforward/node/bin/node --jitless /opt/workagent/shared/chatforward/integration/readiness.mjs --timeout-ms 15000
+Restart=always
+RestartSec=3s
+TimeoutStartSec=25s
+TimeoutStopSec=20s
+KillMode=control-group
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-chatforward
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+InaccessiblePaths=-/srv/workagent/users
+
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

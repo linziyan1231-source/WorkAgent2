@@ -1,0 +1,20 @@
+AionCore managed-resource qualification, 2026-07-27.
+
+Input compatibility slot: 0.16.0-aion-fork-steer.6
+Actual Codex ACP package: @agentclientprotocol/codex-acp 1.1.2
+Managed Codex package: @openai/codex 0.144.4-linux-x64
+Raw npm material tree SHA-256: 805ed9096853e3a9a389dcd4d8e867a8760c953b2f79b1a5a9c0e67dc7d3f6f8
+Base entrypoint SHA-256: d05351bc8c47367969a340ac92b013f6fdce538cdf89f38ec046847bd6c2ef84
+Patch SHA-256: f52e4ab6d6616df1572282ade8280465c26f842be0d6f8c86b13173e73942879
+Patched entrypoint SHA-256: 53db7dc43339e67ecfff817c35c822c35637695a119e77199b92e4d8ad08bdf9
+Managed Codex ELF SHA-256: 2b3edc9cdfd1717fba3dbc92817205a8a2c7511d459e456d4817eeff6f78ed7a
+Final managed-resource tree SHA-256: 4131c117b99b83d1c36980417ba4f9f1d860500e711ad54fea9ae007d7c9d567
+Final managed-resource file count: 7780
+
+Two independent normalized outputs were byte-identical as canonical tar streams.
+Both preparation runs passed exact package, patch, manifest, compatibility sentinel,
+native architecture, license, and real ACP stdin/stdout fork/steer route gates.
+An additional pinned-mode reproduction from the approved output was byte-identical.
+
+This is deterministic build/test evidence, not signed release provenance or a
+legal approval of the bundled component licenses.

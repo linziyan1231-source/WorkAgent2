@@ -1,0 +1,3 @@
+Linux production-compatibility source: AionCore v0.1.42-editfork.15, selectively synchronized from Windows revision 722537d22db84b06ee3d7dab1f890f154a99263e plus its recorded read-only working snapshot. It adds one-time ACP initialize retry, resumable 1 GiB uploads and the WorkAgent Help skill while preserving the Linux WorkAgent fd3 runtime boundary, possession-only cron capability, vendored AionRS runtime, and cross-platform inbound attachment filename safety.
+The Windows working snapshot is not represented as a reproducible Git revision. Linux-only security and dependency changes remain intentional compatibility differences.
+Canonical source-tree SHA-256: 1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2

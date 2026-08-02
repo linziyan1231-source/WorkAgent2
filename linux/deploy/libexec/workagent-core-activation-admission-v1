@@ -1,0 +1,261 @@
+#!/bin/bash
+set -u -o pipefail
+export LC_ALL=C
+export PATH=/usr/bin:/bin
+
+readonly activation_lock=/run/workagent/activation.lock
+readonly core_permit=/run/workagent-core/activation.permit
+readonly core_journal=/var/lib/workagent-core/activation.json
+readonly boot_id_path=/proc/sys/kernel/random/boot_id
+readonly journal_parent=${core_journal%/*}
+readonly permit_parent=${core_permit%/*}
+readonly activation_parent=${activation_lock%/*}
+readonly max_journal_size=1024
+readonly max_permit_size=512
+readonly canonical_journal='{"schema_version":1,"units":["workagent-tenant-catalog-ready.target","workagent-tenant-config-reconcile.service","cliproxyapi.service","workagent-notification.service","workagent-chatforward.service","workagent-chatforward-browser.service","workagent-portal.service","caddy.service","workagent-backup.service","workagent-backup.timer","workagent-healthcheck.service","workagent-healthcheck.timer"]}'
+
+fail() {
+  printf 'workagent-core-activation-admission-v1: %s\n' "$*" >&2
+  exit 1
+}
+
+if (( $# != 0 )); then
+  fail "this admission helper accepts no arguments"
+fi
+if (( EUID != 0 )); then
+  fail "admission verification requires root"
+fi
+
+safe_exact_parent() {
+  local parent=$1
+  [[ -d $parent && ! -L $parent ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a' -- "$parent" 2>/dev/null || true) == directory:0:0:700 ]]
+}
+
+safe_activation_parent() {
+  [[ -d $activation_parent && ! -L $activation_parent ]] || return 1
+  local shape mode
+  shape=$(/usr/bin/stat -c '%F:%u:%g:%a' -- "$activation_parent" 2>/dev/null || true)
+  [[ $shape =~ ^directory:0:0:([0-7]{3,4})$ ]] || return 1
+  mode=${BASH_REMATCH[1]}
+  (( (8#$mode & 0022) == 0 ))
+}
+
+descriptor_read_only() {
+  local fd=$1 flags
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "/proc/self/fdinfo/$fd" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || return 1
+  (( (8#$flags & 3) == 0 ))
+}
+
+descriptor_payload_matches() {
+  local source_fd=$1 expected=$2 expected_size=$3 check_fd payload trailing read_status trailing_status
+  if ! exec {check_fd}<"/proc/self/fd/$source_fd"; then
+    return 1
+  fi
+  IFS= read -r payload <&"$check_fd"
+  read_status=$?
+  trailing=
+  IFS= read -r trailing <&"$check_fd"
+  trailing_status=$?
+  exec {check_fd}<&-
+  (( read_status == 0 )) || return 1
+  if (( trailing_status == 0 )) || [[ -n $trailing ]]; then
+    return 1
+  fi
+  [[ $payload == "$expected" ]] || return 1
+  (( ${#payload} + 1 == expected_size ))
+}
+
+other_exclusive_owner() {
+  local fd=$1 status
+  /usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$fd"
+  status=$?
+  if (( status == 0 )); then
+    /usr/bin/flock --unlock "$fd" 2>/dev/null || true
+    return 1
+  fi
+  (( status == 75 )) || return 1
+  /usr/bin/flock --shared --nonblock --conflict-exit-code 75 "$fd"
+  status=$?
+  if (( status == 0 )); then
+    /usr/bin/flock --unlock "$fd" 2>/dev/null || true
+    return 1
+  fi
+  (( status == 75 ))
+}
+
+validate_boot_descriptor() {
+  [[ -f $boot_id_path && ! -L $boot_id_path ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$boot_id_path" 2>/dev/null || true) == "$boot_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) == "$boot_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$boot_id_path" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) == "$boot_id_path" ]] || return 1
+  descriptor_read_only "$boot_fd"
+}
+
+# Normal starts, restarts, and boot activation are admitted only after two
+# stable protected-parent passes prove that no transaction evidence exists.
+if [[ ! -e $core_journal && ! -L $core_journal ]]; then
+  safe_exact_parent "$journal_parent" || fail "core activation journal parent is unsafe"
+  safe_exact_parent "$permit_parent" || fail "core activation permit parent is unsafe"
+  if [[ -e $core_permit || -L $core_permit ]]; then
+    fail "orphan core activation permit exists without its durable journal"
+  fi
+  safe_exact_parent "$journal_parent" || fail "core activation journal parent changed during ordinary admission"
+  safe_exact_parent "$permit_parent" || fail "core activation permit parent changed during ordinary admission"
+  if [[ -e $core_journal || -L $core_journal || -e $core_permit || -L $core_permit ]]; then
+    fail "core activation evidence appeared during ordinary admission"
+  fi
+  exit 0
+fi
+
+safe_exact_parent "$journal_parent" || fail "core activation journal parent is unsafe"
+journal_shape=$(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$core_journal" 2>/dev/null || true)
+if [[ ! $journal_shape =~ ^regular\ file:0:0:600:1:([1-9][0-9]*)$ ]]; then
+  fail "core activation journal is unsafe"
+fi
+journal_size=${BASH_REMATCH[1]}
+(( journal_size <= max_journal_size )) || fail "core activation journal is oversized"
+if ! exec {journal_fd}<"$core_journal"; then
+  fail "open core activation journal"
+fi
+
+validate_journal_descriptor() {
+  safe_exact_parent "$journal_parent" || return 1
+  [[ -f $core_journal && ! -L $core_journal ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$core_journal" 2>/dev/null || true) == "$journal_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%s' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$journal_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$core_journal" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$core_journal" ]] || return 1
+  descriptor_read_only "$journal_fd"
+}
+
+validate_journal_descriptor || fail "core activation journal changed while opening"
+IFS= read -r journal_payload <&"$journal_fd"
+journal_read_status=$?
+(( journal_read_status == 0 )) || fail "core activation journal is not newline terminated"
+trailing_payload=
+IFS= read -r trailing_payload <&"$journal_fd"
+trailing_status=$?
+if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+  fail "core activation journal contains trailing data"
+fi
+(( ${#journal_payload} + 1 == journal_size )) || fail "core activation journal content changed while reading"
+[[ $journal_payload == "$canonical_journal" ]] || fail "core activation journal is not canonical"
+validate_journal_descriptor || fail "core activation journal changed during validation"
+journal_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true)
+[[ $journal_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]] || fail "core activation journal identity is invalid"
+journal_device=${BASH_REMATCH[1]}
+journal_inode=${BASH_REMATCH[2]}
+
+safe_exact_parent "$permit_parent" || fail "core activation permit parent is unsafe"
+permit_shape=$(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$core_permit" 2>/dev/null || true)
+if [[ ! $permit_shape =~ ^regular\ file:0:0:600:1:([1-9][0-9]*)$ ]]; then
+  fail "core activation permit is absent or unsafe"
+fi
+permit_size=${BASH_REMATCH[1]}
+(( permit_size <= max_permit_size )) || fail "core activation permit is oversized"
+if ! exec {permit_fd}<"$core_permit"; then
+  fail "open core activation permit"
+fi
+
+validate_permit_descriptor() {
+  safe_exact_parent "$permit_parent" || return 1
+  [[ -f $core_permit && ! -L $core_permit ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$core_permit" 2>/dev/null || true) == "$permit_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%s' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$permit_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$core_permit" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$core_permit" ]] || return 1
+  descriptor_read_only "$permit_fd"
+}
+
+validate_permit_descriptor || fail "core activation permit changed while opening"
+IFS= read -r permit_payload <&"$permit_fd"
+permit_read_status=$?
+(( permit_read_status == 0 )) || fail "core activation permit is not newline terminated"
+trailing_payload=
+IFS= read -r trailing_payload <&"$permit_fd"
+trailing_status=$?
+if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+  fail "core activation permit contains trailing data"
+fi
+(( ${#permit_payload} + 1 == permit_size )) || fail "core activation permit content changed while reading"
+readonly permit_pattern='^\{"schema_version":1,"boot_id":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})","journal_device":([1-9][0-9]*),"journal_inode":([1-9][0-9]*),"activation_lock_device":([1-9][0-9]*),"activation_lock_inode":([1-9][0-9]*)\}$'
+[[ $permit_payload =~ $permit_pattern ]] || fail "core activation permit is not canonical"
+permit_boot_id=${BASH_REMATCH[1]}
+permit_journal_device=${BASH_REMATCH[2]}
+permit_journal_inode=${BASH_REMATCH[3]}
+permit_activation_device=${BASH_REMATCH[4]}
+permit_activation_inode=${BASH_REMATCH[5]}
+[[ $permit_journal_device == "$journal_device" && $permit_journal_inode == "$journal_inode" ]] ||
+  fail "core activation permit is not bound to the durable journal"
+validate_permit_descriptor || fail "core activation permit changed during validation"
+
+boot_shape='0:0:444:1:0'
+[[ -f $boot_id_path && ! -L $boot_id_path ]] || fail "current boot identity is unsafe"
+[[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$boot_id_path" 2>/dev/null || true) == "$boot_shape" ]] || fail "current boot identity is unsafe"
+if ! exec {boot_fd}<"$boot_id_path"; then
+  fail "open current boot identity"
+fi
+validate_boot_descriptor || fail "current boot identity changed while opening"
+boot_payload=
+IFS= read -r -N 38 boot_payload <&"$boot_fd"
+boot_read_status=$?
+if (( boot_read_status == 0 )) || (( ${#boot_payload} != 37 )) || [[ ${boot_payload:36:1} != $'\n' ]]; then
+  fail "current boot identity is not one canonical newline-terminated UUID"
+fi
+current_boot_id=${boot_payload:0:36}
+readonly canonical_uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+[[ $current_boot_id =~ $canonical_uuid_pattern ]] || fail "current boot identity is invalid"
+trailing_payload=
+IFS= read -r -N 1 trailing_payload <&"$boot_fd"
+trailing_status=$?
+if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+  fail "current boot identity contains trailing data"
+fi
+validate_boot_descriptor || fail "current boot identity changed while reading"
+[[ $permit_boot_id == "$current_boot_id" ]] || fail "core activation permit belongs to another boot"
+
+safe_activation_parent || fail "activation lock parent is unsafe"
+readonly activation_shape='0:0:600:1:0'
+[[ -f $activation_lock && ! -L $activation_lock ]] || fail "activation lock is unsafe"
+[[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$activation_lock" 2>/dev/null || true) == "$activation_shape" ]] ||
+  fail "activation lock is unsafe"
+if ! exec {activation_fd}<"$activation_lock"; then
+  fail "open activation lock"
+fi
+
+validate_activation_descriptor() {
+  safe_activation_parent || return 1
+  [[ -f $activation_lock && ! -L $activation_lock ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$activation_lock" 2>/dev/null || true) == "$activation_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$activation_lock" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_lock" ]] || return 1
+  descriptor_read_only "$activation_fd"
+}
+
+validate_activation_descriptor || fail "activation lock changed while opening"
+activation_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true)
+[[ $activation_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]] || fail "activation lock identity is invalid"
+[[ $permit_activation_device == "${BASH_REMATCH[1]}" && $permit_activation_inode == "${BASH_REMATCH[2]}" ]] ||
+  fail "core activation permit is not bound to the activation lock"
+
+# A valid permit authorizes starts only while both the permit lock and the
+# globally ordered A_EX lock remain held by the transaction owner. A free lock
+# means stale same-boot evidence, not authority.
+validate_boot_descriptor || fail "current boot identity changed before ownership proof"
+other_exclusive_owner "$permit_fd" || fail "core activation journal is pending without a live exclusive permit owner"
+other_exclusive_owner "$activation_fd" || fail "core activation journal is pending without an active exclusive core transaction"
+
+validate_journal_descriptor || fail "core activation journal changed before admission"
+validate_permit_descriptor || fail "core activation permit changed before admission"
+validate_activation_descriptor || fail "activation lock changed before admission"
+validate_boot_descriptor || fail "current boot identity changed before admission"
+other_exclusive_owner "$permit_fd" || fail "core activation permit ownership changed before admission"
+other_exclusive_owner "$activation_fd" || fail "core activation ownership changed before admission"
+descriptor_payload_matches "$journal_fd" "$journal_payload" "$journal_size" || fail "core activation journal content changed during admission"
+descriptor_payload_matches "$permit_fd" "$permit_payload" "$permit_size" || fail "core activation permit content changed during admission"
+
+exit 0

@@ -1,0 +1,17 @@
+[Unit]
+Description=WorkAgent2 tenant project-quota filesystem
+Documentation=file:/opt/workagent/control/share/docs/PRODUCTION_HOST.md
+Before=workagent-portal.service
+ConditionPathIsReadWrite=/var/lib/workagent-storage
+ConditionPathExists=/var/lib/workagent-storage/tenants.xfs
+
+[Mount]
+What=/var/lib/workagent-storage/tenants.xfs
+Where=/srv/workagent/users
+Type=xfs
+Options=loop,prjquota,nodev,nosuid
+DirectoryMode=0711
+TimeoutSec=90s
+
+[Install]
+WantedBy=local-fs.target

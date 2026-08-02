@@ -1,0 +1,68 @@
+[Unit]
+Description=WorkAgent2 local notification source
+After=network.target
+Before=workagent-portal.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-notification
+ConditionFileIsExecutable=/usr/libexec/workagent-fixed-root-exec-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
+ConditionPathExists=/opt/workagent/control/manifest.json
+ConditionPathExists=/run/workagent/release-config.lock
+ConditionPathExists=/run/workagent/activation.lock
+ConditionPathExists=/opt/workagent/control.lock
+ConditionPathExists=/etc/workagent/notification.json
+
+[Service]
+Type=simple
+User=workagent-notification
+Group=workagent-notification
+# OpenFile order is a startup ABI: fd 3 is catalog, fd 4 is control.
+OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only
+OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only
+ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
+ExecStartPre=+/usr/libexec/workagent-recovery-activation-admission-v1
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-notification --required-executable bin/workagent-release
+# This check runs as workagent-notification (unlike the privileged manifest
+# verifier) and therefore proves the payload's complete DAC traversal/read path.
+ExecStartPre=/usr/bin/test -r /etc/workagent/notification.json
+ExecStart=/usr/libexec/workagent-fixed-root-exec-v1 notification /opt/workagent/control/bin/workagent-notification
+ExecStartPost=/usr/bin/curl --noproxy * --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused --max-time 15 http://127.0.0.1:25888/readyz
+LoadCredentialEncrypted=notifications-key:/etc/credstore.encrypted/workagent/notifications-key.cred
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=15s
+TimeoutStopSec=10s
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-notification
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+MemoryMax=128M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

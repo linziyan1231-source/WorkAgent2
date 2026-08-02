@@ -1,0 +1,373 @@
+#!/bin/bash
+set -u -o pipefail
+export LC_ALL=C
+export PATH=/usr/bin:/bin
+
+readonly activation_lock=/run/workagent/activation.lock
+readonly recovery_permit=/run/workagent-backup/recovery-activation.permit
+readonly recovery_install_lock=/run/workagent-backup/recovery-install.lock
+readonly recovery_journal=/var/lib/workagent-backup/recovery-activation.json
+readonly boot_id_path=/proc/sys/kernel/random/boot_id
+readonly journal_parent=${recovery_journal%/*}
+readonly permit_parent=${recovery_permit%/*}
+readonly activation_parent=${activation_lock%/*}
+readonly max_journal_size=262144
+readonly max_permit_size=512
+
+fail() {
+  printf 'workagent-recovery-activation-admission-v1: %s\n' "$*" >&2
+  exit 1
+}
+
+if (( EUID != 0 )); then
+  fail "admission verification requires root"
+fi
+
+safe_journal_parent() {
+  [[ -d $journal_parent && ! -L $journal_parent ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a' -- "$journal_parent" 2>/dev/null || true) == directory:0:0:700 ]]
+}
+
+safe_activation_parent() {
+  [[ -d $activation_parent && ! -L $activation_parent ]] || return 1
+  local shape mode
+  shape=$(/usr/bin/stat -c '%F:%u:%g:%a' -- "$activation_parent" 2>/dev/null || true)
+  [[ $shape =~ ^directory:0:0:([0-7]{3,4})$ ]] || return 1
+  mode=${BASH_REMATCH[1]}
+  (( (8#$mode & 0022) == 0 ))
+}
+
+safe_permit_parent() {
+  [[ -d $permit_parent && ! -L $permit_parent ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a' -- "$permit_parent" 2>/dev/null || true) == directory:0:0:700 ]]
+}
+
+# Ordinary activation requires proved absence of both recovery artifacts
+# through their protected parents. A dangling link, unsafe inode or orphaned
+# permit is evidence of an incomplete/crashed protocol, never absence.
+if [[ ! -e $recovery_journal && ! -L $recovery_journal ]]; then
+  safe_journal_parent || fail "recovery activation journal parent is unsafe"
+  safe_permit_parent || fail "recovery activation permit parent is unsafe"
+  if [[ -e $recovery_permit || -L $recovery_permit ]]; then
+    fail "orphan recovery activation permit exists without its durable journal"
+  fi
+  safe_journal_parent || fail "recovery activation journal parent changed during ordinary admission"
+  safe_permit_parent || fail "recovery activation permit parent changed during ordinary admission"
+  if [[ -e $recovery_journal || -L $recovery_journal || -e $recovery_permit || -L $recovery_permit ]]; then
+    fail "recovery activation evidence appeared during ordinary admission"
+  fi
+  exit 0
+fi
+
+safe_journal_parent || fail "recovery activation journal parent is unsafe"
+
+journal_shape=$(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$recovery_journal" 2>/dev/null || true)
+if [[ ! $journal_shape =~ ^regular\ file:0:0:600:1:([1-9][0-9]*)$ ]]; then
+  fail "recovery activation journal is unsafe"
+fi
+journal_size=${BASH_REMATCH[1]}
+(( journal_size <= max_journal_size )) || fail "recovery activation journal is unsafe"
+
+if ! exec {journal_fd}<"$recovery_journal"; then
+  fail "open recovery activation journal"
+fi
+
+validate_journal_descriptor() {
+  safe_journal_parent || return 1
+  [[ -f $recovery_journal && ! -L $recovery_journal ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$recovery_journal" 2>/dev/null || true) == "$journal_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%s' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$journal_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$recovery_journal" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$journal_fd" 2>/dev/null || true) == "$recovery_journal" ]]
+}
+
+validate_journal_descriptor || fail "recovery activation journal changed while opening"
+IFS= read -r journal_payload <&"$journal_fd"
+read_status=$?
+(( read_status == 0 )) || fail "recovery activation journal is not newline terminated"
+trailing_payload=
+IFS= read -r trailing_payload <&"$journal_fd"
+trailing_status=$?
+if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+  fail "recovery activation journal contains trailing data"
+fi
+(( ${#journal_payload} + 1 == journal_size )) || fail "recovery activation journal content changed while reading"
+validate_journal_descriptor || fail "recovery activation journal changed while reading"
+
+readonly journal_prefix='{"schema_version":1,"units":['
+readonly journal_suffix=']}'
+prefix_length=${#journal_prefix}
+suffix_length=${#journal_suffix}
+payload_length=${#journal_payload}
+if (( payload_length <= prefix_length + suffix_length )) ||
+  [[ ${journal_payload:0:prefix_length} != "$journal_prefix" ]] ||
+  [[ ${journal_payload:payload_length-suffix_length:suffix_length} != "$journal_suffix" ]]; then
+  fail "recovery activation journal JSON is invalid"
+fi
+unit_payload=${journal_payload:prefix_length:payload_length-prefix_length-suffix_length}
+if [[ -z $unit_payload || $unit_payload == ,* || $unit_payload == *, || $unit_payload == *,,* ]]; then
+  fail "recovery activation journal unit set is invalid"
+fi
+IFS=',' read -r -a unit_tokens <<< "$unit_payload"
+units=()
+for token in "${unit_tokens[@]}"; do
+  token_length=${#token}
+  if (( token_length < 3 )) || [[ ${token:0:1} != '"' || ${token:token_length-1:1} != '"' ]]; then
+    fail "recovery activation journal unit set is invalid"
+  fi
+  unit=${token:1:token_length-2}
+  [[ $token == "\"$unit\"" ]] || fail "recovery activation journal unit set is invalid"
+  units+=("$unit")
+done
+
+unit_count=${#units[@]}
+if (( unit_count < 6 || unit_count > 2006 || (unit_count - 6) % 2 != 0 )); then
+  fail "recovery activation journal unit set is invalid"
+fi
+[[ ${units[0]} == workagent-tenant-catalog-ready.target &&
+   ${units[1]} == cliproxyapi.service &&
+   ${units[2]} == workagent-notification.service &&
+   ${units[3]} == workagent-chatforward.service &&
+   ${units[unit_count-2]} == workagent-chatforward-browser.service &&
+   ${units[unit_count-1]} == workagent-portal.service ]] ||
+  fail "recovery activation journal unit set is invalid"
+
+tenant_count=$(( (unit_count - 6) / 2 ))
+readonly tenant_service_pattern='^workagent-userhost@[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.service$'
+for (( index = 0; index < tenant_count; index++ )); do
+  service_index=$((4 + index))
+  socket_index=$((4 + tenant_count + index))
+  service_unit=${units[service_index]}
+  [[ $service_unit =~ $tenant_service_pattern ]] || fail "recovery activation journal tenant unit is invalid"
+  if (( index > 0 )); then
+    previous_service=${units[service_index-1]}
+    [[ $previous_service < $service_unit ]] || fail "recovery activation journal tenant units are not canonical"
+  fi
+  [[ ${units[socket_index]} == "${service_unit%.service}.socket" ]] || fail "recovery activation journal tenant unit set is incomplete"
+done
+validate_journal_descriptor || fail "recovery activation journal changed during validation"
+journal_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$journal_fd" 2>/dev/null || true)
+if [[ ! $journal_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]]; then
+  fail "recovery activation journal identity is invalid"
+fi
+journal_device=${BASH_REMATCH[1]}
+journal_inode=${BASH_REMATCH[2]}
+
+safe_permit_parent || fail "recovery activation permit parent is unsafe"
+permit_shape=$(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$recovery_permit" 2>/dev/null || true)
+if [[ ! $permit_shape =~ ^regular\ file:0:0:600:1:([1-9][0-9]*)$ ]]; then
+  fail "recovery activation permit is absent or unsafe"
+fi
+permit_size=${BASH_REMATCH[1]}
+(( permit_size <= max_permit_size )) || fail "recovery activation permit is unsafe"
+# Validation never writes the permit. Linux flock permits an exclusive lock
+# probe through a read-only descriptor, so the helper does not need a writable
+# view of this root-owned runtime inode.
+if ! exec {permit_fd}<"$recovery_permit"; then
+  fail "open recovery activation permit"
+fi
+
+validate_permit_descriptor() {
+  safe_permit_parent || return 1
+  [[ -f $recovery_permit && ! -L $recovery_permit ]] || return 1
+  [[ $(/usr/bin/stat -c '%F:%u:%g:%a:%h:%s' -- "$recovery_permit" 2>/dev/null || true) == "$permit_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%F:%u:%g:%a:%h:%s' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$permit_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$recovery_permit" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$permit_fd" 2>/dev/null || true) == "$recovery_permit" ]] || return 1
+  local flags
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "/proc/self/fdinfo/$permit_fd" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || return 1
+  (( (8#$flags & 3) == 0 ))
+}
+
+validate_permit_descriptor || fail "recovery activation permit changed while opening"
+IFS= read -r permit_payload <&"$permit_fd"
+read_status=$?
+(( read_status == 0 )) || fail "recovery activation permit is not newline terminated"
+trailing_payload=
+IFS= read -r trailing_payload <&"$permit_fd"
+trailing_status=$?
+if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+  fail "recovery activation permit contains trailing data"
+fi
+(( ${#permit_payload} + 1 == permit_size )) || fail "recovery activation permit content changed while reading"
+validate_permit_descriptor || fail "recovery activation permit changed while reading"
+
+readonly permit_pattern='^\{"schema_version":2,"boot_id":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})","journal_device":([1-9][0-9]*),"journal_inode":([1-9][0-9]*),"install_lock_device":([1-9][0-9]*),"install_lock_inode":([1-9][0-9]*)\}$'
+if [[ ! $permit_payload =~ $permit_pattern ]]; then
+  fail "recovery activation permit content is invalid"
+fi
+permit_journal_device=${BASH_REMATCH[2]}
+permit_journal_inode=${BASH_REMATCH[3]}
+permit_boot_id=${BASH_REMATCH[1]}
+permit_install_lock_device=${BASH_REMATCH[4]}
+permit_install_lock_inode=${BASH_REMATCH[5]}
+if [[ $permit_journal_device != "$journal_device" || $permit_journal_inode != "$journal_inode" ]]; then
+  fail "recovery activation permit does not authorize this journal"
+fi
+
+# Bind volatile recovery authority to this exact kernel boot, not merely to a
+# syntactically valid UUID supplied by the permit. The sysctl reports size zero
+# despite yielding 37 bytes, so read at most 38 characters through one verified
+# descriptor: the expected EOF-short read must contain exactly UUID + newline.
+readonly boot_shape='0:0:444:1:0'
+[[ -f $boot_id_path && ! -L $boot_id_path ]] || fail "current boot identity is unsafe"
+[[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$boot_id_path" 2>/dev/null || true) == "$boot_shape" ]] ||
+  fail "current boot identity is unsafe"
+if ! exec {boot_fd}<"$boot_id_path"; then
+  fail "open current boot identity"
+fi
+
+validate_boot_descriptor() {
+  [[ -f $boot_id_path && ! -L $boot_id_path ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$boot_id_path" 2>/dev/null || true) == "$boot_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) == "$boot_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$boot_id_path" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$boot_fd" 2>/dev/null || true) == "$boot_id_path" ]] || return 1
+  local flags
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "/proc/self/fdinfo/$boot_fd" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || return 1
+  (( (8#$flags & 3) == 0 ))
+}
+
+validate_boot_descriptor || fail "current boot identity changed while opening"
+boot_payload=
+IFS= read -r -N 38 boot_payload <&"$boot_fd"
+boot_read_status=$?
+if (( boot_read_status == 0 )) || (( ${#boot_payload} != 37 )) || [[ ${boot_payload:36:1} != $'\n' ]]; then
+  fail "current boot identity is not one canonical newline-terminated UUID"
+fi
+current_boot_id=${boot_payload:0:36}
+readonly canonical_uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+[[ $current_boot_id =~ $canonical_uuid_pattern ]] || fail "current boot identity is invalid"
+trailing_payload=
+IFS= read -r -N 1 trailing_payload <&"$boot_fd"
+trailing_status=$?
+if (( trailing_status == 0 )) || [[ -n $trailing_payload ]]; then
+  fail "current boot identity contains trailing data"
+fi
+validate_boot_descriptor || fail "current boot identity changed while reading"
+[[ $permit_boot_id == "$current_boot_id" ]] || fail "recovery activation permit belongs to another boot"
+validate_journal_descriptor || fail "recovery activation journal changed after permit validation"
+validate_permit_descriptor || fail "recovery activation permit changed during validation"
+validate_boot_descriptor || fail "current boot identity changed during validation"
+
+safe_permit_parent || fail "recovery install lock parent is unsafe"
+readonly install_lock_shape='0:0:600:1:0'
+[[ -f $recovery_install_lock && ! -L $recovery_install_lock ]] || fail "recovery install lock is unsafe"
+[[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$recovery_install_lock" 2>/dev/null || true) == "$install_lock_shape" ]] ||
+  fail "recovery install lock is unsafe"
+if ! exec {install_lock_fd}<"$recovery_install_lock"; then
+  fail "open recovery install lock"
+fi
+
+validate_install_lock_descriptor() {
+  safe_permit_parent || return 1
+  [[ -f $recovery_install_lock && ! -L $recovery_install_lock ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$recovery_install_lock" 2>/dev/null || true) == "$install_lock_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$install_lock_fd" 2>/dev/null || true) == "$install_lock_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$recovery_install_lock" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$install_lock_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$install_lock_fd" 2>/dev/null || true) == "$recovery_install_lock" ]] || return 1
+  local flags
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "/proc/self/fdinfo/$install_lock_fd" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || return 1
+  (( (8#$flags & 3) == 0 ))
+}
+
+validate_install_lock_descriptor || fail "recovery install lock changed while opening"
+install_lock_identity=$(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$install_lock_fd" 2>/dev/null || true)
+if [[ ! $install_lock_identity =~ ^([1-9][0-9]*):([1-9][0-9]*)$ ]]; then
+  fail "recovery install lock identity is invalid"
+fi
+install_lock_device=${BASH_REMATCH[1]}
+install_lock_inode=${BASH_REMATCH[2]}
+if [[ $permit_install_lock_device != "$install_lock_device" || $permit_install_lock_inode != "$install_lock_inode" ]]; then
+  fail "recovery activation permit does not authorize this install lock"
+fi
+validate_install_lock_descriptor || fail "recovery install lock changed during validation"
+
+/usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$permit_fd"
+permit_status=$?
+if (( permit_status == 0 )); then
+  /usr/bin/flock --unlock "$permit_fd" 2>/dev/null || true
+  fail "recovery activation permit has no current recovery owner"
+fi
+(( permit_status == 75 )) || fail "inspect recovery activation permit ownership"
+
+/usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$install_lock_fd"
+install_lock_status=$?
+if (( install_lock_status == 0 )); then
+  /usr/bin/flock --unlock "$install_lock_fd" 2>/dev/null || true
+  fail "recovery install lock has no current recovery owner"
+fi
+(( install_lock_status == 75 )) || fail "inspect recovery install lock ownership"
+
+safe_activation_parent || fail "tenant activation lock parent is unsafe"
+readonly activation_shape='0:0:600:1:0'
+[[ -f $activation_lock && ! -L $activation_lock ]] || fail "tenant activation lock is unsafe"
+[[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$activation_lock" 2>/dev/null || true) == "$activation_shape" ]] ||
+  fail "tenant activation lock is unsafe"
+if ! exec {activation_fd}<"$activation_lock"; then
+  fail "open tenant activation lock"
+fi
+
+validate_activation_descriptor() {
+  safe_activation_parent || return 1
+  [[ -f $activation_lock && ! -L $activation_lock ]] || return 1
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%h:%s' -- "$activation_lock" 2>/dev/null || true) == "$activation_shape" ]] || return 1
+  [[ $(/usr/bin/stat -Lc '%u:%g:%a:%h:%s' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_shape" ]] || return 1
+  [[ $(/usr/bin/stat -c '%d:%i' -- "$activation_lock" 2>/dev/null || true) == $(/usr/bin/stat -Lc '%d:%i' -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) ]] || return 1
+  [[ $(/usr/bin/readlink -- "/proc/self/fd/$activation_fd" 2>/dev/null || true) == "$activation_lock" ]] || return 1
+  local flags
+  flags=$(/usr/bin/awk '$1 == "flags:" { print $2; exit }' "/proc/self/fdinfo/$activation_fd" 2>/dev/null || true)
+  [[ $flags =~ ^[0-7]+$ ]] || return 1
+  (( (8#$flags & 3) == 0 ))
+}
+
+validate_activation_descriptor || fail "tenant activation lock changed while opening"
+/usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$activation_fd"
+lock_status=$?
+if (( lock_status == 0 )); then
+  /usr/bin/flock --unlock "$activation_fd" 2>/dev/null || true
+  fail "recovery activation journal is pending without an active recovery"
+fi
+(( lock_status == 75 )) || fail "inspect tenant activation lock ownership"
+
+# Recheck every evidence name after observing all three conflicting exclusive
+# owners. The permit-bound install-lock identity authenticates the A_EX
+# conflict; a generic admin activation holder cannot borrow stale authority.
+# Repeated probes prevent admission based on a displaced locked inode and
+# narrow owner-release races to the recovery job waiting for this helper.
+validate_journal_descriptor || fail "recovery activation journal changed during admission"
+validate_permit_descriptor || fail "recovery activation permit changed during admission"
+validate_boot_descriptor || fail "current boot identity changed during admission"
+validate_install_lock_descriptor || fail "recovery install lock changed during admission"
+validate_activation_descriptor || fail "tenant activation lock changed during admission"
+/usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$permit_fd"
+permit_status=$?
+if (( permit_status == 0 )); then
+  /usr/bin/flock --unlock "$permit_fd" 2>/dev/null || true
+  fail "recovery activation permit owner disappeared during admission"
+fi
+(( permit_status == 75 )) || fail "recheck recovery activation permit ownership"
+/usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$install_lock_fd"
+install_lock_status=$?
+if (( install_lock_status == 0 )); then
+  /usr/bin/flock --unlock "$install_lock_fd" 2>/dev/null || true
+  fail "recovery install lock owner disappeared during admission"
+fi
+(( install_lock_status == 75 )) || fail "recheck recovery install lock ownership"
+/usr/bin/flock --exclusive --nonblock --conflict-exit-code 75 "$activation_fd"
+lock_status=$?
+if (( lock_status == 0 )); then
+  /usr/bin/flock --unlock "$activation_fd" 2>/dev/null || true
+  fail "recovery activation lock owner disappeared during admission"
+fi
+(( lock_status == 75 )) || fail "recheck tenant activation lock ownership"
+validate_journal_descriptor || fail "recovery activation journal changed after admission"
+validate_permit_descriptor || fail "recovery activation permit changed after admission"
+validate_boot_descriptor || fail "current boot identity changed after admission"
+validate_install_lock_descriptor || fail "recovery install lock changed after admission"
+validate_activation_descriptor || fail "tenant activation lock changed after admission"
+
+exit 0

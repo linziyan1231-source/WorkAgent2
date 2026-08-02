@@ -1,0 +1,19 @@
+[Unit]
+Description=WorkAgent2 privileged employee provisioning socket
+Before=workagent-portal.service
+PartOf=workagent-portal.service
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-provision
+
+[Socket]
+ListenStream=/run/workagent/provision.sock
+FileDescriptorName=workagent-provision-socket
+SocketUser=root
+SocketGroup=workagent
+SocketMode=0660
+DirectoryMode=0755
+Backlog=16
+RemoveOnStop=yes
+Service=workagent-provision.service
+
+[Install]
+WantedBy=sockets.target

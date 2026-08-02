@@ -1,0 +1,172 @@
+diff --git a/internal/api/middleware/response_writer.go b/internal/api/middleware/response_writer.go
+--- a/internal/api/middleware/response_writer.go
++++ b/internal/api/middleware/response_writer.go
+@@ -703,7 +703,7 @@ func mergeFileBodySource(payload []byte, source *logging.FileBodySource) ([]byte
+ 		buf.WriteByte('\n')
+ 	}
+-	if errWrite := source.WriteTo(&buf); errWrite != nil {
++	if _, errWrite := source.WriteTo(&buf); errWrite != nil {
+ 		return nil, errWrite
+ 	}
+ 	return buf.Bytes(), nil
+diff --git a/internal/logging/request_logger.go b/internal/logging/request_logger.go
+--- a/internal/logging/request_logger.go
++++ b/internal/logging/request_logger.go
+@@ -210,9 +210,10 @@ func (s *FileBodySource) Paths() []string {
+ }
+ 
+ // WriteTo merges all ordered parts into w.
+-func (s *FileBodySource) WriteTo(w io.Writer) error {
++func (s *FileBodySource) WriteTo(w io.Writer) (int64, error) {
+ 	if s == nil || w == nil {
+-		return nil
++		return 0, nil
+ 	}
++	var written int64
+ 	paths := s.Paths()
+ 	wrote := false
+ 	for _, path := range paths {
+@@ -222,30 +223,33 @@ func (s *FileBodySource) WriteTo(w io.Writer) error {
+ 			if os.IsNotExist(errOpen) {
+ 				continue
+ 			}
+-			return errOpen
++			return written, errOpen
+ 		}
+ 		if wrote {
+-			if _, errWrite := io.WriteString(w, "\n"); errWrite != nil {
++			n, errWrite := io.WriteString(w, "\n")
++			written += int64(n)
++			if errWrite != nil {
+ 				if errClose := file.Close(); errClose != nil {
+ 					log.WithError(errClose).Warn("failed to close log part file")
+ 				}
+-				return errWrite
++				return written, errWrite
+ 			}
+ 		}
+-		_, errCopy := io.Copy(w, file)
++		n, errCopy := io.Copy(w, file)
++		written += n
+ 		if errClose := file.Close(); errClose != nil {
+ 			log.WithError(errClose).Warn("failed to close log part file")
+ 			if errCopy == nil {
+ 				errCopy = errClose
+ 			}
+ 		}
+ 		if errCopy != nil {
+-			return errCopy
++			return written, errCopy
+ 		}
+ 		wrote = true
+ 	}
+-	return nil
++	return written, nil
+ }
+ 
+ // Bytes merges all ordered parts into memory.
+ func (s *FileBodySource) Bytes() ([]byte, error) {
+ 	var buf bytes.Buffer
+-	if errWrite := s.WriteTo(&buf); errWrite != nil {
++	if _, errWrite := s.WriteTo(&buf); errWrite != nil {
+ 		return nil, errWrite
+ 	}
+ 	return buf.Bytes(), nil
+@@ -1227,7 +1231,7 @@ func writeAPISectionWithSource(w io.Writer, sectionHeader string, source *FileBo
+ 		}
+ 	}
+ 	tracker := &trailingNewlineTrackingWriter{writer: w}
+-	if errWrite := source.WriteTo(tracker); errWrite != nil {
++	if _, errWrite := source.WriteTo(tracker); errWrite != nil {
+ 		return errWrite
+ 	}
+ 	if errWrite := writeSectionSpacing(w, tracker.trailingNewlines); errWrite != nil {
+@@ -1246,7 +1250,7 @@ func writePreformattedAPISectionWithSource(w io.Writer, sectionHeader string, se
+ 		}
+ 	}
+ 	tracker := &trailingNewlineTrackingWriter{writer: w}
+-	if errWrite := source.WriteTo(tracker); errWrite != nil {
++	if _, errWrite := source.WriteTo(tracker); errWrite != nil {
+ 		return errWrite
+ 	}
+ 	if errWrite := writeSectionSpacing(w, tracker.trailingNewlines); errWrite != nil {
+diff --git a/internal/pluginhost/host_callbacks.go b/internal/pluginhost/host_callbacks.go
+--- a/internal/pluginhost/host_callbacks.go
++++ b/internal/pluginhost/host_callbacks.go
+@@ -162,6 +162,12 @@ func (h *Host) callHostHTTPDoStream(ctx context.Context, request []byte) ([]byte,
+ 		ctx = context.Background()
+ 	}
+ 	streamCtx, cancel := context.WithCancel(ctx)
++	cancelOnReturn := true
++	defer func() {
++		if cancelOnReturn {
++			cancel()
++		}
++	}()
+ 	resp, errDo := h.newHTTPClient(nil).DoStream(streamCtx, httpReq)
+ 	if errDo != nil {
+ 		cancel()
+@@ -175,6 +181,7 @@ func (h *Host) callHostHTTPDoStream(ctx context.Context, request []byte) ([]byte,
+ 		cancel()
+ 		return nil, fmt.Errorf("host http stream bridge is unavailable")
+ 	}
++	cancelOnReturn = false
+ 	return marshalRPCResult(rpcHostHTTPStreamResponse{
+ 		StatusCode: resp.StatusCode,
+ 		Headers:    httpHeader(resp.Headers),
+diff --git a/internal/pluginhost/host_model_stream_callbacks.go b/internal/pluginhost/host_model_stream_callbacks.go
+--- a/internal/pluginhost/host_model_stream_callbacks.go
++++ b/internal/pluginhost/host_model_stream_callbacks.go
+@@ -27,6 +27,12 @@ func (h *Host) callHostModelExecuteStream(ctx context.Context, request []byte) ([
+ 	}
+ 	// Detach request cancellation while preserving callback values; callback cleanup owns the model stream lifetime.
+ 	streamCtx, cancel := context.WithCancel(context.WithoutCancel(callbackCtx))
++	cancelOnReturn := true
++	defer func() {
++		if cancelOnReturn {
++			cancel()
++		}
++	}()
+ 	stream, errMsg := executor.ExecuteModelStream(streamCtx, modelExecutionRequestFromPlugin(req.HostModelExecutionRequest, skipPluginID))
+ 	if errMsg != nil {
+ 		cancel()
+@@ -45,6 +51,7 @@ func (h *Host) callHostModelExecuteStream(ctx context.Context, request []byte) ([
+ 			h.modelStreams.close(streamID)
+ 		})
+ 	}
++	cancelOnReturn = false
+ 	return marshalRPCResult(pluginapi.HostModelStreamResponse{
+ 		StatusCode: stream.StatusCode,
+ 		Headers:    cloneHeader(stream.Headers),
+diff --git a/sdk/api/handlers/handlers.go b/sdk/api/handlers/handlers.go
+--- a/sdk/api/handlers/handlers.go
++++ b/sdk/api/handlers/handlers.go
+@@ -1023,6 +1023,9 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProto
+ 			return
+ 		}
+ 		nextHeaders := downstreamHeadersAfterInterceptors(baseStreamHeaders, rawStreamHeaders, passthroughHeadersEnabled)
++		if reflect.DeepEqual(upstreamHeaders, nextHeaders) {
++			return
++		}
+ 		replaceHeader(upstreamHeaders, nextHeaders)
+ 	}
+ 	if streamInterceptorsActive {
+@@ -1223,6 +1226,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(
+ 			return
+ 		}
+ 		nextHeaders := downstreamHeadersAfterInterceptors(baseStreamHeaders, rawStreamHeaders, passthroughHeadersEnabled)
++		if reflect.DeepEqual(upstreamHeaders, nextHeaders) {
++			return
++		}
+ 		replaceHeader(upstreamHeaders, nextHeaders)
+ 	}
+ 
+@@ -1427,8 +1433,6 @@ func (h *BaseAPIHandler) executeStreamWithRawHeaders(
+ 					}
+ 				}
+ 			}
+-			applyStreamHeaderInit()
+-			return
+ 		}
+ 	}()
+ 	return dataChan, upstreamHeaders, errChan

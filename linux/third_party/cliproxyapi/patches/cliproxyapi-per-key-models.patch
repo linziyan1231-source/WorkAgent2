@@ -1,0 +1,182 @@
+diff --git a/sdk/api/handlers/openai/openai_handlers.go b/sdk/api/handlers/openai/openai_handlers.go
+--- a/sdk/api/handlers/openai/openai_handlers.go
++++ b/sdk/api/handlers/openai/openai_handlers.go
+@@ -11,6 +11,7 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"net/http"
++	"strings"
+ 	"sync"
+ 
+ 	"github.com/gin-gonic/gin"
+@@ -59,13 +60,16 @@ func (h *OpenAIAPIHandler) Models() []map[string]any {
+ // It returns a list of available AI models with their capabilities
+ // and specifications in OpenAI-compatible format.
+ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+-	if _, ok := c.Request.URL.Query()["client_version"]; ok {
+-		c.JSON(http.StatusOK, h.codexClientModelsResponse())
++	allModels, err := modelsAllowedForAccess(c, h.Models())
++	if err != nil {
++		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid authenticated model policy"})
+ 		return
+ 	}
+ 
+-	// Get all available models
+-	allModels := h.Models()
++	if _, ok := c.Request.URL.Query()["client_version"]; ok {
++		c.JSON(http.StatusOK, CodexClientModelsResponse(allModels))
++		return
++	}
+ 
+ 	// Filter to only include the 4 required fields: id, object, created, owned_by
+ 	filteredModels := make([]map[string]any, len(allModels))
+@@ -94,6 +98,60 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
+ 	})
+ }
+ 
++func modelsAllowedForAccess(c *gin.Context, models []map[string]any) ([]map[string]any, error) {
++	provider, ok := c.Get("accessProvider")
++	if !ok || provider != "plugin:cpa-key-policy:cpa-key-policy" {
++		return models, nil
++	}
++	metadataValue, ok := c.Get("accessMetadata")
++	if !ok {
++		return nil, fmt.Errorf("cpa-key-policy authentication metadata is missing")
++	}
++	metadata, ok := metadataValue.(map[string]string)
++	if !ok {
++		return nil, fmt.Errorf("cpa-key-policy authentication metadata has type %T", metadataValue)
++	}
++	encoded, ok := metadata["allowed_models"]
++	if !ok {
++		return nil, fmt.Errorf("cpa-key-policy allowed_models metadata is missing")
++	}
++	var allowedIDs []string
++	if err := json.Unmarshal([]byte(encoded), &allowedIDs); err != nil {
++		return nil, fmt.Errorf("decode cpa-key-policy allowed_models: %w", err)
++	}
++	available := make(map[string]map[string]any, len(models))
++	for _, model := range models {
++		id, _ := model["id"].(string)
++		id = strings.ToLower(strings.TrimSpace(id))
++		if id != "" {
++			available[id] = model
++		}
++	}
++	filtered := make([]map[string]any, 0, len(allowedIDs))
++	seen := make(map[string]struct{}, len(allowedIDs))
++	for _, allowedID := range allowedIDs {
++		allowedID = strings.TrimSpace(allowedID)
++		key := strings.ToLower(allowedID)
++		if key == "" {
++			return nil, fmt.Errorf("cpa-key-policy allowed_models contains an empty id")
++		}
++		if _, ok := seen[key]; ok {
++			continue
++		}
++		seen[key] = struct{}{}
++		if model, ok := available[key]; ok {
++			filtered = append(filtered, model)
++		} else {
++			filtered = append(filtered, map[string]any{
++				"id":       allowedID,
++				"object":   "model",
++				"owned_by": "cpa-key-policy",
++			})
++		}
++	}
++	return filtered, nil
++}
++
+ // ChatCompletions handles the /v1/chat/completions endpoint.
+ // It determines whether the request is for a streaming or non-streaming response
+ // and calls the appropriate handler based on the model provider.
+diff --git a/sdk/api/handlers/openai/openai_models_access_test.go b/sdk/api/handlers/openai/openai_models_access_test.go
+new file mode 100644
+--- /dev/null
++++ b/sdk/api/handlers/openai/openai_models_access_test.go
+@@ -0,0 +1,84 @@
++package openai
++
++import (
++	"reflect"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++)
++
++func TestModelsAllowedForAccessScopesCPAKeyToExactAliases(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	c, _ := gin.CreateTestContext(nil)
++	c.Set("accessProvider", "plugin:cpa-key-policy:cpa-key-policy")
++	c.Set("accessMetadata", map[string]string{
++		"key_id":         "employee-chatgpt",
++		"allowed_models": `["gpt-5.6-luna","gpt-5.6-sol","gpt-5.6-terra"]`,
++	})
++	models := []map[string]any{
++		{"id": "gpt-5.4", "object": "model"},
++		{"id": "gpt-5.6-terra", "object": "model"},
++		{"id": "kimi-for-coding", "object": "model"},
++		{"id": "gpt-5.6-luna", "object": "model"},
++		{"id": "gpt-5.6-sol", "object": "model"},
++	}
++
++	filtered, err := modelsAllowedForAccess(c, models)
++	if err != nil {
++		t.Fatal(err)
++	}
++	got := make([]string, 0, len(filtered))
++	for _, model := range filtered {
++		got = append(got, model["id"].(string))
++	}
++	want := []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
++	if !reflect.DeepEqual(got, want) {
++		t.Fatalf("model ids = %v, want %v", got, want)
++	}
++}
++
++func TestModelsAllowedForAccessSynthesizesClientAlias(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	c, _ := gin.CreateTestContext(nil)
++	c.Set("accessProvider", "plugin:cpa-key-policy:cpa-key-policy")
++	c.Set("accessMetadata", map[string]string{"allowed_models": `["kimi-for-coding"]`})
++
++	filtered, err := modelsAllowedForAccess(c, []map[string]any{{"id": "kimi-k2.7-code", "object": "model"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	want := []map[string]any{{"id": "kimi-for-coding", "object": "model", "owned_by": "cpa-key-policy"}}
++	if !reflect.DeepEqual(filtered, want) {
++		t.Fatalf("models = %#v, want %#v", filtered, want)
++	}
++}
++
++func TestModelsAllowedForAccessFailsClosedOnInvalidCPAMetadata(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, metadata := range []map[string]string{
++		{},
++		{"allowed_models": `not-json`},
++		{"allowed_models": `["gpt-5.6-luna",""]`},
++	} {
++		c, _ := gin.CreateTestContext(nil)
++		c.Set("accessProvider", "plugin:cpa-key-policy:cpa-key-policy")
++		c.Set("accessMetadata", metadata)
++		if models, err := modelsAllowedForAccess(c, []map[string]any{{"id": "gpt-5.4"}}); err == nil || models != nil {
++			t.Fatalf("metadata = %#v: models = %#v, err = %v", metadata, models, err)
++		}
++	}
++}
++
++func TestModelsAllowedForAccessLeavesOtherProvidersUnchanged(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	c, _ := gin.CreateTestContext(nil)
++	c.Set("accessProvider", "config-inline")
++	models := []map[string]any{{"id": "gpt-5.4"}}
++	filtered, err := modelsAllowedForAccess(c, models)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !reflect.DeepEqual(filtered, models) {
++		t.Fatalf("models = %#v", filtered)
++	}
++}
