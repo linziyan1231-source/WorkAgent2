@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WorkAgent2</title>
+  <link rel="icon" href="/brand/favicon">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="brand-panel">
+      <img src="/brand/logo" alt="WorkAgent2" class="logo">
+      <div>
+        <p class="eyebrow">WorkAgent2 智能工作平台</p>
+        <h1>让每个工作空间<br>保持清晰、独立、安全。</h1>
+        <p class="intro">独立、安全的 AI 工作空间，让项目、模型与团队协作保持清晰。</p>
+      </div>
+      <p class="environment">WorkAgent2 · LINUX WORKSPACE</p>
+    </section>
+    <section class="access-panel">
+      <form id="login-form" class="card" autocomplete="on">
+        <p class="kicker">安全登录</p>
+        <h2>进入 WorkAgent2</h2>
+        <label>用户名<input id="username" name="username" autocomplete="username" required maxlength="64"></label>
+        <label>密码<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <button type="submit">登录</button>
+        <button id="show-password-change" class="text-button" type="button">修改密码</button>
+        <p id="login-message" class="message" role="status"></p>
+      </form>
+      <form id="password-form" class="card hidden" autocomplete="on">
+        <p class="kicker">账户安全</p>
+        <h2>修改密码</h2>
+        <label>用户名<input id="change-username" autocomplete="username" required maxlength="64"></label>
+        <label>当前密码<input id="current-password" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <label>新密码<input id="new-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <label>确认新密码<input id="confirm-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <button type="submit">确认修改</button>
+        <button id="cancel-password-change" class="secondary" type="button">返回登录</button>
+        <p id="password-message" class="message" role="status"></p>
+      </form>
+      <section id="dashboard" class="card hidden">
+        <p class="kicker">当前工作空间</p>
+        <h2 id="welcome">欢迎</h2>
+        <dl><dt>租户标识</dt><dd id="tenant-id"></dd><dt>模型策略</dt><dd id="policy-id">加载中</dd></dl>
+        <a class="primary-link" href="/runtime/">进入隔离工作区</a>
+        <button id="logout" class="secondary" type="button">退出登录</button>
+      </section>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

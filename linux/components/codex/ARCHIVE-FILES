@@ -1,0 +1,8 @@
+README.md
+package.json
+vendor/x86_64-unknown-linux-musl/bin/codex
+vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host
+vendor/x86_64-unknown-linux-musl/codex-package.json
+vendor/x86_64-unknown-linux-musl/codex-path/rg
+vendor/x86_64-unknown-linux-musl/codex-resources/bwrap
+vendor/x86_64-unknown-linux-musl/codex-resources/zsh/bin/zsh

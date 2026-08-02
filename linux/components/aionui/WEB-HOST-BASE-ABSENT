@@ -1,0 +1,6 @@
+packages/web-cli/src/workagent-bootstrap.ts
+packages/web-host/src/runtime-socket-bootstrap.test.ts
+packages/web-host/src/runtime-socket-bootstrap.ts
+packages/web-host/src/workagent-runtime-auth.test.ts
+packages/web-host/src/workagent-runtime-auth.ts
+packages/web-host/tests/runtime-artifact-smoke.ts

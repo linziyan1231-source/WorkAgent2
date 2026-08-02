@@ -1,0 +1,2287 @@
+diff --git a/packages/web-cli/src/index.ts b/packages/web-cli/src/index.ts
+index 3619c10..f828a96 100644
+--- a/packages/web-cli/src/index.ts
++++ b/packages/web-cli/src/index.ts
+@@ -1,5 +1,5 @@
+-import { startWebHost, startStaticServer } from '@aionui/web-host';
+-import type { WebHostHandle, StaticServerHandle } from '@aionui/web-host';
++import { WorkAgentRuntimeConfigError, startWebHost, startStaticServer } from '@aionui/web-host';
++import type { WebHostHandle, StaticServerHandle, WorkAgentRuntimeAuth } from '@aionui/web-host';
+ import { setTimeout as delay } from 'node:timers/promises';
+ import fs from 'node:fs';
+ import os from 'node:os';
+@@ -140,7 +140,7 @@ function readPackageVersion(): string {
+   }
+ }
+ 
+-async function runStart(flags: Map<string, string | true>): Promise<void> {
++async function runStart(flags: Map<string, string | true>, workAgentRuntimeAuth?: WorkAgentRuntimeAuth): Promise<void> {
+   const backendBin = resolveBackendBinary(flags);
+   const staticDir = resolveStaticDir(flags);
+   const dataDir = resolveDataDir(flags);
+@@ -175,6 +175,9 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
+   const backendAvailable = fs.existsSync(backendBin);
+ 
+   if (!backendAvailable) {
++    if (workAgentRuntimeAuth) {
++      throw new Error('WorkAgent runtime requires the verified AionCore backend');
++    }
+     // Graceful degradation: serve the SPA shell without spawning backend.
+     // API calls from the browser will 502/ECONNREFUSED — frontend is expected
+     // to surface this to the user (e.g. "backend missing" banner).
+@@ -191,6 +194,7 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
+       port,
+       allowRemote,
+       dataDir,
++      workAgentRuntimeAuth,
+     });
+     currentHandle = handle;
+ 
+@@ -236,6 +240,7 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
+         kind: 'ownBackend',
+         resolveBackend: () => backendBin,
+       },
++      workAgentRuntimeAuth,
+     });
+ 
+     currentHandle = handle;
+@@ -248,16 +253,18 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
+     // First-launch bootstrap: if SQLite has no admin password yet, seed one via
+     // backend and print plaintext credentials. Failure must not abort startup —
+     // the user can always fall back to running resetpass manually.
+-    await ensureAdminPassword(
+-      { backendPort: handle.backendPort, resetCommand: RESET_COMMAND },
+-      {
+-        fetch: (...args) => fetch(...args),
+-        log: (msg) => console.log(msg),
+-        warn: (msg) => console.warn(msg),
+-        sleep: (ms) => delay(ms),
+-        now: () => Date.now(),
+-      }
+-    );
++    if (!workAgentRuntimeAuth) {
++      await ensureAdminPassword(
++        { backendPort: handle.backendPort, resetCommand: RESET_COMMAND },
++        {
++          fetch: (...args) => fetch(...args),
++          log: (msg) => console.log(msg),
++          warn: (msg) => console.warn(msg),
++          sleep: (ms) => delay(ms),
++          now: () => Date.now(),
++        }
++      );
++    }
+ 
+     if (autoOpenBrowser) {
+       const openResult = openBrowserUrl(handle.localUrl);
+@@ -382,8 +389,9 @@ async function runResetPassword(flags: Map<string, string | true>): Promise<void
+   }
+ }
+ 
+-async function main(): Promise<void> {
++async function main(workAgentRuntimeAuth?: WorkAgentRuntimeAuth): Promise<void> {
+   const { command, flags } = parseArgs(process.argv.slice(2));
++  if (workAgentRuntimeAuth && command !== 'start') throw new WorkAgentRuntimeConfigError();
+ 
+   if (command === '--version' || command === 'version' || command === '-v') {
+     console.log(readPackageVersion());
+@@ -433,11 +441,17 @@ Environment variables:
+     process.exit(1);
+   }
+ 
+-  await runStart(flags);
++  await runStart(flags, workAgentRuntimeAuth);
+ }
+ 
+-main().catch((err: Error) => {
+-  console.error('[aionui-web] fatal:', err.message);
+-  if (currentHandle) void currentHandle.stop().catch(() => undefined);
+-  process.exit(1);
+-});
++export async function runAionUiCLI(workAgentRuntimeAuth?: WorkAgentRuntimeAuth): Promise<void> {
++  try {
++    await main(workAgentRuntimeAuth);
++  } catch (error) {
++    const err = error instanceof Error ? error : new Error('unknown startup failure');
++    if (err instanceof WorkAgentRuntimeConfigError) console.error(err.message);
++    else console.error('[aionui-web] fatal:', err.message);
++    if (currentHandle) await currentHandle.stop().catch(() => undefined);
++    process.exit(1);
++  }
++}
+diff --git a/srv/workagent/source/.tools/build/aionui-provenance.90MqLu/current/packages/web-cli/src/workagent-bootstrap.ts b/packages/web-cli/src/workagent-bootstrap.ts
+new file mode 100644
+index 0000000..02157b8
+--- /dev/null
++++ b/packages/web-cli/src/workagent-bootstrap.ts
+@@ -0,0 +1,17 @@
++import { WorkAgentRuntimeConfigError, consumeWorkAgentRuntimeAuth } from '@aionui/web-host/workagent-runtime-auth';
++
++async function bootstrap(): Promise<void> {
++  // This is the compiled entry point. Resolve/consume the possession channel
++  // before dynamically loading any of the normal CLI/web-host module graph.
++  const localRequested = process.argv.slice(2).includes('--local');
++  const workAgentRuntimeAuth = await consumeWorkAgentRuntimeAuth(process.env, localRequested);
++  const { runAionUiCLI } = await import('./index.js');
++  await runAionUiCLI(workAgentRuntimeAuth);
++}
++
++bootstrap().catch((error) => {
++  const err = error instanceof Error ? error : new Error('unknown bootstrap failure');
++  if (err instanceof WorkAgentRuntimeConfigError) console.error(err.message);
++  else console.error('[aionui-web] fatal:', err.message);
++  process.exit(1);
++});
+diff --git a/packages/web-host/package.json b/packages/web-host/package.json
+index 33bd057..6aeecc0 100644
+--- a/packages/web-host/package.json
++++ b/packages/web-host/package.json
+@@ -5,7 +5,8 @@
+   "description": "WebUI host package - spawns backend and reverse-proxies to it; serves static files (no Electron dependency)",
+   "type": "module",
+   "exports": {
+-    ".": "./src/index.ts"
++    ".": "./src/index.ts",
++    "./workagent-runtime-auth": "./src/workagent-runtime-auth.ts"
+   },
+   "scripts": {
+     "test": "vitest run",
+diff --git a/packages/web-host/src/backend-launcher.test.ts b/packages/web-host/src/backend-launcher.test.ts
+index 21c4089..e2ba004 100644
+--- a/packages/web-host/src/backend-launcher.test.ts
++++ b/packages/web-host/src/backend-launcher.test.ts
+@@ -23,9 +23,14 @@ vi.mock('./agent-process-registry.js', () => ({
+   cleanupRegisteredAgentProcesses: vi.fn().mockResolvedValue(undefined),
+ }));
+ 
++vi.mock('./runtime-socket-bootstrap.js', () => ({
++  createRuntimeSocketBootstrap: vi.fn(),
++}));
++
+ import { spawn } from 'node:child_process';
+ import { connect, createServer } from 'node:net';
+ import { cleanupRegisteredAgentProcesses } from './agent-process-registry.js';
++import { createRuntimeSocketBootstrap } from './runtime-socket-bootstrap.js';
+ import { buildSpawnArgs, buildSpawnEnv, findAvailablePort, BackendLifecycleManager } from './backend-launcher.js';
+ import type { AppMetadata } from './types.js';
+ 
+@@ -37,6 +42,10 @@ const APP_META: AppMetadata = {
+ };
+ 
+ const APP_META_PACKAGED: AppMetadata = { ...APP_META, isPackaged: true };
++const WORKAGENT_RUNTIME_AUTH = {
++  tenantId: '11111111-1111-4111-8111-111111111111',
++  token: 'A'.repeat(43),
++} as const;
+ 
+ function makeFakeServer(port = 54321) {
+   const server = new EventEmitter() as EventEmitter & {
+@@ -95,6 +104,11 @@ function makeFakeSocket(): Socket {
+ 
+ beforeEach(() => {
+   vi.clearAllMocks();
++  vi.mocked(createRuntimeSocketBootstrap).mockResolvedValue({
++    childFd: 44,
++    deliver: vi.fn(),
++    close: vi.fn(),
++  });
+ });
+ 
+ afterEach(() => {
+@@ -201,6 +215,33 @@ describe('buildSpawnEnv', () => {
+     expect(env.AIONUI_LOG_DIR).toBe('/l');
+     expect(env.PATH).toBe(process.env.PATH); // inherits
+   });
++
++  it('removes ambient WorkAgent values and injects only the non-secret fd/tenant markers', () => {
++    const oldTenant = process.env.WORKAGENT_TENANT_ID;
++    const oldFD = process.env.WORKAGENT_RUNTIME_FD;
++    const oldToken = process.env.WORKAGENT_RUNTIME_TOKEN;
++    process.env.WORKAGENT_TENANT_ID = 'ambient-tenant';
++    process.env.WORKAGENT_RUNTIME_FD = '99';
++    process.env.WORKAGENT_RUNTIME_TOKEN = 'ambient-token';
++    try {
++      const standalone = buildSpawnEnv();
++      expect(standalone.WORKAGENT_TENANT_ID).toBeUndefined();
++      expect(standalone.WORKAGENT_RUNTIME_FD).toBeUndefined();
++      expect(standalone.WORKAGENT_RUNTIME_TOKEN).toBeUndefined();
++
++      const managed = buildSpawnEnv(undefined, WORKAGENT_RUNTIME_AUTH);
++      expect(managed.WORKAGENT_TENANT_ID).toBe(WORKAGENT_RUNTIME_AUTH.tenantId);
++      expect(managed.WORKAGENT_RUNTIME_FD).toBe('3');
++      expect(managed.WORKAGENT_RUNTIME_TOKEN).toBeUndefined();
++    } finally {
++      if (oldTenant === undefined) delete process.env.WORKAGENT_TENANT_ID;
++      else process.env.WORKAGENT_TENANT_ID = oldTenant;
++      if (oldFD === undefined) delete process.env.WORKAGENT_RUNTIME_FD;
++      else process.env.WORKAGENT_RUNTIME_FD = oldFD;
++      if (oldToken === undefined) delete process.env.WORKAGENT_RUNTIME_TOKEN;
++      else process.env.WORKAGENT_RUNTIME_TOKEN = oldToken;
++    }
++  });
+ });
+ 
+ describe('findAvailablePort', () => {
+@@ -270,6 +311,83 @@ describe('findAvailablePort', () => {
+ });
+ 
+ describe('BackendLifecycleManager.start (success path)', () => {
++  it('launches WorkAgent AionCore nonlocal and authenticates health without logging the token', async () => {
++    const child = makeFakeChild();
++    const deliver = vi.fn();
++    vi.mocked(createRuntimeSocketBootstrap).mockResolvedValueOnce({ childFd: 44, deliver, close: vi.fn() });
++    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
++    const fetchSpy = vi
++      .spyOn(globalThis, 'fetch')
++      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
++    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
++
++    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore', WORKAGENT_RUNTIME_AUTH);
++    try {
++      const startPromise = mgr.start('/db/path');
++      await Promise.resolve();
++      emitListening(child, 55556);
++      await expect(startPromise).resolves.toBe(55556);
++
++      const spawnCall = vi.mocked(spawn).mock.calls[0];
++      expect(spawnCall[1]).not.toContain('--local');
++      const options = spawnCall[2] as { env: NodeJS.ProcessEnv; stdio: Array<string | number> };
++      expect(options.env.WORKAGENT_TENANT_ID).toBe(WORKAGENT_RUNTIME_AUTH.tenantId);
++      expect(options.env.WORKAGENT_RUNTIME_FD).toBe('3');
++      expect(options.env.WORKAGENT_RUNTIME_TOKEN).toBeUndefined();
++      expect(options.stdio[3]).toBe(44);
++      expect(deliver).toHaveBeenCalledWith(WORKAGENT_RUNTIME_AUTH.token);
++      expect(fetchSpy).toHaveBeenCalledWith('http://127.0.0.1:55556/health', {
++        headers: { 'X-WorkAgent-Runtime-Token': WORKAGENT_RUNTIME_AUTH.token },
++      });
++      expect(logSpy.mock.calls.flat().join(' ')).not.toContain(WORKAGENT_RUNTIME_AUTH.token);
++    } finally {
++      fetchSpy.mockRestore();
++      logSpy.mockRestore();
++    }
++  });
++
++  it('fails before spawn when the one-shot WorkAgent socket cannot be created', async () => {
++    vi.mocked(createRuntimeSocketBootstrap).mockRejectedValueOnce(new Error('socketpair failed'));
++    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore', WORKAGENT_RUNTIME_AUTH);
++
++    await expect(mgr.start('/db/path')).rejects.toEqual(
++      expect.objectContaining({
++        name: 'BackendStartupError',
++        details: expect.objectContaining({ stage: 'spawn' }),
++      })
++    );
++    expect(spawn).not.toHaveBeenCalled();
++    expect(mgr.status).toBe('error');
++  });
++
++  it('closes the socket and kills the exact child when credential delivery fails', async () => {
++    const child = makeFakeChild();
++    const close = vi.fn();
++    vi.mocked(createRuntimeSocketBootstrap).mockResolvedValueOnce({
++      childFd: 44,
++      deliver: vi.fn(() => {
++        throw new Error('delivery failed');
++      }),
++      close,
++    });
++    vi.mocked(spawn).mockReturnValue(child);
++    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
++    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore', WORKAGENT_RUNTIME_AUTH);
++    try {
++      await expect(mgr.start('/db/path')).rejects.toEqual(
++        expect.objectContaining({
++          name: 'BackendStartupError',
++          details: expect.objectContaining({ stage: 'spawn' }),
++        })
++      );
++      expect(close).toHaveBeenCalledTimes(1);
++      expect(killSpy).toHaveBeenCalledWith(-child.pid!, 'SIGKILL');
++      expect(mgr.status).toBe('error');
++    } finally {
++      killSpy.mockRestore();
++    }
++  });
++
+   it('lets aioncore choose the backend port and waits for the reported listening event', async () => {
+     vi.mocked(createServer).mockImplementation(() => {
+       throw new Error('launcher must not pre-bind backend ports');
+@@ -637,7 +755,9 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
+       return socket;
+     });
+ 
+-    const fetchError = new TypeError('fetch failed') as TypeError & { cause?: NodeJS.ErrnoException };
++    const fetchError = new TypeError('fetch failed') as TypeError & {
++      cause?: NodeJS.ErrnoException;
++    };
+     fetchError.cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:33338'), {
+       code: 'ECONNREFUSED',
+     });
+@@ -691,7 +811,9 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
+       queueMicrotask(() => {
+         socket.emit(
+           'error',
+-          Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:33340'), { code: 'ECONNREFUSED' })
++          Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:33340'), {
++            code: 'ECONNREFUSED',
++          })
+         );
+       });
+       return socket;
+@@ -738,7 +860,9 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
+       queueMicrotask(() => {
+         socket.emit(
+           'error',
+-          Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:33339'), { code: 'ECONNREFUSED' })
++          Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:33339'), {
++            code: 'ECONNREFUSED',
++          })
+         );
+       });
+       return socket;
+@@ -869,6 +993,7 @@ describe('BackendLifecycleManager.stop', () => {
+     await stopPromise;
+ 
+     expect(killSpy).toHaveBeenCalled();
++    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+     expect(cleanupRegisteredAgentProcesses).toHaveBeenCalledWith('/db');
+     expect(mgr.status).toBe('stopped');
+ 
+@@ -903,6 +1028,8 @@ describe('BackendLifecycleManager.stop', () => {
+ 
+     expect(killSpy.mock.calls).toEqual(expect.arrayContaining([[expect.any(Number), 'SIGTERM']]));
+     expect(killSpy.mock.calls).toEqual(expect.arrayContaining([[expect.any(Number), 'SIGKILL']]));
++    expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
++    expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+     expect(cleanupRegisteredAgentProcesses).toHaveBeenCalledWith('/db');
+ 
+     fetchSpy.mockRestore();
+diff --git a/packages/web-host/src/backend-launcher.ts b/packages/web-host/src/backend-launcher.ts
+index 93b5593..ed2bb38 100644
+--- a/packages/web-host/src/backend-launcher.ts
++++ b/packages/web-host/src/backend-launcher.ts
+@@ -12,6 +12,16 @@ import { type ChildProcess, spawn } from 'node:child_process';
+ import { connect, createServer, type Socket } from 'node:net';
+ import { cleanupRegisteredAgentProcesses } from './agent-process-registry.js';
+ import type { AppMetadata, BackendBinaryResolver } from './types.js';
++import {
++  WORKAGENT_RUNTIME_FD,
++  WORKAGENT_RUNTIME_FD_ENV,
++  WORKAGENT_RUNTIME_HEADER,
++  WORKAGENT_TENANT_ENV,
++  WorkAgentRuntimeConfigError,
++  workAgentRuntimeAuthIsValid,
++  type WorkAgentRuntimeAuth,
++} from './workagent-runtime-auth.js';
++import { createRuntimeSocketBootstrap, type RuntimeSocketBootstrap } from './runtime-socket-bootstrap.js';
+ 
+ type BackendStatus = 'stopped' | 'starting' | 'running' | 'error';
+ type BackendStartupStage =
+@@ -94,6 +104,7 @@ export type BackendLaunchOptions = {
+    * process.env and will likely report wrong/empty dirs.
+    */
+   dirs?: BackendDirConfig;
++  workAgentRuntimeAuth?: WorkAgentRuntimeAuth;
+ };
+ 
+ export type BackendHandle = {
+@@ -212,13 +223,24 @@ export function buildSpawnArgs(config: SpawnConfig): string[] {
+  * backend's `/api/system/info` matches what Electron main persists in
+  * ProcessEnv('aionui.dir').
+  */
+-export function buildSpawnEnv(dirs: BackendDirConfig): NodeJS.ProcessEnv {
+-  return {
++export function buildSpawnEnv(dirs?: BackendDirConfig, workAgentRuntimeAuth?: WorkAgentRuntimeAuth): NodeJS.ProcessEnv {
++  const environment: NodeJS.ProcessEnv = {
+     ...process.env,
+-    AIONUI_CACHE_DIR: dirs.cacheDir,
+-    AIONUI_WORK_DIR: dirs.workDir,
+-    AIONUI_LOG_DIR: dirs.logDir,
+   };
++  delete environment[WORKAGENT_TENANT_ENV];
++  delete environment[WORKAGENT_RUNTIME_FD_ENV];
++  delete environment.WORKAGENT_RUNTIME_TOKEN;
++  if (dirs) {
++    environment.AIONUI_CACHE_DIR = dirs.cacheDir;
++    environment.AIONUI_WORK_DIR = dirs.workDir;
++    environment.AIONUI_LOG_DIR = dirs.logDir;
++  }
++  if (workAgentRuntimeAuth) {
++    if (!workAgentRuntimeAuthIsValid(workAgentRuntimeAuth)) throw new WorkAgentRuntimeConfigError();
++    environment[WORKAGENT_TENANT_ENV] = workAgentRuntimeAuth.tenantId;
++    environment[WORKAGENT_RUNTIME_FD_ENV] = String(WORKAGENT_RUNTIME_FD);
++  }
++  return environment;
+ }
+ 
+ const FETCH_FORBIDDEN_PORTS = new Set([
+@@ -365,6 +387,9 @@ function getResolveDiagnostics(error: unknown): Partial<BackendStartupErrorDetai
+ }
+ 
+ function waitForChildProcessEnd(childProcess: ChildProcess): Promise<void> {
++  if (typeof childProcess.exitCode === 'number' || typeof childProcess.signalCode === 'string') {
++    return Promise.resolve();
++  }
+   return new Promise((resolve) => {
+     let settled = false;
+     const finish = () => {
+@@ -403,14 +428,19 @@ function killBackendProcessTree(childProcess: ChildProcess | null, signal: 'SIGT
+     return Promise.resolve();
+   }
+ 
++  // A detached child should lead its own process group, so signal the group to
++  // reach descendants. Also signal the exact ChildProcess handle: runtimes do
++  // not all implement detached process-group creation identically, and a
++  // successful group signal alone is not proof that this child received it.
+   try {
+     process.kill(-childProcess.pid, signal);
+   } catch {
+-    try {
+-      process.kill(childProcess.pid, signal);
+-    } catch {
+-      /* already exited */
+-    }
++    /* group already exited or unavailable */
++  }
++  try {
++    childProcess.kill(signal);
++  } catch {
++    /* exact child already exited */
+   }
+   return Promise.resolve();
+ }
+@@ -476,8 +506,13 @@ export class BackendLifecycleManager {
+ 
+   constructor(
+     private readonly appMeta: AppMetadata,
+-    private readonly resolveBackend: BackendBinaryResolver
+-  ) {}
++    private readonly resolveBackend: BackendBinaryResolver,
++    private readonly workAgentRuntimeAuth?: WorkAgentRuntimeAuth
++  ) {
++    if (workAgentRuntimeAuth && !workAgentRuntimeAuthIsValid(workAgentRuntimeAuth)) {
++      throw new WorkAgentRuntimeConfigError();
++    }
++  }
+ 
+   get port(): number {
+     return this._port;
+@@ -566,7 +601,7 @@ export class BackendLifecycleManager {
+     const args = buildSpawnArgs({
+       port: this._port,
+       dbPath,
+-      local: true,
++      local: this.workAgentRuntimeAuth === undefined,
+       parentPid: process.pid,
+       logDir,
+       workDir: dirs?.workDir,
+@@ -576,14 +611,29 @@ export class BackendLifecycleManager {
+     });
+     console.log(`[aioncore] starting: ${binaryPath} ${args.join(' ')}`);
+ 
++    let runtimeBootstrap: RuntimeSocketBootstrap | undefined;
+     try {
++      if (this.workAgentRuntimeAuth) runtimeBootstrap = await createRuntimeSocketBootstrap();
+       this.childProcess = spawn(binaryPath, args, {
+-        stdio: ['pipe', 'pipe', 'pipe'],
+-        env: dirs ? buildSpawnEnv(dirs) : process.env,
++        stdio: runtimeBootstrap ? ['pipe', 'pipe', 'pipe', runtimeBootstrap.childFd] : ['pipe', 'pipe', 'pipe'],
++        env: buildSpawnEnv(dirs, this.workAgentRuntimeAuth),
+         cwd: dirs?.workDir ?? dbPath,
+         detached: process.platform !== 'win32',
+       });
++      if (runtimeBootstrap) {
++        if (!this.childProcess.pid) {
++          // A failed Node spawn reports its error asynchronously. Consume that
++          // event while this synchronous possession boundary fails closed.
++          this.childProcess.once('error', () => undefined);
++          throw new WorkAgentRuntimeConfigError();
++        }
++        runtimeBootstrap.deliver(this.workAgentRuntimeAuth!.token);
++        runtimeBootstrap = undefined;
++      }
+     } catch (error) {
++      runtimeBootstrap?.close();
++      if (this.childProcess?.pid) await killBackendProcessTree(this.childProcess, 'SIGKILL');
++      this.childProcess = null;
+       this._status = 'error';
+       throw makeStartupError('spawn', 'aioncore process spawn threw before startup', error);
+     }
+@@ -776,16 +826,21 @@ export class BackendLifecycleManager {
+     this._status = 'stopped';
+     const dataDir = this._lastDbPath;
+ 
++    // Subscribe before signalling. A fast child may otherwise exit between
++    // kill(2) and listener registration, forcing an unnecessary timeout and
++    // leaving the parent stuck in shutdown.
++    const childEnded = waitForChildProcessEnd(childProcess);
+     const gracefulKill = killBackendProcessTree(childProcess, 'SIGTERM');
+-    await new Promise<void>((resolve) => {
+-      const timeout = setTimeout(() => {
+-        void killBackendProcessTree(childProcess, 'SIGKILL').finally(resolve);
+-      }, 5000);
+-      childProcess.on('exit', () => {
+-        clearTimeout(timeout);
+-        void gracefulKill.finally(resolve);
+-      });
+-    });
++    let gracefulTimeout: ReturnType<typeof setTimeout> | undefined;
++    const endedGracefully = await Promise.race([
++      childEnded.then(() => true),
++      new Promise<false>((resolve) => {
++        gracefulTimeout = setTimeout(() => resolve(false), 5000);
++      }),
++    ]);
++    if (gracefulTimeout) clearTimeout(gracefulTimeout);
++    if (endedGracefully) await gracefulKill;
++    else await killBackendProcessTree(childProcess, 'SIGKILL');
+     await cleanupRegisteredAgentProcesses(dataDir);
+     this.childProcess = null;
+   }
+@@ -818,7 +873,11 @@ export class BackendLifecycleManager {
+       diagnostics.healthCheckAttempts += 1;
+       diagnostics.healthCheckLastAttemptAfterMs = attemptStartedAt - start;
+       try {
+-        const response = await fetch(healthCheckUrl);
++        const response = this.workAgentRuntimeAuth
++          ? await fetch(healthCheckUrl, {
++              headers: { [WORKAGENT_RUNTIME_HEADER]: this.workAgentRuntimeAuth.token },
++            })
++          : await fetch(healthCheckUrl);
+         if (response.ok) {
+           diagnostics.healthCheckElapsedMs = Date.now() - start;
+           return { ok: true, diagnostics };
+@@ -934,7 +993,7 @@ export class BackendLifecycleManager {
+  * directly to preserve current stop/port getter semantics).
+  */
+ export async function startBackend(opts: BackendLaunchOptions): Promise<BackendHandle> {
+-  const manager = new BackendLifecycleManager(opts.app, opts.resolveBackend);
++  const manager = new BackendLifecycleManager(opts.app, opts.resolveBackend, opts.workAgentRuntimeAuth);
+   const dataDir = opts.dataDir ?? '';
+   if (!dataDir) {
+     throw new Error('startBackend: dataDir is required');
+diff --git a/packages/web-host/src/index.ts b/packages/web-host/src/index.ts
+index 4d81110..3274397 100644
+--- a/packages/web-host/src/index.ts
++++ b/packages/web-host/src/index.ts
+@@ -3,6 +3,19 @@ import type { WebHostOptions, WebHostHandle } from './types.js';
+ export type { AppMetadata, BackendBinaryResolver, WebHostOptions, WebHostHandle } from './types.js';
+ export { startStaticServer, stopStaticServer } from './static-server.js';
+ export type { StaticServerOptions, StaticServerHandle } from './static-server.js';
++export {
++  WORKAGENT_BOOTSTRAP_CONFIG_ERROR,
++  WORKAGENT_RUNTIME_FD,
++  WORKAGENT_RUNTIME_FD_ENV,
++  WORKAGENT_RUNTIME_HEADER,
++  WORKAGENT_TENANT_ENV,
++  WorkAgentRuntimeConfigError,
++  buildWorkAgentRuntimeFrame,
++  consumeWorkAgentRuntimeAuth,
++  isCanonicalWorkAgentRuntimeToken,
++  resolveWorkAgentRuntimeTenant,
++} from './workagent-runtime-auth.js';
++export type { WorkAgentRuntimeAuth, WorkAgentRuntimeSocketIO } from './workagent-runtime-auth.js';
+ 
+ // Backend launcher exports (M4)
+ export {
+@@ -37,6 +50,7 @@ export async function startWebHost(opts: WebHostOptions): Promise<WebHostHandle>
+       dataDir: opts.dataDir,
+       logDir: opts.logDir,
+       dirs: opts.dirs,
++      workAgentRuntimeAuth: opts.workAgentRuntimeAuth,
+     });
+   } else {
+     // useExistingBackend: create a fake handle
+@@ -57,6 +71,7 @@ export async function startWebHost(opts: WebHostOptions): Promise<WebHostHandle>
+       port: opts.port,
+       allowRemote: opts.allowRemote ?? false,
+       dataDir: opts.dataDir ?? opts.app.userDataPath,
++      workAgentRuntimeAuth: opts.workAgentRuntimeAuth,
+     });
+   } catch (err) {
+     // If static-server fails, clean up backend
+diff --git a/srv/workagent/source/.tools/build/aionui-provenance.90MqLu/current/packages/web-host/src/runtime-socket-bootstrap.test.ts b/packages/web-host/src/runtime-socket-bootstrap.test.ts
+new file mode 100644
+index 0000000..c5707f5
+--- /dev/null
++++ b/packages/web-host/src/runtime-socket-bootstrap.test.ts
+@@ -0,0 +1,97 @@
++import { spawnSync } from 'node:child_process';
++import { describe, expect, it } from 'vitest';
++
++const TEST_BUN = process.env.WORKAGENT_TEST_BUN ?? (process.versions.bun ? process.execPath : undefined);
++const TOKEN = 'A'.repeat(43);
++const TENANT = '11111111-1111-4111-8111-111111111111';
++
++describe('WorkAgent runtime socket process boundary', () => {
++  it.skipIf(!TEST_BUN)('delivers one real packet and leaves an accidental standalone fd 3 untouched', () => {
++    const socketModule = new URL('./runtime-socket-bootstrap.ts', import.meta.url).href;
++    const authModule = new URL('./workagent-runtime-auth.ts', import.meta.url).href;
++    const managedChildScript = `
++      import fs from 'node:fs';
++      import { consumeWorkAgentRuntimeAuth } from ${JSON.stringify(authModule)};
++      const initialEnvironment = fs.readFileSync('/proc/self/environ');
++      const initialArguments = fs.readFileSync('/proc/self/cmdline');
++      const auth = await consumeWorkAgentRuntimeAuth(process.env);
++      let fdClosed = false;
++      try { fs.fstatSync(3); } catch (error) { fdClosed = error?.code === 'EBADF'; }
++      const rawToken = Buffer.from(auth?.token ?? '', 'ascii');
++      console.log(JSON.stringify({
++        tenant: auth?.tenantId,
++        tokenLength: auth?.token.length,
++        tokenEnumerable: Object.keys(auth ?? {}).includes('token'),
++        tokenInEnvironment: initialEnvironment.includes(rawToken),
++        tokenInArguments: initialArguments.includes(rawToken),
++        fdClosed,
++      }));
++    `;
++    const standaloneChildScript = `
++      import fs from 'node:fs';
++      import { consumeWorkAgentRuntimeAuth } from ${JSON.stringify(authModule)};
++      const before = fs.fstatSync(3).isSocket();
++      const auth = await consumeWorkAgentRuntimeAuth(process.env);
++      const after = fs.fstatSync(3).isSocket();
++      console.log(JSON.stringify({ before, after, standalone: auth === undefined }));
++    `;
++    const parentScript = `
++      import { spawn } from 'node:child_process';
++      import { createRuntimeSocketBootstrap } from ${JSON.stringify(socketModule)};
++      const token = 'A'.repeat(43);
++      const tenant = ${JSON.stringify(TENANT)};
++      const run = (script, environment, descriptor) => {
++        const child = spawn(process.execPath, ['-e', script], {
++          env: environment,
++          stdio: ['ignore', 'pipe', 'pipe', descriptor],
++        });
++        let stdout = '';
++        let stderr = '';
++        child.stdout.on('data', (chunk) => { stdout += chunk; });
++        child.stderr.on('data', (chunk) => { stderr += chunk; });
++        return { child, completed: new Promise((resolve) => child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }))) };
++      };
++
++      const managedSocket = await createRuntimeSocketBootstrap();
++      const managed = run(${JSON.stringify(managedChildScript)}, {
++        PATH: process.env.PATH,
++        WORKAGENT_TENANT_ID: tenant,
++        WORKAGENT_RUNTIME_FD: '3',
++      }, managedSocket.childFd);
++      managedSocket.deliver(token);
++      const managedResult = await managed.completed;
++
++      const standaloneSocket = await createRuntimeSocketBootstrap();
++      const standalone = run(${JSON.stringify(standaloneChildScript)}, { PATH: process.env.PATH }, standaloneSocket.childFd);
++      standaloneSocket.close();
++      const standaloneResult = await standalone.completed;
++      console.log(JSON.stringify({ managedResult, standaloneResult }));
++    `;
++
++    const result = spawnSync(TEST_BUN!, ['-e', parentScript], {
++      encoding: 'utf8',
++      timeout: 20_000,
++      env: { PATH: process.env.PATH },
++    });
++    expect(result.status, result.stderr).toBe(0);
++    const output = JSON.parse(result.stdout.trim()) as {
++      managedResult: { code: number; signal: string | null; stdout: string; stderr: string };
++      standaloneResult: { code: number; signal: string | null; stdout: string; stderr: string };
++    };
++    expect(output.managedResult, output.managedResult.stderr).toMatchObject({ code: 0, signal: null });
++    expect(JSON.parse(output.managedResult.stdout.trim())).toEqual({
++      tenant: TENANT,
++      tokenLength: TOKEN.length,
++      tokenEnumerable: false,
++      tokenInEnvironment: false,
++      tokenInArguments: false,
++      fdClosed: true,
++    });
++    expect(output.standaloneResult, output.standaloneResult.stderr).toMatchObject({ code: 0, signal: null });
++    expect(JSON.parse(output.standaloneResult.stdout.trim())).toEqual({
++      before: true,
++      after: true,
++      standalone: true,
++    });
++  });
++});
+diff --git a/srv/workagent/source/.tools/build/aionui-provenance.90MqLu/current/packages/web-host/src/runtime-socket-bootstrap.ts b/packages/web-host/src/runtime-socket-bootstrap.ts
+new file mode 100644
+index 0000000..487da31
+--- /dev/null
++++ b/packages/web-host/src/runtime-socket-bootstrap.ts
+@@ -0,0 +1,192 @@
++import fs from 'node:fs';
++import { buildWorkAgentRuntimeFrame, WORKAGENT_RUNTIME_FRAME_BYTES } from './workagent-runtime-auth.js';
++
++const AF_UNIX = 1;
++const SOCK_SEQPACKET = 5;
++const SOCK_CLOEXEC = 0x80000;
++const SOL_SOCKET = 1;
++const SO_TYPE = 3;
++const SO_PEERCRED = 17;
++const SO_RCVTIMEO = 20;
++const SO_DOMAIN = 39;
++const SHUT_WR = 1;
++const POLLHUP = 0x10;
++const POLLRDHUP = 0x2000;
++
++type LibC = Readonly<{
++  symbols: {
++    socketpair: (domain: number, type: number, protocol: number, descriptors: number) => number;
++    getsockopt: (fd: number, level: number, option: number, value: number, length: number) => number;
++    setsockopt: (fd: number, level: number, option: number, value: number, length: number) => number;
++    shutdown: (fd: number, how: number) => number;
++    poll: (fds: number, count: number, timeoutMs: number) => number;
++  };
++  close: () => void;
++}>;
++
++type BunFFI = Readonly<{
++  FFIType: Record<string, number>;
++  ptr: (view: ArrayBufferView) => number;
++  dlopen: (path: string, symbols: Record<string, unknown>) => LibC;
++}>;
++
++async function openLibC(): Promise<{ ffi: BunFFI; libc: LibC }> {
++  if (process.platform !== 'linux') throw new Error('runtime credential sockets require Linux');
++  // `bun:ffi` is a Bun runtime builtin and is deliberately loaded only on the
++  // WorkAgent Linux path so upstream Node/Vitest and standalone modes remain unchanged.
++  // @ts-expect-error Bun-only builtin is resolved by the verified compile/runtime toolchain.
++  const ffi = (await import('bun:ffi')) as BunFFI;
++  const int = ffi.FFIType.i32;
++  const pointer = ffi.FFIType.ptr;
++  const libc = ffi.dlopen('libc.so.6', {
++    socketpair: { args: [int, int, int, pointer], returns: int },
++    getsockopt: { args: [int, int, int, pointer, pointer], returns: int },
++    setsockopt: { args: [int, int, int, pointer, int], returns: int },
++    shutdown: { args: [int, int], returns: int },
++    poll: { args: [pointer, ffi.FFIType.usize, int], returns: int },
++  });
++  return { ffi, libc };
++}
++
++/** Distinguish a true peer shutdown from a zero-length SOCK_SEQPACKET record. */
++export async function runtimeSocketPeerClosed(fd: number): Promise<boolean> {
++  const { ffi, libc } = await openLibC();
++  const pollFD = Buffer.alloc(8);
++  pollFD.writeInt32LE(fd, 0);
++  pollFD.writeInt16LE(POLLRDHUP, 4);
++  try {
++    const result = libc.symbols.poll(ffi.ptr(pollFD), 1, 0);
++    if (result < 0) throw new Error('runtime credential poll failed');
++    const events = pollFD.readInt16LE(6);
++    return result === 1 && (events & (POLLHUP | POLLRDHUP)) !== 0;
++  } finally {
++    pollFD.fill(0);
++    libc.close();
++  }
++}
++
++function closeDescriptor(fd: number): void {
++  if (fd < 0) return;
++  try {
++    fs.closeSync(fd);
++  } catch {
++    // Cleanup is best effort; callers already fail the startup boundary.
++  }
++}
++
++async function socketOption(fd: number, option: number, slots: number): Promise<Int32Array> {
++  const { ffi, libc } = await openLibC();
++  const value = new Int32Array(slots);
++  const length = new Uint32Array([value.byteLength]);
++  try {
++    if (libc.symbols.getsockopt(fd, SOL_SOCKET, option, ffi.ptr(value), ffi.ptr(length)) !== 0) {
++      throw new Error('getsockopt failed');
++    }
++    if (length[0] !== value.byteLength) throw new Error('getsockopt length mismatch');
++    return value;
++  } finally {
++    libc.close();
++  }
++}
++
++/** Validate inherited fd identity/peer and bound all subsequent blocking reads. */
++export async function validateInheritedRuntimeSocket(
++  fd: number,
++  expectedPeerPid: number,
++  expectedPeerUid: number | undefined
++): Promise<void> {
++  if (!Number.isSafeInteger(fd) || fd < 0 || expectedPeerUid === undefined || !fs.fstatSync(fd).isSocket()) {
++    throw new Error('invalid runtime credential descriptor');
++  }
++  const domain = await socketOption(fd, SO_DOMAIN, 1);
++  const type = await socketOption(fd, SO_TYPE, 1);
++  const peer = await socketOption(fd, SO_PEERCRED, 3);
++  if (
++    domain[0] !== AF_UNIX ||
++    type[0] !== SOCK_SEQPACKET ||
++    peer[0] !== expectedPeerPid ||
++    peer[1] !== expectedPeerUid
++  ) {
++    throw new Error('runtime credential peer mismatch');
++  }
++
++  const { ffi, libc } = await openLibC();
++  // Linux x86_64 `timeval` is two little-endian 64-bit signed fields. Writing
++  // the low 32 bits keeps this source compatible with the upstream ES6 target.
++  const timeout = Buffer.alloc(16);
++  timeout.writeInt32LE(10, 0);
++  try {
++    if (libc.symbols.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, ffi.ptr(timeout), timeout.byteLength) !== 0) {
++      throw new Error('runtime credential timeout setup failed');
++    }
++  } finally {
++    timeout.fill(0);
++    libc.close();
++  }
++}
++
++export type RuntimeSocketBootstrap = Readonly<{
++  childFd: number;
++  deliver: (token: string) => void;
++  close: () => void;
++}>;
++
++/** Create a fresh anonymous channel for one exact AionCore Start attempt. */
++export async function createRuntimeSocketBootstrap(): Promise<RuntimeSocketBootstrap> {
++  const { ffi, libc } = await openLibC();
++  const descriptors = new Int32Array([-1, -1]);
++  try {
++    if (libc.symbols.socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ffi.ptr(descriptors)) !== 0) {
++      throw new Error('socketpair failed');
++    }
++  } catch (error) {
++    libc.close();
++    throw error;
++  }
++  let parentFd = descriptors[0];
++  let childFd = descriptors[1];
++  descriptors.fill(-1);
++  if (parentFd < 0 || childFd < 0) {
++    closeDescriptor(parentFd);
++    closeDescriptor(childFd);
++    libc.close();
++    throw new Error('socketpair returned invalid descriptors');
++  }
++
++  let libcOpen = true;
++  const closeLibC = (): void => {
++    if (!libcOpen) return;
++    libcOpen = false;
++    libc.close();
++  };
++
++  const close = (): void => {
++    closeDescriptor(childFd);
++    closeDescriptor(parentFd);
++    childFd = -1;
++    parentFd = -1;
++    closeLibC();
++  };
++  return {
++    get childFd() {
++      return childFd;
++    },
++    deliver(token: string): void {
++      if (childFd < 0 || parentFd < 0) throw new Error('runtime credential channel was already consumed');
++      const frame = buildWorkAgentRuntimeFrame(token);
++      try {
++        fs.closeSync(childFd);
++        childFd = -1;
++        const written = fs.writeSync(parentFd, frame, 0, frame.byteLength, null);
++        if (written !== WORKAGENT_RUNTIME_FRAME_BYTES) throw new Error('runtime credential frame was short');
++        if (libc.symbols.shutdown(parentFd, SHUT_WR) !== 0) throw new Error('runtime credential shutdown failed');
++        fs.closeSync(parentFd);
++        parentFd = -1;
++      } finally {
++        frame.fill(0);
++        close();
++      }
++    },
++    close,
++  };
++}
+diff --git a/packages/web-host/src/static-server.ts b/packages/web-host/src/static-server.ts
+index 4527197..8eebeaf 100644
+--- a/packages/web-host/src/static-server.ts
++++ b/packages/web-host/src/static-server.ts
+@@ -15,6 +15,15 @@ import { networkInterfaces } from 'node:os';
+ import net, { type Socket } from 'node:net';
+ import serveHandler from 'serve-handler';
+ import { handleLocalFeedback } from './local-feedback.js';
++import {
++  WORKAGENT_RUNTIME_HEADER,
++  WorkAgentRuntimeConfigError,
++  runtimeHeaderFromRawHeaders,
++  runtimeHeaderValueIsValid,
++  stripWorkAgentHeaders,
++  workAgentRuntimeAuthIsValid,
++  type WorkAgentRuntimeAuth,
++} from './workagent-runtime-auth.js';
+ 
+ export type StaticServerOptions = {
+   staticDir: string;
+@@ -22,6 +31,7 @@ export type StaticServerOptions = {
+   port?: number;
+   allowRemote?: boolean;
+   dataDir?: string;
++  workAgentRuntimeAuth?: WorkAgentRuntimeAuth;
+ };
+ 
+ export type StaticServerHandle = {
+@@ -45,13 +55,37 @@ function getLanIP(): string | null {
+   return null;
+ }
+ 
+-function forwardToBackend(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
++const FORBIDDEN_BODY = JSON.stringify({ success: false, error: 'Forbidden.', code: 'FORBIDDEN' });
++
++function writeForbidden(res: ServerResponse): void {
++  res.writeHead(403, {
++    'cache-control': 'no-store',
++    'content-type': 'application/json; charset=utf-8',
++  });
++  res.end(FORBIDDEN_BODY);
++}
++
++function requestHasRuntimeAuth(req: IncomingMessage, runtimeAuth: WorkAgentRuntimeAuth): boolean {
++  return runtimeHeaderValueIsValid(runtimeHeaderFromRawHeaders(req.rawHeaders), runtimeAuth.token);
++}
++
++function forwardToBackend(
++  req: IncomingMessage,
++  res: ServerResponse,
++  backendPort: number,
++  runtimeAuth?: WorkAgentRuntimeAuth
++): void {
++  const headers: Record<string, string | string[] | undefined> = { ...req.headers };
++  if (runtimeAuth) {
++    stripWorkAgentHeaders(headers);
++    headers[WORKAGENT_RUNTIME_HEADER] = runtimeAuth.token;
++  }
+   const options: http.RequestOptions = {
+     hostname: '127.0.0.1',
+     port: backendPort,
+     path: req.url,
+     method: req.method,
+-    headers: { ...req.headers, host: `127.0.0.1:${backendPort}` },
++    headers: { ...headers, host: `127.0.0.1:${backendPort}` },
+   };
+   const proxy = http.request(options, (proxyRes) => {
+     res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+@@ -72,7 +106,7 @@ function forwardToBackend(req: IncomingMessage, res: ServerResponse, backendPort
+ // on its own is typically < 100 bytes; a full header block is < 2 KB. If we
+ // haven't seen a newline after 4 KB the client is sending something weird —
+ // hand it to the internal HTTP server and let it return 400.
+-const PEEK_LIMIT_BYTES = 4096;
++const REQUEST_HEADER_LIMIT_BYTES = 64 * 1024;
+ 
+ /**
+  * Splice `client` to a TCP endpoint on `targetPort`. Any bytes already read
+@@ -80,6 +114,7 @@ const PEEK_LIMIT_BYTES = 4096;
+  * so the endpoint sees the full HTTP request as-sent.
+  */
+ function spliceToTcpEndpoint(client: Socket, targetPort: number, initialBytes: Buffer): void {
++  client.pause();
+   client.setNoDelay(true);
+   client.setKeepAlive(true);
+   client.setTimeout(0);
+@@ -90,6 +125,7 @@ function spliceToTcpEndpoint(client: Socket, targetPort: number, initialBytes: B
+     if (initialBytes.length > 0) upstream.write(initialBytes);
+     upstream.pipe(client);
+     client.pipe(upstream);
++    client.resume();
+   });
+   const tearDown = (): void => {
+     client.destroy();
+@@ -112,17 +148,84 @@ function spliceToTcpEndpoint(client: Socket, targetPort: number, initialBytes: B
+  * Keeping the rule simple means we can decide after the first ~50 bytes
+  * instead of waiting for the full header block.
+  */
+-function peekWsRoute(buf: Buffer): boolean | null {
+-  const newlineIdx = buf.indexOf(0x0a); // \n
+-  if (newlineIdx < 0) return null;
+-  const firstLine = buf.slice(0, newlineIdx).toString('ascii');
+-  return /^GET\s+\/(?:ws|api\/stt\/stream)(?:\?[^\s]*)?\s+HTTP\/1\.[01]\r?$/.test(firstLine);
++type InitialRequestDecision =
++  | { kind: 'incomplete' }
++  | { kind: 'bad_request' }
++  | { kind: 'forbidden' }
++  | { kind: 'route'; backend: boolean; bytes: Buffer };
++
++function inspectInitialRequest(buf: Buffer, runtimeAuth?: WorkAgentRuntimeAuth): InitialRequestDecision {
++  const headerEnd = buf.indexOf('\r\n\r\n');
++  if (headerEnd < 0) return { kind: 'incomplete' };
++  if (headerEnd + 4 > REQUEST_HEADER_LIMIT_BYTES) return { kind: 'bad_request' };
++
++  const lines = buf.subarray(0, headerEnd).toString('latin1').split('\r\n');
++  const firstLine = lines.shift();
++  if (!firstLine || !/^[A-Z]+\s+\S+\s+HTTP\/1\.[01]$/.test(firstLine)) return { kind: 'bad_request' };
++  const backend = /^GET\s+\/(?:ws|api\/stt\/stream)(?:\?[^\s]*)?\s+HTTP\/1\.[01]$/.test(firstLine);
++  if (!runtimeAuth) return { kind: 'route', backend, bytes: buf };
++
++  let runtimeToken: string | undefined;
++  const forwardedLines: string[] = [];
++  for (const line of lines) {
++    const separator = line.indexOf(':');
++    if (separator <= 0 || /^[ \t]/.test(line)) return { kind: 'bad_request' };
++    const name = line.slice(0, separator);
++    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) return { kind: 'bad_request' };
++    if (name.toLowerCase() === WORKAGENT_RUNTIME_HEADER.toLowerCase()) {
++      if (runtimeToken !== undefined) return { kind: 'forbidden' };
++      // Permit the single conventional serialization space after `:`, but do
++      // not normalize field-value whitespace. The bearer value itself must be
++      // exactly the canonical 43-byte token; extra SP/HTAB on either side is
++      // an authentication failure rather than an alternate spelling.
++      const serializedValue = line.slice(separator + 1);
++      const candidate = serializedValue.startsWith(' ') ? serializedValue.slice(1) : serializedValue;
++      if (/^[ \t]|[ \t]$/.test(candidate)) return { kind: 'forbidden' };
++      runtimeToken = candidate;
++    }
++    if (!name.toLowerCase().startsWith('x-workagent-')) forwardedLines.push(line);
++  }
++  if (!runtimeHeaderValueIsValid(runtimeToken, runtimeAuth.token)) return { kind: 'forbidden' };
++
++  forwardedLines.push(`${WORKAGENT_RUNTIME_HEADER}: ${runtimeAuth.token}`);
++  const rewrittenHead = Buffer.from(`${firstLine}\r\n${forwardedLines.join('\r\n')}\r\n\r\n`, 'latin1');
++  return {
++    kind: 'route',
++    backend,
++    bytes: Buffer.concat([rewrittenHead, buf.subarray(headerEnd + 4)]),
++  };
++}
++
++function writeTcpError(client: Socket, status: 400 | 403 | 431): void {
++  const reason = status === 403 ? 'Forbidden' : status === 431 ? 'Request Header Fields Too Large' : 'Bad Request';
++  const body = status === 403 ? FORBIDDEN_BODY : JSON.stringify({ error: reason });
++  client.end(
++    `HTTP/1.1 ${status} ${reason}\r\n` +
++      'Connection: close\r\n' +
++      'Cache-Control: no-store\r\n' +
++      'Content-Type: application/json; charset=utf-8\r\n' +
++      `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
++  );
+ }
+ 
+ export async function startStaticServer(opts: StaticServerOptions): Promise<StaticServerHandle> {
++  if (opts.workAgentRuntimeAuth && !workAgentRuntimeAuthIsValid(opts.workAgentRuntimeAuth)) {
++    throw new WorkAgentRuntimeConfigError();
++  }
+   const port = opts.port ?? DEFAULT_PORT;
+   const allowRemote = opts.allowRemote === true;
+   const host = allowRemote ? '0.0.0.0' : '127.0.0.1';
++  const liveSockets = new Set<Socket>();
++  let stopping = false;
++  let stopPromise: Promise<void> | undefined;
++  const trackSocket = (socket: Socket): void => {
++    if (stopping) {
++      socket.destroy();
++      return;
++    }
++    liveSockets.add(socket);
++    socket.once('close', () => liveSockets.delete(socket));
++  };
+ 
+   // The HTTP server listens only on loopback — user traffic hits the outer
+   // net.Server first. We route to this server for everything except WS
+@@ -140,6 +243,11 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+         return;
+       }
+ 
++      if (opts.workAgentRuntimeAuth && !requestHasRuntimeAuth(req, opts.workAgentRuntimeAuth)) {
++        writeForbidden(res);
++        return;
++      }
++
+       if (req.url === '/api/workagent/feedback') {
+         await handleLocalFeedback(req, res, opts.dataDir);
+         return;
+@@ -149,7 +257,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+       // /login and /logout are aionui-auth's top-level auth endpoints: proxy them too
+       // so WebUI browser clients reach the backend without a path-rewrite.
+       if (req.url.startsWith('/api/') || req.url.startsWith('/api?') || req.url === '/login' || req.url === '/logout') {
+-        forwardToBackend(req, res, opts.backendPort);
++        forwardToBackend(req, res, opts.backendPort, opts.workAgentRuntimeAuth);
+         return;
+       }
+ 
+@@ -178,6 +286,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+       }
+     }
+   });
++  http_server.on('connection', trackSocket);
+ 
+   // Internal HTTP server — 127.0.0.1 ephemeral port, never visible to the user.
+   await new Promise<void>((resolve, reject) => {
+@@ -189,6 +298,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+   });
+   const internalPort = (http_server.address() as { port: number } | null)?.port;
+   if (!internalPort) {
++    await new Promise<void>((resolve) => http_server.close(() => resolve()));
+     throw new Error('internal HTTP server failed to bind to a port');
+   }
+ 
+@@ -197,6 +307,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+   // server (everything else). Both routes use raw TCP splice — no reliance
+   // on http.Server's upgrade event.
+   const tcp_server = net.createServer((client: Socket) => {
++    trackSocket(client);
+     let peeked = Buffer.alloc(0);
+     let settled = false;
+     const cleanup = (): void => {
+@@ -208,11 +319,23 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+     };
+     const onData = (chunk: Buffer): void => {
+       peeked = Buffer.concat([peeked, chunk]);
+-      const decision = peekWsRoute(peeked);
+-      if (decision === null && peeked.length < PEEK_LIMIT_BYTES) return;
++      const decision = inspectInitialRequest(peeked, opts.workAgentRuntimeAuth);
++      if (decision.kind === 'incomplete' && peeked.length < REQUEST_HEADER_LIMIT_BYTES) return;
+       cleanup();
+-      const target = decision === true ? opts.backendPort : internalPort;
+-      spliceToTcpEndpoint(client, target, peeked);
++      if (decision.kind === 'incomplete') {
++        writeTcpError(client, 431);
++        return;
++      }
++      if (decision.kind === 'bad_request') {
++        writeTcpError(client, 400);
++        return;
++      }
++      if (decision.kind === 'forbidden') {
++        writeTcpError(client, 403);
++        return;
++      }
++      const target = decision.backend ? opts.backendPort : internalPort;
++      spliceToTcpEndpoint(client, target, decision.bytes);
+     };
+     const onEarlyError = (): void => {
+       cleanup();
+@@ -228,13 +351,20 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+     client.on('end', onEarlyEnd);
+   });
+ 
+-  await new Promise<void>((resolve, reject) => {
+-    tcp_server.once('error', reject);
+-    tcp_server.listen(port, host, () => {
+-      tcp_server.off('error', reject);
+-      resolve();
++  try {
++    await new Promise<void>((resolve, reject) => {
++      tcp_server.once('error', reject);
++      tcp_server.listen(port, host, () => {
++        tcp_server.off('error', reject);
++        resolve();
++      });
+     });
+-  });
++  } catch (error) {
++    // The internal listener is already live at this point. A public bind
++    // failure must not leave that otherwise-unreachable server behind.
++    await new Promise<void>((resolve) => http_server.close(() => resolve()));
++    throw error;
++  }
+ 
+   const actualPort = (tcp_server.address() as { port: number } | null)?.port ?? port;
+   const lanIP = allowRemote ? (getLanIP() ?? undefined) : undefined;
+@@ -247,12 +377,24 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
+     localUrl,
+     networkUrl,
+     lanIP,
+-    stop: () =>
+-      new Promise<void>((resolve) => {
+-        tcp_server.close(() => {
+-          http_server.close(() => resolve());
+-        });
+-      }),
++    stop: () => {
++      if (stopPromise) return stopPromise;
++      stopping = true;
++      stopPromise = new Promise<void>((resolve) => {
++        let remaining = 2;
++        const closed = (): void => {
++          remaining--;
++          if (remaining === 0) resolve();
++        };
++        // Stop accepting before destroying tracked keep-alive, WebSocket and
++        // proxy sockets. Otherwise Server.close() can wait without bound and
++        // prevent the backend lifecycle manager from ever running.
++        tcp_server.close(closed);
++        http_server.close(closed);
++        for (const socket of liveSockets) socket.destroy();
++      });
++      return stopPromise;
++    },
+   };
+ }
+ 
+diff --git a/packages/web-host/src/static-server.unit.test.ts b/packages/web-host/src/static-server.unit.test.ts
+index ac2edd8..b7b2472 100644
+--- a/packages/web-host/src/static-server.unit.test.ts
++++ b/packages/web-host/src/static-server.unit.test.ts
+@@ -1,11 +1,43 @@
+ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+ import { promises as fs } from 'node:fs';
+ import http from 'node:http';
++import net from 'node:net';
+ import os from 'node:os';
+ import path from 'node:path';
+ import type { AddressInfo } from 'node:net';
+ import { startStaticServer, type StaticServerHandle } from './static-server.js';
+ 
++const WORKAGENT_RUNTIME_AUTH = {
++  tenantId: '11111111-1111-4111-8111-111111111111',
++  token: 'A'.repeat(43),
++} as const;
++
++async function rawRequestStatus(port: number, path: string, headers: string[] = []): Promise<string> {
++  return await new Promise((resolve, reject) => {
++    const socket = net.connect({ host: '127.0.0.1', port }, () => {
++      socket.write([`GET ${path} HTTP/1.1`, `Host: 127.0.0.1:${port}`, ...headers, '', ''].join('\r\n'));
++    });
++    let buffer = Buffer.alloc(0);
++    const timer = setTimeout(() => {
++      socket.destroy();
++      reject(new Error('timeout waiting for response'));
++    }, 3000);
++    timer.unref();
++    socket.on('data', (data) => {
++      buffer = Buffer.concat([buffer, data]);
++      if (buffer.indexOf('\r\n\r\n') < 0) return;
++      clearTimeout(timer);
++      const firstLine = buffer.subarray(0, buffer.indexOf(0x0a)).toString('ascii').trim();
++      socket.destroy();
++      resolve(firstLine);
++    });
++    socket.on('error', (error) => {
++      clearTimeout(timer);
++      reject(error);
++    });
++  });
++}
++
+ async function mkRendererFixture(): Promise<string> {
+   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ws-static-'));
+   await fs.writeFile(path.join(dir, 'index.html'), '<!doctype html><title>root</title>');
+@@ -224,6 +256,109 @@ describe('static-server', () => {
+     expect(r.status).toBe(502);
+   });
+ 
++  it('gates static, feedback, and API requests and reinjects only the trusted runtime header', async () => {
++    let receivedHeaders: http.IncomingHttpHeaders | undefined;
++    const backend = await startMockBackend((req, res) => {
++      receivedHeaders = req.headers;
++      res.writeHead(200, { 'content-type': 'application/json' });
++      res.end('{}');
++    });
++    stopBackend = backend.close;
++    handle = await startStaticServer({
++      staticDir,
++      dataDir,
++      backendPort: backend.port,
++      port: 0,
++      workAgentRuntimeAuth: WORKAGENT_RUNTIME_AUTH,
++    });
++
++    expect((await fetch(`${handle.localUrl}/`)).status).toBe(403);
++    expect(
++      (
++        await fetch(`${handle.localUrl}/api/workagent/feedback`, {
++          method: 'POST',
++          headers: { 'x-workagent-runtime-token': 'B'.repeat(43) },
++        })
++      ).status
++    ).toBe(403);
++    expect(
++      (
++        await fetch(`${handle.localUrl}/`, {
++          headers: { 'x-workagent-runtime-token': WORKAGENT_RUNTIME_AUTH.token },
++        })
++      ).status
++    ).toBe(200);
++
++    const apiResponse = await fetch(`${handle.localUrl}/api/anything`, {
++      headers: {
++        'x-workagent-runtime-token': WORKAGENT_RUNTIME_AUTH.token,
++        'x-workagent-cron-capability': 'forged-browser-capability',
++      },
++    });
++    expect(apiResponse.status).toBe(200);
++    expect(receivedHeaders?.['x-workagent-runtime-token']).toBe(WORKAGENT_RUNTIME_AUTH.token);
++    expect(receivedHeaders?.['x-workagent-cron-capability']).toBeUndefined();
++  });
++
++  it('gates raw WebSocket transport and strips forged WorkAgent capabilities before AionCore', async () => {
++    const { createHash } = await import('node:crypto');
++    let receivedHeaders: http.IncomingHttpHeaders | undefined;
++    const backendServer = http.createServer();
++    backendServer.on('upgrade', (req, socket) => {
++      receivedHeaders = req.headers;
++      const wsKey = (req.headers['sec-websocket-key'] as string) || '';
++      const accept = createHash('sha1')
++        .update(wsKey + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
++        .digest('base64');
++      socket.end(
++        'HTTP/1.1 101 Switching Protocols\r\n' +
++          'Upgrade: websocket\r\n' +
++          'Connection: Upgrade\r\n' +
++          `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
++      );
++    });
++    await new Promise<void>((resolve) => backendServer.listen(0, '127.0.0.1', resolve));
++    stopBackend = () => new Promise<void>((resolve) => backendServer.close(() => resolve()));
++    handle = await startStaticServer({
++      staticDir,
++      backendPort: (backendServer.address() as { port: number }).port,
++      port: 0,
++      workAgentRuntimeAuth: WORKAGENT_RUNTIME_AUTH,
++    });
++
++    const websocketHeaders = [
++      'Upgrade: websocket',
++      'Connection: Upgrade',
++      'Sec-WebSocket-Version: 13',
++      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
++    ];
++    expect(await rawRequestStatus(handle.port, '/ws', websocketHeaders)).toMatch(/ 403 /);
++    expect(
++      await rawRequestStatus(handle.port, '/ws', [...websocketHeaders, 'X-WorkAgent-Runtime-Token: ' + 'B'.repeat(43)])
++    ).toMatch(/ 403 /);
++    expect(
++      await rawRequestStatus(handle.port, '/ws', [
++        ...websocketHeaders,
++        `X-WorkAgent-Runtime-Token:  ${WORKAGENT_RUNTIME_AUTH.token}`,
++      ])
++    ).toMatch(/ 403 /);
++    expect(
++      await rawRequestStatus(handle.port, '/ws', [
++        ...websocketHeaders,
++        `X-WorkAgent-Runtime-Token: ${WORKAGENT_RUNTIME_AUTH.token} `,
++      ])
++    ).toMatch(/ 403 /);
++    expect(
++      await rawRequestStatus(handle.port, '/ws', [
++        ...websocketHeaders,
++        `X-WorkAgent-Runtime-Token: ${WORKAGENT_RUNTIME_AUTH.token}`,
++        'X-WorkAgent-Cron-Capability: forged-browser-capability',
++      ])
++    ).toMatch(/ 101 /);
++    expect(receivedHeaders?.['x-workagent-runtime-token']).toBe(WORKAGENT_RUNTIME_AUTH.token);
++    expect(receivedHeaders?.['x-workagent-cron-capability']).toBeUndefined();
++  });
++
+   it('/ws WebSocket upgrade is spliced to backend and 101 is relayed', async () => {
+     // Mock backend that accepts any WebSocket upgrade and replies with 101.
+     // We don't run a real ws protocol — just verify the upgrade response makes
+@@ -418,4 +553,36 @@ describe('static-server', () => {
+     expect(typeof h2.networkUrl === 'string' || h2.networkUrl === undefined).toBe(true);
+     await h2.stop();
+   });
++
++  it('stops promptly with an idle keep-alive connection and is idempotent', async () => {
++    const backend = await startMockBackend((_req, res) => res.end('nope'));
++    stopBackend = backend.close;
++    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
++    const socket = net.connect({ host: '127.0.0.1', port: handle.port });
++    await new Promise<void>((resolve, reject) => {
++      socket.once('connect', () => {
++        socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${handle!.port}\r\nConnection: keep-alive\r\n\r\n`);
++      });
++      socket.once('data', () => resolve());
++      socket.once('error', reject);
++    });
++
++    const clientClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
++    const firstStop = handle.stop();
++    const secondStop = handle.stop();
++    expect(secondStop).toBe(firstStop);
++    await Promise.race([
++      firstStop,
++      new Promise<never>((_resolve, reject) =>
++        setTimeout(() => reject(new Error('static server stop timed out with keep-alive client')), 1000)
++      ),
++    ]);
++    await Promise.race([
++      clientClosed,
++      new Promise<never>((_resolve, reject) =>
++        setTimeout(() => reject(new Error('keep-alive client did not close during shutdown')), 1000)
++      ),
++    ]);
++    handle = null;
++  });
+ });
+diff --git a/packages/web-host/src/types.ts b/packages/web-host/src/types.ts
+index c720c05..13e69e0 100644
+--- a/packages/web-host/src/types.ts
++++ b/packages/web-host/src/types.ts
+@@ -1,5 +1,7 @@
+ // Core types for @aionui/web-host (M3 interface contract, locked for M4-M8)
+ 
++import type { WorkAgentRuntimeAuth } from './workagent-runtime-auth.js';
++
+ /**
+  * App metadata injected by host environment (Electron or Node)
+  */
+@@ -38,6 +40,8 @@ export type WebHostOptions = {
+   dataDir?: string;
+   logDir?: string;
+   dirs?: BackendSystemDirs;
++  /** Ephemeral, in-memory transport credential supplied only by WorkAgent UserHost. */
++  workAgentRuntimeAuth?: WorkAgentRuntimeAuth;
+   backend: { kind: 'ownBackend'; resolveBackend: BackendBinaryResolver } | { kind: 'useExistingBackend'; port: number };
+ };
+ 
+diff --git a/srv/workagent/source/.tools/build/aionui-provenance.90MqLu/current/packages/web-host/src/workagent-runtime-auth.test.ts b/packages/web-host/src/workagent-runtime-auth.test.ts
+new file mode 100644
+index 0000000..2f61c13
+--- /dev/null
++++ b/packages/web-host/src/workagent-runtime-auth.test.ts
+@@ -0,0 +1,207 @@
++import { describe, expect, it, vi } from 'vitest';
++import {
++  WORKAGENT_BOOTSTRAP_CONFIG_ERROR,
++  WORKAGENT_RUNTIME_FD,
++  WORKAGENT_RUNTIME_FRAME_BYTES,
++  WORKAGENT_RUNTIME_FRAME_MAGIC,
++  WORKAGENT_RUNTIME_HEADER,
++  WorkAgentRuntimeConfigError,
++  buildWorkAgentRuntimeFrame,
++  consumeWorkAgentRuntimeAuth,
++  isCanonicalWorkAgentRuntimeToken,
++  resolveWorkAgentRuntimeTenant,
++  runtimeHeaderFromRawHeaders,
++  runtimeHeaderValueIsValid,
++  stripWorkAgentHeaders,
++  type WorkAgentRuntimeSocketIO,
++} from './workagent-runtime-auth.js';
++
++const TOKEN = 'A'.repeat(43);
++const TENANT = '11111111-1111-4111-8111-111111111111';
++
++function managedEnvironment(): NodeJS.ProcessEnv {
++  return {
++    PATH: '/bin',
++    WORKAGENT_TENANT_ID: TENANT,
++    WORKAGENT_RUNTIME_FD: String(WORKAGENT_RUNTIME_FD),
++  };
++}
++
++function fakeSocketIO(options?: {
++  first?: Buffer;
++  second?: Buffer | Error;
++  peerClosed?: boolean;
++  validateError?: Error;
++  closeError?: Error;
++}): WorkAgentRuntimeSocketIO & {
++  validate: ReturnType<typeof vi.fn>;
++  read: ReturnType<typeof vi.fn>;
++  peerClosed: ReturnType<typeof vi.fn>;
++  close: ReturnType<typeof vi.fn>;
++} {
++  const first = options?.first ?? buildWorkAgentRuntimeFrame(TOKEN);
++  const second = options?.second ?? Buffer.alloc(0);
++  let readIndex = 0;
++  return {
++    validate: vi.fn(() => {
++      if (options?.validateError) throw options.validateError;
++    }),
++    read: vi.fn((_fd: number, destination: Buffer) => {
++      const value = readIndex++ === 0 ? first : second;
++      if (value instanceof Error) throw value;
++      value.copy(destination, 0, 0, Math.min(value.byteLength, destination.byteLength));
++      return Math.min(value.byteLength, destination.byteLength);
++    }),
++    peerClosed: vi.fn(() => options?.peerClosed ?? true),
++    close: vi.fn(() => {
++      if (options?.closeError) throw options.closeError;
++    }),
++  };
++}
++
++async function expectStableBoundary(promise: Promise<unknown>): Promise<void> {
++  await expect(promise).rejects.toEqual(
++    expect.objectContaining({
++      name: 'WorkAgentRuntimeConfigError',
++      message: WORKAGENT_BOOTSTRAP_CONFIG_ERROR,
++    })
++  );
++}
++
++describe('WorkAgent runtime bootstrap contract', () => {
++  it('does not inspect an accidental standalone fd 3 when both markers are absent', async () => {
++    const socketIO = fakeSocketIO();
++    await expect(consumeWorkAgentRuntimeAuth({ PATH: '/bin' }, false, socketIO)).resolves.toBeUndefined();
++    expect(resolveWorkAgentRuntimeTenant({ PATH: '/bin' })).toBeUndefined();
++    expect(socketIO.validate).not.toHaveBeenCalled();
++    expect(socketIO.read).not.toHaveBeenCalled();
++    expect(socketIO.peerClosed).not.toHaveBeenCalled();
++    expect(socketIO.close).not.toHaveBeenCalled();
++  });
++
++  it('consumes one exact packet, closes fd 3, and keeps the token non-enumerable', async () => {
++    const environment = managedEnvironment();
++    const socketIO = fakeSocketIO();
++    const auth = await consumeWorkAgentRuntimeAuth(environment, false, socketIO);
++
++    expect(auth?.tenantId).toBe(TENANT);
++    expect(auth?.token).toBe(TOKEN);
++    expect(Object.keys(auth ?? {})).not.toContain('token');
++    expect(JSON.stringify(auth)).toBe(JSON.stringify({ tenantId: TENANT, token: '[REDACTED]' }));
++    expect(socketIO.validate).toHaveBeenCalledWith(WORKAGENT_RUNTIME_FD);
++    expect(socketIO.read).toHaveBeenCalledTimes(2);
++    expect(socketIO.peerClosed).toHaveBeenCalledWith(WORKAGENT_RUNTIME_FD);
++    expect(socketIO.close).toHaveBeenCalledTimes(1);
++    expect(environment.WORKAGENT_TENANT_ID).toBeUndefined();
++    expect(environment.WORKAGENT_RUNTIME_FD).toBeUndefined();
++  });
++
++  it.each([
++    { WORKAGENT_TENANT_ID: TENANT },
++    { WORKAGENT_RUNTIME_FD: '3' },
++    { WORKAGENT_RUNTIME_TOKEN: TOKEN },
++    { WORKAGENT_TENANT_ID: TENANT, WORKAGENT_RUNTIME_FD: '3', WORKAGENT_RUNTIME_TOKEN: TOKEN },
++    { WORKAGENT_TENANT_ID: '', WORKAGENT_RUNTIME_FD: '3' },
++    { WORKAGENT_TENANT_ID: ' ', WORKAGENT_RUNTIME_FD: '3' },
++    { WORKAGENT_TENANT_ID: `${TENANT}\n`, WORKAGENT_RUNTIME_FD: '3' },
++    { WORKAGENT_TENANT_ID: TENANT, WORKAGENT_RUNTIME_FD: '' },
++    { WORKAGENT_TENANT_ID: TENANT, WORKAGENT_RUNTIME_FD: '03' },
++    { WORKAGENT_TENANT_ID: TENANT, WORKAGENT_RUNTIME_FD: ' 3' },
++    { WORKAGENT_TENANT_ID: TENANT, WORKAGENT_RUNTIME_FD: '4' },
++  ])('fails closed and consumes invalid configuration markers: %o', async (values) => {
++    const environment: NodeJS.ProcessEnv = { PATH: '/bin', ...values };
++    const socketIO = fakeSocketIO();
++    await expectStableBoundary(consumeWorkAgentRuntimeAuth(environment, false, socketIO));
++    expect(environment.WORKAGENT_TENANT_ID).toBeUndefined();
++    expect(environment.WORKAGENT_RUNTIME_FD).toBeUndefined();
++    expect(environment.WORKAGENT_RUNTIME_TOKEN).toBeUndefined();
++    expect(socketIO.validate).not.toHaveBeenCalled();
++    expect(socketIO.close).not.toHaveBeenCalled();
++  });
++
++  it('rejects WorkAgent mode combined with a local backend request before touching fd 3', async () => {
++    const socketIO = fakeSocketIO();
++    await expectStableBoundary(consumeWorkAgentRuntimeAuth(managedEnvironment(), true, socketIO));
++    expect(socketIO.validate).not.toHaveBeenCalled();
++    expect(socketIO.close).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    ['descriptor validation failure', { validateError: new Error('invalid descriptor') }],
++    ['short packet', { first: Buffer.alloc(WORKAGENT_RUNTIME_FRAME_BYTES - 1) }],
++    ['oversized packet', { first: Buffer.alloc(64) }],
++    [
++      'wrong magic',
++      {
++        first: (() => {
++          const packet = buildWorkAgentRuntimeFrame(TOKEN);
++          packet[0] ^= 0xff;
++          return packet;
++        })(),
++      },
++    ],
++    [
++      'wrong encoded length',
++      {
++        first: (() => {
++          const packet = buildWorkAgentRuntimeFrame(TOKEN);
++          packet.writeUInt16BE(31, 8);
++          return packet;
++        })(),
++      },
++    ],
++    ['second packet', { second: Buffer.from([1]) }],
++    ['zero-length packet while peer remains open', { second: Buffer.alloc(0), peerClosed: false }],
++    ['second read failure', { second: new Error('read failed') }],
++  ] satisfies Array<[string, Parameters<typeof fakeSocketIO>[0]]>)(
++    'rejects %s with the stable boundary and closes fd 3',
++    async (_name, options) => {
++      const socketIO = fakeSocketIO(options);
++      await expectStableBoundary(consumeWorkAgentRuntimeAuth(managedEnvironment(), false, socketIO));
++      expect(socketIO.close).toHaveBeenCalledTimes(1);
++    }
++  );
++
++  it('preserves the stable boundary when descriptor cleanup itself fails', async () => {
++    const socketIO = fakeSocketIO({
++      validateError: new Error('invalid descriptor'),
++      closeError: new Error('close failed'),
++    });
++    await expectStableBoundary(consumeWorkAgentRuntimeAuth(managedEnvironment(), false, socketIO));
++  });
++
++  it('builds only canonical fixed-size credential frames', () => {
++    const frame = buildWorkAgentRuntimeFrame(TOKEN);
++    expect(frame.byteLength).toBe(WORKAGENT_RUNTIME_FRAME_BYTES);
++    expect(frame.subarray(0, 8).toString('latin1')).toBe(WORKAGENT_RUNTIME_FRAME_MAGIC);
++    expect(frame.readUInt16BE(8)).toBe(32);
++    expect(frame.subarray(10).toString('base64url')).toBe(TOKEN);
++    expect(isCanonicalWorkAgentRuntimeToken(TOKEN)).toBe(true);
++    for (const invalid of ['A'.repeat(42), `${'A'.repeat(42)}=`, `${'A'.repeat(42)}+`]) {
++      expect(isCanonicalWorkAgentRuntimeToken(invalid)).toBe(false);
++      expect(() => buildWorkAgentRuntimeFrame(invalid)).toThrow(WorkAgentRuntimeConfigError);
++    }
++  });
++
++  it('requires exactly one canonical constant-time comparable runtime header value', () => {
++    expect(runtimeHeaderFromRawHeaders(['Host', 'localhost', WORKAGENT_RUNTIME_HEADER, TOKEN])).toBe(TOKEN);
++    expect(
++      runtimeHeaderFromRawHeaders([WORKAGENT_RUNTIME_HEADER, TOKEN, WORKAGENT_RUNTIME_HEADER.toLowerCase(), TOKEN])
++    ).toBeUndefined();
++    expect(runtimeHeaderValueIsValid(TOKEN, TOKEN)).toBe(true);
++    expect(runtimeHeaderValueIsValid('B'.repeat(43), TOKEN)).toBe(false);
++    expect(runtimeHeaderValueIsValid('\u0141'.repeat(43), TOKEN)).toBe(false);
++    expect(runtimeHeaderValueIsValid(`${'A'.repeat(42)}\u0001`, TOKEN)).toBe(false);
++    expect(runtimeHeaderValueIsValid([TOKEN], TOKEN)).toBe(false);
++  });
++
++  it('strips the entire WorkAgent namespace before trusted reinjection', () => {
++    const headers: Record<string, string> = {
++      Accept: 'application/json',
++      'X-WorkAgent-Runtime-Token': 'forged',
++      'x-workagent-cron-capability': 'forged',
++    };
++    stripWorkAgentHeaders(headers);
++    expect(headers).toEqual({ Accept: 'application/json' });
++  });
++});
+diff --git a/srv/workagent/source/.tools/build/aionui-provenance.90MqLu/current/packages/web-host/src/workagent-runtime-auth.ts b/packages/web-host/src/workagent-runtime-auth.ts
+new file mode 100644
+index 0000000..0b31ee8
+--- /dev/null
++++ b/packages/web-host/src/workagent-runtime-auth.ts
+@@ -0,0 +1,208 @@
++import { timingSafeEqual } from 'node:crypto';
++import fs from 'node:fs';
++
++export const WORKAGENT_TENANT_ENV = 'WORKAGENT_TENANT_ID';
++export const WORKAGENT_RUNTIME_FD_ENV = 'WORKAGENT_RUNTIME_FD';
++export const WORKAGENT_RUNTIME_FD = 3;
++export const WORKAGENT_RUNTIME_HEADER = 'X-WorkAgent-Runtime-Token';
++export const WORKAGENT_BOOTSTRAP_CONFIG_ERROR = 'BOOTSTRAP_CONFIG_INVALID stage=config.workagent_runtime';
++export const WORKAGENT_RUNTIME_FRAME_MAGIC = 'WATOKN1\0';
++export const WORKAGENT_RUNTIME_FRAME_BYTES = 42;
++export const WORKAGENT_RUNTIME_TOKEN_BYTES = 32;
++const REMOVED_WORKAGENT_RUNTIME_TOKEN_ENV = 'WORKAGENT_RUNTIME_TOKEN';
++
++export type WorkAgentRuntimeAuth = Readonly<{
++  tenantId: string;
++  token: string;
++}>;
++
++export type WorkAgentRuntimeSocketIO = Readonly<{
++  validate: (fd: number) => Promise<void> | void;
++  read: (fd: number, buffer: Buffer) => number;
++  peerClosed: (fd: number) => Promise<boolean> | boolean;
++  close: (fd: number) => void;
++}>;
++
++export class WorkAgentRuntimeConfigError extends Error {
++  constructor() {
++    super(WORKAGENT_BOOTSTRAP_CONFIG_ERROR);
++    this.name = 'WorkAgentRuntimeConfigError';
++  }
++}
++
++function hasOwn(environment: NodeJS.ProcessEnv, name: string): boolean {
++  return Object.prototype.hasOwnProperty.call(environment, name) && environment[name] !== undefined;
++}
++
++function redactedRuntimeAuth(tenantId: string, token: string): WorkAgentRuntimeAuth {
++  const value = Object.create(null) as WorkAgentRuntimeAuth;
++  Object.defineProperties(value, {
++    tenantId: { value: tenantId, enumerable: true, writable: false, configurable: false },
++    token: { value: token, enumerable: false, writable: false, configurable: false },
++    toJSON: {
++      value: () => ({ tenantId, token: '[REDACTED]' }),
++      enumerable: false,
++      writable: false,
++      configurable: false,
++    },
++  });
++  return Object.freeze(value);
++}
++
++export function isCanonicalWorkAgentRuntimeToken(value: unknown): value is string {
++  if (typeof value !== 'string') return false;
++  if (!/^[A-Za-z0-9_-]{43}$/.test(value)) return false;
++  const decoded = Buffer.from(value, 'base64url');
++  return decoded.byteLength === 32 && decoded.toString('base64url') === value;
++}
++
++function workAgentTenantIdIsValid(value: unknown): value is string {
++  return (
++    typeof value === 'string' &&
++    value.length > 0 &&
++    value.trim().length > 0 &&
++    value.trim() === value &&
++    !/[\u0000-\u001f\u007f-\u009f]/.test(value)
++  );
++}
++
++export function workAgentRuntimeAuthIsValid(value: WorkAgentRuntimeAuth): boolean {
++  return (
++    workAgentTenantIdIsValid(value?.tenantId) &&
++    typeof value?.token === 'string' &&
++    isCanonicalWorkAgentRuntimeToken(value.token)
++  );
++}
++
++export function resolveWorkAgentRuntimeTenant(
++  environment: NodeJS.ProcessEnv,
++  localRequested = false
++): string | undefined {
++  const tenantPresent = hasOwn(environment, WORKAGENT_TENANT_ENV);
++  const fdPresent = hasOwn(environment, WORKAGENT_RUNTIME_FD_ENV);
++  const removedTokenPresent = hasOwn(environment, REMOVED_WORKAGENT_RUNTIME_TOKEN_ENV);
++  if (!tenantPresent && !fdPresent && !removedTokenPresent) return undefined;
++
++  const tenantId = environment[WORKAGENT_TENANT_ENV] ?? '';
++  if (
++    removedTokenPresent ||
++    !tenantPresent ||
++    !fdPresent ||
++    environment[WORKAGENT_RUNTIME_FD_ENV] !== String(WORKAGENT_RUNTIME_FD) ||
++    localRequested ||
++    !workAgentTenantIdIsValid(tenantId)
++  ) {
++    throw new WorkAgentRuntimeConfigError();
++  }
++  return tenantId;
++}
++
++function defaultRuntimeSocketIO(): WorkAgentRuntimeSocketIO {
++  return {
++    validate: async (fd) => {
++      const { validateInheritedRuntimeSocket } = await import('./runtime-socket-bootstrap.js');
++      await validateInheritedRuntimeSocket(fd, process.ppid, process.getuid?.());
++    },
++    read: (fd, buffer) => fs.readSync(fd, buffer, 0, buffer.byteLength, null),
++    peerClosed: async (fd) => {
++      const { runtimeSocketPeerClosed } = await import('./runtime-socket-bootstrap.js');
++      return await runtimeSocketPeerClosed(fd);
++    },
++    close: (fd) => fs.closeSync(fd),
++  };
++}
++
++export function buildWorkAgentRuntimeFrame(token: string): Buffer {
++  if (!isCanonicalWorkAgentRuntimeToken(token)) throw new WorkAgentRuntimeConfigError();
++  const raw = Buffer.from(token, 'base64url');
++  const frame = Buffer.alloc(WORKAGENT_RUNTIME_FRAME_BYTES);
++  try {
++    frame.write(WORKAGENT_RUNTIME_FRAME_MAGIC, 0, 'latin1');
++    frame.writeUInt16BE(WORKAGENT_RUNTIME_TOKEN_BYTES, 8);
++    raw.copy(frame, 10);
++    return frame;
++  } finally {
++    raw.fill(0);
++  }
++}
++
++/** Consume one exact credential packet from inherited fd 3 before loading the CLI. */
++export async function consumeWorkAgentRuntimeAuth(
++  environment: NodeJS.ProcessEnv,
++  localRequested = false,
++  socketIO?: WorkAgentRuntimeSocketIO
++): Promise<WorkAgentRuntimeAuth | undefined> {
++  let tenantId: string | undefined;
++  try {
++    tenantId = resolveWorkAgentRuntimeTenant(environment, localRequested);
++  } finally {
++    delete environment[WORKAGENT_TENANT_ENV];
++    delete environment[WORKAGENT_RUNTIME_FD_ENV];
++    delete environment[REMOVED_WORKAGENT_RUNTIME_TOKEN_ENV];
++  }
++  if (!tenantId) return undefined;
++
++  const packet = Buffer.alloc(64);
++  const secondPacket = Buffer.alloc(1);
++  const io = socketIO ?? defaultRuntimeSocketIO();
++  let closed = false;
++  try {
++    await io.validate(WORKAGENT_RUNTIME_FD);
++    const length = io.read(WORKAGENT_RUNTIME_FD, packet);
++    if (
++      length !== WORKAGENT_RUNTIME_FRAME_BYTES ||
++      packet.subarray(0, 8).toString('latin1') !== WORKAGENT_RUNTIME_FRAME_MAGIC ||
++      packet.readUInt16BE(8) !== WORKAGENT_RUNTIME_TOKEN_BYTES
++    ) {
++      throw new WorkAgentRuntimeConfigError();
++    }
++    if (io.read(WORKAGENT_RUNTIME_FD, secondPacket) !== 0 || !(await io.peerClosed(WORKAGENT_RUNTIME_FD))) {
++      throw new WorkAgentRuntimeConfigError();
++    }
++    io.close(WORKAGENT_RUNTIME_FD);
++    closed = true;
++    const token = packet.toString('base64url', 10, WORKAGENT_RUNTIME_FRAME_BYTES);
++    if (!isCanonicalWorkAgentRuntimeToken(token)) throw new WorkAgentRuntimeConfigError();
++    return redactedRuntimeAuth(tenantId, token);
++  } catch {
++    throw new WorkAgentRuntimeConfigError();
++  } finally {
++    if (!closed) {
++      try {
++        io.close(WORKAGENT_RUNTIME_FD);
++      } catch {
++        // Startup is already failing closed; never replace the stable boundary.
++      }
++    }
++    packet.fill(0);
++    secondPacket.fill(0);
++  }
++}
++
++export function runtimeHeaderValueIsValid(value: string | string[] | undefined, expectedToken: string): boolean {
++  if (
++    typeof value !== 'string' ||
++    !isCanonicalWorkAgentRuntimeToken(value) ||
++    !isCanonicalWorkAgentRuntimeToken(expectedToken)
++  )
++    return false;
++  const actual = Buffer.from(value, 'ascii');
++  const expected = Buffer.from(expectedToken, 'ascii');
++  return actual.byteLength === expected.byteLength && timingSafeEqual(actual, expected);
++}
++
++export function runtimeHeaderFromRawHeaders(rawHeaders: readonly string[]): string | undefined {
++  let value: string | undefined;
++  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
++    if (rawHeaders[index].toLowerCase() !== WORKAGENT_RUNTIME_HEADER.toLowerCase()) continue;
++    if (value !== undefined) return undefined;
++    value = rawHeaders[index + 1];
++  }
++  return value;
++}
++
++export function stripWorkAgentHeaders(headers: Record<string, string | string[] | undefined>): void {
++  for (const name of Object.keys(headers)) {
++    if (name.toLowerCase().startsWith('x-workagent-')) delete headers[name];
++  }
++}
+diff --git a/srv/workagent/source/.tools/build/aionui-provenance.90MqLu/current/packages/web-host/tests/runtime-artifact-smoke.ts b/packages/web-host/tests/runtime-artifact-smoke.ts
+new file mode 100644
+index 0000000..1622231
+--- /dev/null
++++ b/packages/web-host/tests/runtime-artifact-smoke.ts
+@@ -0,0 +1,310 @@
++import { spawn, type ChildProcess } from 'node:child_process';
++import fs from 'node:fs';
++import path from 'node:path';
++import {
++  WORKAGENT_RUNTIME_FD_ENV,
++  WORKAGENT_RUNTIME_FRAME_BYTES,
++  WORKAGENT_RUNTIME_HEADER,
++  WORKAGENT_TENANT_ENV,
++  consumeWorkAgentRuntimeAuth,
++} from '../src/workagent-runtime-auth.js';
++import { createRuntimeSocketBootstrap } from '../src/runtime-socket-bootstrap.js';
++
++const TOKEN = 'A'.repeat(43);
++const TENANT = '11111111-1111-4111-8111-111111111111';
++const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
++
++function argumentAfter(name: string): string {
++  const index = process.argv.indexOf(name);
++  const value = index >= 0 ? process.argv[index + 1] : undefined;
++  if (!value) throw new Error(`missing ${name}`);
++  return value;
++}
++
++function cleanEnvironment(): NodeJS.ProcessEnv {
++  const environment = { ...process.env };
++  delete environment[WORKAGENT_TENANT_ENV];
++  delete environment[WORKAGENT_RUNTIME_FD_ENV];
++  delete environment.WORKAGENT_RUNTIME_TOKEN;
++  return environment;
++}
++
++async function runFakeAionCore(): Promise<void> {
++  const auth = await consumeWorkAgentRuntimeAuth(process.env);
++  if (!auth) throw new Error('fake AionCore requires WorkAgent runtime auth');
++  const server = Bun.serve({
++    hostname: '127.0.0.1',
++    port: 0,
++    fetch(request) {
++      if (request.headers.get(WORKAGENT_RUNTIME_HEADER) !== auth.token) {
++        return new Response('forbidden', { status: 403 });
++      }
++      if (new URL(request.url).pathname === '/health') return new Response('ok');
++      return new Response('not found', { status: 404 });
++    },
++  });
++  console.log(`AIONCORE_LISTENING ${JSON.stringify({ host: '127.0.0.1', port: server.port })}`);
++  console.log(`WORKAGENT_SMOKE_CORE_PID ${process.pid}`);
++  const stop = (): void => {
++    server.stop(true);
++    process.exit(0);
++  };
++  process.once('SIGINT', stop);
++  process.once('SIGTERM', stop);
++}
++
++type CapturedChild = Readonly<{
++  child: ChildProcess;
++  output: () => string;
++  completed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
++}>;
++
++function spawnCaptured(command: string, arguments_: string[], options: Parameters<typeof spawn>[2]): CapturedChild {
++  const child = spawn(command, arguments_, options);
++  let output = '';
++  let outputFailure: Error | undefined;
++  const append = (chunk: Buffer): void => {
++    if (outputFailure) return;
++    if (Buffer.byteLength(output) + chunk.byteLength > MAX_OUTPUT_BYTES) {
++      outputFailure = new Error('artifact smoke output exceeded its bound');
++      child.kill('SIGKILL');
++      return;
++    }
++    output += chunk.toString();
++  };
++  child.stdout?.on('data', append);
++  child.stderr?.on('data', append);
++  const completed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
++    child.once('error', reject);
++    child.once('close', (code, signal) => {
++      if (outputFailure) reject(outputFailure);
++      else resolve({ code, signal });
++    });
++  });
++  return { child, output: () => output, completed };
++}
++
++async function waitForManagedReady(process_: CapturedChild): Promise<{ frontendURL: string; corePID: number }> {
++  const deadline = Date.now() + 30_000;
++  while (Date.now() < deadline) {
++    const output = process_.output();
++    const frontend = /^  Local  : (http:\/\/127\.0\.0\.1:[1-9][0-9]*\/?)/m.exec(output);
++    const core = /\[aioncore\] WORKAGENT_SMOKE_CORE_PID ([1-9][0-9]*)/.exec(output);
++    if (frontend && core && output.includes('AionUi WebUI is ready')) {
++      return { frontendURL: frontend[1], corePID: Number(core[1]) };
++    }
++    if (process_.child.exitCode !== null || process_.child.signalCode !== null) {
++      throw new Error(`managed artifact exited before readiness\n${output}`);
++    }
++    await Bun.sleep(50);
++  }
++  throw new Error(`managed artifact readiness timed out\n${process_.output()}`);
++}
++
++function verifySecretAbsent(pid: number): void {
++  for (const name of ['cmdline', 'environ']) {
++    const content = fs.readFileSync(path.join('/proc', String(pid), name));
++    try {
++      if (content.includes(Buffer.from(TOKEN)) || content.includes(Buffer.from('WORKAGENT_RUNTIME_TOKEN='))) {
++        throw new Error(`runtime token appeared in ${pid}/${name}`);
++      }
++    } finally {
++      content.fill(0);
++    }
++  }
++}
++
++function processStartTime(pid: number): string | undefined {
++  let content: string;
++  try {
++    content = fs.readFileSync(path.join('/proc', String(pid), 'stat'), 'utf8');
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
++    throw error;
++  }
++  const closing = content.lastIndexOf(')');
++  const fields =
++    closing >= 0
++      ? content
++          .slice(closing + 2)
++          .trim()
++          .split(/\s+/)
++      : [];
++  if (fields.length < 20 || !/^\d+$/.test(fields[19])) throw new Error('artifact smoke process identity is invalid');
++  return fields[19];
++}
++
++async function duplicateDescriptor(fd: number): Promise<number> {
++  // @ts-expect-error Bun-only builtin used by the pinned Linux smoke toolchain.
++  const { dlopen, FFIType } = await import('bun:ffi');
++  const libc = dlopen('libc.so.6', {
++    fcntl: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
++  });
++  try {
++    const duplicate = libc.symbols.fcntl(fd, 1030, 4); // F_DUPFD_CLOEXEC
++    if (duplicate < 0) throw new Error('duplicate standalone fd 3 observer');
++    return duplicate;
++  } finally {
++    libc.close();
++  }
++}
++
++async function stopManaged(process_: CapturedChild): Promise<void> {
++  if (!process_.child.pid || process_.child.exitCode !== null || process_.child.signalCode !== null) return;
++  try {
++    process.kill(-process_.child.pid, 'SIGTERM');
++  } catch {
++    process_.child.kill('SIGTERM');
++  }
++  const stopped = await Promise.race([process_.completed.then(() => true), Bun.sleep(10_000).then(() => false)]);
++  if (stopped) return;
++  try {
++    process.kill(-process_.child.pid, 'SIGKILL');
++  } catch {
++    process_.child.kill('SIGKILL');
++  }
++  await process_.completed;
++}
++
++async function enforceBackendStopped(pid: number, expectedStartTime: string): Promise<void> {
++  for (let attempt = 0; attempt < 100; attempt++) {
++    const current = processStartTime(pid);
++    if (current === undefined || current !== expectedStartTime) return;
++    await Bun.sleep(50);
++  }
++  let cleanupSignal: NodeJS.Signals = 'SIGTERM';
++  try {
++    process.kill(-pid, cleanupSignal);
++  } catch {
++    process.kill(pid, cleanupSignal);
++  }
++  for (let attempt = 0; attempt < 20; attempt++) {
++    const current = processStartTime(pid);
++    if (current === undefined || current !== expectedStartTime) {
++      throw new Error('managed artifact left its backend process alive after shutdown');
++    }
++    await Bun.sleep(50);
++  }
++  cleanupSignal = 'SIGKILL';
++  try {
++    process.kill(-pid, cleanupSignal);
++  } catch {
++    process.kill(pid, cleanupSignal);
++  }
++  throw new Error('managed artifact left its backend process alive after shutdown');
++}
++
++async function runArtifactSmoke(): Promise<void> {
++  const artifact = path.resolve(argumentAfter('--artifact'));
++  const staticRoot = path.resolve(argumentAfter('--static-root'));
++  const scratch = path.resolve(argumentAfter('--scratch'));
++  for (const target of [artifact, path.join(staticRoot, 'index.html')]) {
++    if (!fs.statSync(target).isFile()) throw new Error(`smoke input is not a file: ${target}`);
++  }
++  fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
++
++  const standaloneSocket = await createRuntimeSocketBootstrap();
++  const observerFD = await duplicateDescriptor(standaloneSocket.childFd);
++  const standalone = spawnCaptured(artifact, ['version'], {
++    env: cleanEnvironment(),
++    stdio: ['ignore', 'pipe', 'pipe', standaloneSocket.childFd],
++  });
++  standaloneSocket.deliver(TOKEN);
++  const standaloneExit = await standalone.completed;
++  const unreadPacket = Buffer.alloc(64);
++  let unreadLength = -1;
++  try {
++    unreadLength = fs.readSync(observerFD, unreadPacket, 0, unreadPacket.byteLength, null);
++  } finally {
++    fs.closeSync(observerFD);
++    unreadPacket.fill(0);
++  }
++  if (standaloneExit.code !== 0 || standalone.output().trim() !== '2.1.0-beta.editfork.29') {
++    throw new Error(`standalone fd3 version smoke failed\n${standalone.output()}`);
++  }
++  if (unreadLength !== WORKAGENT_RUNTIME_FRAME_BYTES) {
++    throw new Error(`standalone mode consumed malicious readable fd3: remaining=${unreadLength}`);
++  }
++
++  const dataRoot = path.join(scratch, 'data');
++  const logRoot = path.join(scratch, 'logs');
++  const workRoot = path.join(scratch, 'work');
++  for (const directory of [dataRoot, logRoot, workRoot]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
++  const managedSocket = await createRuntimeSocketBootstrap();
++  const environment = cleanEnvironment();
++  environment[WORKAGENT_TENANT_ENV] = TENANT;
++  environment[WORKAGENT_RUNTIME_FD_ENV] = '3';
++  environment.AIONUI_OPEN_BROWSER = '0';
++  const managed = spawnCaptured(
++    artifact,
++    [
++      'start',
++      '--port',
++      '0',
++      '--no-open',
++      '--data-dir',
++      dataRoot,
++      '--log-dir',
++      logRoot,
++      '--work-dir',
++      workRoot,
++      '--static-dir',
++      staticRoot,
++      '--backend-bin',
++      process.execPath,
++    ],
++    {
++      cwd: workRoot,
++      detached: true,
++      env: environment,
++      stdio: ['ignore', 'pipe', 'pipe', managedSocket.childFd],
++    }
++  );
++  if (!managed.child.pid) throw new Error('managed artifact did not return a PID');
++  let corePID = 0;
++  let coreStartTime = '';
++  try {
++    managedSocket.deliver(TOKEN);
++    const ready = await waitForManagedReady(managed);
++    corePID = ready.corePID;
++    coreStartTime = processStartTime(corePID) ?? '';
++    if (!coreStartTime) throw new Error('managed artifact backend identity disappeared before verification');
++    // The readiness line is emitted immediately before the CLI installs its
++    // signal handlers. Cross that tiny boundary before exercising shutdown.
++    await Bun.sleep(250);
++    if (managed.output().includes(TOKEN)) throw new Error('runtime token appeared in managed artifact output');
++    verifySecretAbsent(managed.child.pid);
++    verifySecretAbsent(ready.corePID);
++
++    const missing = await fetch(ready.frontendURL, { redirect: 'manual' });
++    const wrong = await fetch(ready.frontendURL, {
++      redirect: 'manual',
++      headers: { [WORKAGENT_RUNTIME_HEADER]: 'B'.repeat(43) },
++    });
++    const authenticated = await fetch(ready.frontendURL, {
++      redirect: 'manual',
++      headers: { [WORKAGENT_RUNTIME_HEADER]: TOKEN },
++    });
++    await Promise.all([missing.body?.cancel(), wrong.body?.cancel(), authenticated.body?.cancel()]);
++    if (missing.status !== 403 || wrong.status !== 403 || authenticated.status !== 200) {
++      throw new Error(
++        `managed frontend auth statuses missing=${missing.status} wrong=${wrong.status} authenticated=${authenticated.status}`
++      );
++    }
++  } finally {
++    let stopError: unknown;
++    try {
++      await stopManaged(managed);
++    } catch (error) {
++      stopError = error;
++    }
++    if (corePID && coreStartTime) await enforceBackendStopped(corePID, coreStartTime);
++    if (stopError) throw stopError;
++  }
++}
++
++const action = process.argv.includes('--orchestrate') ? runArtifactSmoke() : runFakeAionCore();
++action.catch((error) => {
++  console.error(error instanceof Error ? error.message : 'unknown runtime artifact smoke failure');
++  process.exit(1);
++});
+diff --git a/packages/web-host/tests/start-web-host.test.ts b/packages/web-host/tests/start-web-host.test.ts
+index 0c233a2..7fdef9a 100644
+--- a/packages/web-host/tests/start-web-host.test.ts
++++ b/packages/web-host/tests/start-web-host.test.ts
+@@ -15,26 +15,32 @@ describe('startWebHost', () => {
+   });
+ 
+   test('Returns handle without initialPassword', async () => {
++    const startBackend = vi.fn().mockResolvedValue({
++      port: 55555,
++      stop: vi.fn().mockResolvedValue(undefined),
++    });
++    const startStaticServer = vi.fn().mockResolvedValue({
++      port: 33000,
++      url: 'http://127.0.0.1:33000',
++      localUrl: 'http://127.0.0.1:33000',
++      stop: vi.fn().mockResolvedValue(undefined),
++    });
+     // Mock backend-launcher
+     vi.doMock('../src/backend-launcher.js', () => ({
+-      startBackend: vi.fn().mockResolvedValue({
+-        port: 55555,
+-        stop: vi.fn().mockResolvedValue(undefined),
+-      }),
++      startBackend,
+     }));
+ 
+     // Mock static-server
+     vi.doMock('../src/static-server.js', () => ({
+-      startStaticServer: vi.fn().mockResolvedValue({
+-        port: 33000,
+-        url: 'http://127.0.0.1:33000',
+-        localUrl: 'http://127.0.0.1:33000',
+-        stop: vi.fn().mockResolvedValue(undefined),
+-      }),
++      startStaticServer,
+     }));
+ 
+     const { startWebHost } = await import('../src/index.js');
+ 
++    const workAgentRuntimeAuth = {
++      tenantId: '11111111-1111-4111-8111-111111111111',
++      token: 'A'.repeat(43),
++    } as const;
+     const handle = await startWebHost({
+       app: {
+         version: '1.0.0',
+@@ -43,6 +49,7 @@ describe('startWebHost', () => {
+         userDataPath: '/tmp/test-data',
+       },
+       staticDir: '/tmp/static',
++      workAgentRuntimeAuth,
+       backend: {
+         kind: 'ownBackend',
+         resolveBackend: () => '/bin/backend',
+@@ -54,6 +61,8 @@ describe('startWebHost', () => {
+     expect('initialPassword' in handle).toBe(false);
+     expect(handle.port).toBe(33000);
+     expect(handle.backendPort).toBe(55555);
++    expect(startBackend).toHaveBeenCalledWith(expect.objectContaining({ workAgentRuntimeAuth }));
++    expect(startStaticServer).toHaveBeenCalledWith(expect.objectContaining({ workAgentRuntimeAuth }));
+ 
+     await handle.stop();
+ 
+diff --git a/tests/unit/skills/SkillsHubSettings.dom.test.tsx b/tests/unit/skills/SkillsHubSettings.dom.test.tsx
+index b101227..b4b0484 100644
+--- a/tests/unit/skills/SkillsHubSettings.dom.test.tsx
++++ b/tests/unit/skills/SkillsHubSettings.dom.test.tsx
+@@ -196,7 +196,7 @@ describe('SkillsHubSettings', () => {
+     render(<SkillsHubSettings withWrapper={false} />);
+ 
+     await waitFor(() => expect(screen.getByTestId('skill-import-history-page')).toBeInTheDocument());
+-    expect(screen.getByText('parent-pack')).toBeInTheDocument();
++    expect(await screen.findByText('parent-pack')).toBeInTheDocument();
+     expect(screen.getByText(/beta-skill/)).toBeInTheDocument();
+     expect(screen.getAllByText(/movie\.bin/).length).toBeGreaterThan(0);
+   });
+@@ -228,6 +228,7 @@ describe('SkillsHubSettings', () => {
+     render(<SkillsHubSettings withWrapper={false} />);
+ 
+     await waitFor(() => expect(screen.getByTestId('skill-import-history-page')).toBeInTheDocument());
++    expect(await screen.findByText('parent-pack')).toBeInTheDocument();
+     expect(screen.queryByTestId('my-skills-section')).not.toBeInTheDocument();
+     expect(screen.queryByTestId('input-search-my-skills')).not.toBeInTheDocument();
+     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument();
+@@ -255,7 +256,7 @@ describe('SkillsHubSettings', () => {
+     render(<SkillsHubSettings withWrapper={false} />);
+ 
+     await waitFor(() => expect(screen.getByTestId('skill-import-history-page')).toBeInTheDocument());
+-    expect(screen.getByText('Repair: remove the oversized file and import again')).toBeInTheDocument();
++    expect(await screen.findByText('Repair: remove the oversized file and import again')).toBeInTheDocument();
+     expect(screen.getAllByText(/movie\.bin/).length).toBeGreaterThan(0);
+     expect(screen.getAllByText(/11 MB/).length).toBeGreaterThan(0);
+     expect(screen.getAllByText(/10 MB/).length).toBeGreaterThan(0);
+@@ -282,6 +283,7 @@ describe('SkillsHubSettings', () => {
+     render(<SkillsHubSettings withWrapper={false} />);
+ 
+     await waitFor(() => expect(screen.getByTestId('skill-import-history-page')).toBeInTheDocument());
++    expect(await screen.findByText('parent-pack')).toBeInTheDocument();
+     expect(screen.queryByText('Technical info')).not.toBeInTheDocument();
+     expect(screen.queryByText('SKILL_IMPORT_FILE_TOO_LARGE')).not.toBeInTheDocument();
+   });
+@@ -303,7 +305,7 @@ describe('SkillsHubSettings', () => {
+     render(<SkillsHubSettings withWrapper={false} />);
+ 
+     await waitFor(() => expect(screen.getByTestId('skill-import-history-page')).toBeInTheDocument());
+-    expect(screen.getByText('Repair: create the zip again and import it')).toBeInTheDocument();
++    expect(await screen.findByText('Repair: create the zip again and import it')).toBeInTheDocument();
+     expect(screen.queryByText('Repair: update the skill files and import again')).not.toBeInTheDocument();
+   });
+ 

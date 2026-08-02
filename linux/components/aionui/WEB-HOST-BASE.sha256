@@ -1,0 +1,10 @@
+922ac46004a7eba3681b6168eb4c112f69b913a00aca5deb86a5b6cb0e7ed31d  packages/web-cli/src/index.ts
+47e41b536b8812815199c7916097fbd82a566096cd7d3e50fd666721f6a2086d  packages/web-host/package.json
+aaec2e67184cf33b1dd1db0d9328997097819994d5d92b166e6a6107554d62e3  packages/web-host/src/backend-launcher.test.ts
+8a8e28d56641aa422cc68e08eee2a98c636cae792079472b496bcdf7477d2ccd  packages/web-host/src/backend-launcher.ts
+b7a748764ea250ce02b8e409ad8cf0fecf7952d76c75f8a49507d59b540dda24  packages/web-host/src/index.ts
+0b956614449cf8eeef70d9df38c36a0a21a12fbaf9e032ebbf310267c76aa15b  packages/web-host/src/static-server.ts
+bee5ece038d92813a1b75c7ef177b2052caa63a3be527f28825142d060f98156  packages/web-host/src/static-server.unit.test.ts
+468eac736cb084c6128e5706046127d38e762ce1d3968005f0c3e640d9168cc4  packages/web-host/src/types.ts
+cb346af5351e1c5249152e1e7841b8eae73054c6928de0c23696694d55f8aa08  packages/web-host/tests/start-web-host.test.ts
+e622cd293137596ed4f28097913422080549e3aa3c86a3556a829c1f08d03a31  tests/unit/skills/SkillsHubSettings.dom.test.tsx

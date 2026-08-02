@@ -1,0 +1,59 @@
+[Unit]
+Description=WorkAgent2 production health metric collector
+After=network-online.target srv-workagent-users.mount
+Wants=network-online.target
+ConditionFileIsExecutable=/opt/workagent/control/bin/workagent-healthcheck
+ConditionFileIsExecutable=/usr/libexec/workagent-fixed-root-exec-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionPathExists=/opt/workagent/control/manifest.json
+ConditionPathExists=/run/workagent/release-config.lock
+ConditionPathExists=/run/workagent/activation.lock
+ConditionPathExists=/opt/workagent/control.lock
+ConditionPathIsDirectory=/var/lib/node_exporter/textfile_collector
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# OpenFile order is a startup ABI: fd 3 is catalog, fd 4 is control.
+OpenFile=/run/workagent/release-config.lock:workagent-config-lock:read-only
+OpenFile=/opt/workagent/control.lock:workagent-control-release-lock:read-only
+ExecStartPre=+/usr/libexec/workagent-core-activation-admission-v1
+ExecStartPre=+/usr/bin/flock --shared /run/workagent/release-config.lock /opt/workagent/control/bin/workagent-release verify --root /opt/workagent/control --scope portal --required-executable bin/workagent-healthcheck --required-executable bin/workagent-release
+ExecStart=/usr/libexec/workagent-fixed-root-exec-v1 healthcheck /opt/workagent/control/bin/workagent-healthcheck /var/lib/node_exporter/textfile_collector/workagent_host.prom
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workagent-healthcheck
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_ADMIN
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+
+MemoryMax=128M
+CPUQuota=50%
+TasksMax=64

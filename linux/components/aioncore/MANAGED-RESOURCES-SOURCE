@@ -1,0 +1,7 @@
+Prepared by AionCore v0.1.42-editfork.10 on linux-x64 from the official Node.js v24.11.0 linux-x64 archive and exact npm roots @agentclientprotocol/codex-acp@1.1.2, @openai/codex@0.144.4, and @agentclientprotocol/claude-agent-acp@0.39.0.
+
+The AionCore 0.1.42 compatibility directory remains named 0.16.0-aion-fork-steer.6, but its runtime manifest resolves node_modules/@agentclientprotocol/codex-acp/dist/index.js. The unmodified 1.1.2 npm tarball was copied read-only from the Windows migration source and is byte-identical to the official npm package. AionUi 2.1.0-beta.editfork.20's checked-in fork/steer patch is applied only after the exact base entrypoint hash passes; its exact patched hash and real ACP stdin/stdout fork/steer route behavior are then gated.
+
+Generated package-lock integrity records are retained as the transitive component inventory. The Codex ACP dist entrypoint is the upstream self-contained production bundle, so duplicate unbundled transitive code, declarations, source maps, tests, and docs are removed while every embedded dependency license text is retained under licenses/npm. Signed-release symlinks are replaced with regular in-tree launchers. Node headers, documentation, Corepack, and the non-target Claude musl optional binary are intentionally excluded; Node/npm/npx, managed Codex 0.144.4, and the OpenCloudOS glibc Claude binary are retained and smoke-tested.
+
+Canonical managed-resource tree SHA-256: 4131c117b99b83d1c36980417ba4f9f1d860500e711ad54fea9ae007d7c9d567

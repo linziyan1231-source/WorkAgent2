@@ -1,0 +1,35 @@
+title = "WorkAgent2 combined repository secret-scan policy"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = "Synthetic CLIProxy API keys used only by deterministic Go tests"
+  condition = "AND"
+  regexTarget = "secret"
+  paths = ['''(?:^|/)internal/(?:cliproxy|modelbootstrap|userhost)/.*_test\.go$''']
+  regexes = ['''^cpa_(?:abcdefghijklmnopqrstuvwxyz012345|zyxwvutsrqponmlkjihgfedcba987654)$''']
+
+  [[rules.allowlists]]
+  description = "RFC 6455 sample nonce in WebSocket tests and the byte-pinned AionUi patch"
+  condition = "AND"
+  regexTarget = "secret"
+  paths = ['''(?:^|/)(?:internal/portal/server_test\.go|linux/components/aionui/aionui-webhost-workagent-runtime-auth\.patch)$''']
+  regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
+
+  [[rules.allowlists]]
+  description = "Public SHA-256 provenance field in the byte-preserved Windows candidate manifest"
+  condition = "AND"
+  regexTarget = "match"
+  paths = ['''(?:^|/)linux/third_party/cliproxyapi/windows-candidate-manifest\.json$''']
+  regexes = ['''^per_key_models_patch_sha256":\s*"[0-9a-f]{64}"$''']
+
+  [[rules.allowlists]]
+  description = "Public SHA-256 pin for the audited Google Linux signing-key file"
+  condition = "AND"
+  regexTarget = "match"
+  paths = ['''(?:^|/)linux/(?:scripts/verify-host-rpms\.sh|admin/verify-host-rpms)$''']
+  regexes = ['''^expected_google_key_sha256=54dea5f6c2a26091578cf52a999cebc6b64df478d37ad4dce96376b711e3b27c$''']

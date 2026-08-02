@@ -1,0 +1,9 @@
+component=@anthropic-ai/claude-agent-sdk
+version=0.3.156
+npm_integrity=sha512-6nM/Dj+VMds52UXJ2YaV4IKhYamlUqN0HtdDrFzYz5lvPMpDS935qD8YZDAUpy+ltdoD6PJMd1V/CKFY3/oWCQ==
+platform_component=@anthropic-ai/claude-agent-sdk-linux-x64
+platform_version=0.3.156
+platform_npm_integrity=sha512-ymhrdlbWoYvTACUdaGdhrEv+ZMfwXLsf0BRLkr/IvY5aqybP7URzWmmZGOtDQpqkT/8xu/UCGqUYH3woJwUxfg==
+package_license=SEE LICENSE IN README.md
+license_member=node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md
+license_sha256=8ce94b9478bb9868f9641f818e06cd722fbe55d4c22e2d2ed11971b20146173a

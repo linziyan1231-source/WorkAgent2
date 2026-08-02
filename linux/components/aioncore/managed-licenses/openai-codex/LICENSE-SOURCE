@@ -1,0 +1,9 @@
+component=@openai/codex
+version=0.144.4
+repository=https://github.com/openai/codex.git
+tag=rust-v0.144.4
+commit=8c68d4c
+npm_integrity=sha512-DTHzYatlKq9dw55E0/HsbK4tRCEKabuJ10ybbqpsG8gVv/kvwEdg3Z4OI3cvLXKa21xkIa4lkGlZoO/HmqmFFw==
+platform_npm_integrity=sha512-2jxrmV6+/7eBNdg5uhhmOEPFu2o28eYY/ClLzWhSBHH8uo3f2KA1z9JQcVtwlbToW03nEPlEzYNYfCF1UBqsVQ==
+license_url=https://raw.githubusercontent.com/openai/codex/rust-v0.144.4/LICENSE
+license_sha256=d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc

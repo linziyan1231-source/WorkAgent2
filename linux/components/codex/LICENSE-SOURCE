@@ -1,0 +1,6 @@
+Official upstream source: https://github.com/openai/codex/blob/rust-v0.144.4/LICENSE
+Raw pinned input: https://raw.githubusercontent.com/openai/codex/rust-v0.144.4/LICENSE
+Release tag: rust-v0.144.4
+Release commit: 8c68d4c
+SHA-256: d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc
+The independently pinned official npm package.json declares Apache-2.0.

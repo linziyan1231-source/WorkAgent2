@@ -1,0 +1,21 @@
+[Unit]
+Description=WorkAgent2 UserHost socket for tenant %i
+Requires=workagent-tenant-catalog-ready.target
+After=workagent-tenant-catalog-ready.target
+ConditionFileIsExecutable=/usr/libexec/workagent-recovery-activation-admission-v1
+ConditionFileIsExecutable=/usr/libexec/workagent-core-activation-admission-v1
+ConditionPathExists=/run/workagent/activation.lock
+
+[Socket]
+ListenStream=/run/workagent/users/%i.sock
+FileDescriptorName=workagent-userhost-socket
+SocketUser=workagent
+SocketGroup=workagent
+SocketMode=0600
+DirectoryMode=0700
+Backlog=64
+RemoveOnStop=yes
+Service=workagent-userhost@%i.service
+
+[Install]
+WantedBy=sockets.target

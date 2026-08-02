@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily WorkAgent2 verified encrypted backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Shanghai
+RandomizedDelaySec=30m
+Persistent=true
+Unit=workagent-backup.service
+
+[Install]
+WantedBy=timers.target

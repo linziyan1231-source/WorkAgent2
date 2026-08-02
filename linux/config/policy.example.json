@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "policy_id": "workagent-deny-all-v1",
+  "default_action": "deny",
+  "models": [],
+  "aliases": {},
+  "pricing": {},
+  "quotas": {},
+  "approval_required": true
+}
