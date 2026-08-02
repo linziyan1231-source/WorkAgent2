@@ -171,7 +171,7 @@ func (s *notificationSource) fetchOnce(ctx context.Context) ([]portalNotificatio
 	}
 	request.Header.Set("Accept", "application/json, text/plain; q=0.8")
 	request.Header.Set("Authorization", "Bearer "+string(s.token))
-	request.Header.Set("User-Agent", "WorkAgent-AI-Portal-Notification/1.0")
+	request.Header.Set("User-Agent", "WorkAgent2-Portal-Notification/1.0")
 	response, err := s.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {

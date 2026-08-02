@@ -651,7 +651,7 @@ func TestRollbackRejectsHistoricalReleaseThatCannotReadActiveData(t *testing.T) 
 
 func TestRequiredProductionComponentsAreScoped(t *testing.T) {
 	runtimeComponents := ProductionRuntimeComponentEvidence()
-	if runtimeComponents["aionui"].Version != "2.1.0-beta.editfork.21" || runtimeComponents["aioncore"].Version != "v0.1.42-editfork.10" || runtimeComponents["noble-hashes"].Version != "2.2.0" || runtimeComponents["codex"].Version != "0.144.4" || runtimeComponents["kimi-code"].Version != "0.29.1-fork-steer.1" || runtimeComponents["python"].Version != "3.13.13" || runtimeComponents["cliproxyapi"].Version != "" {
+	if runtimeComponents["aionui"].Version != "2.1.0-beta.editfork.29" || runtimeComponents["aioncore"].Version != "v0.1.42-editfork.15" || runtimeComponents["noble-hashes"].Version != "2.2.0" || runtimeComponents["codex"].Version != "0.144.4" || runtimeComponents["kimi-code"].Version != "0.29.1-fork-steer.1" || runtimeComponents["python"].Version != "3.13.13" || runtimeComponents["cliproxyapi"].Version != "" {
 		t.Fatalf("runtime scope is not isolated: %#v", runtimeComponents)
 	}
 	sharedComponents := ProductionSharedComponentEvidence()

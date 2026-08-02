@@ -47,8 +47,8 @@ const (
 
 func ProductionRuntimeComponentEvidence() map[string]Component {
 	return map[string]Component{
-		"aioncore":     {Name: "aioncore", Version: "v0.1.42-editfork.10", SourceRevision: "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"},
-		"aionui":       {Name: "aionui", Version: "2.1.0-beta.editfork.21", SourceRevision: "ec97e4aea496fdd7721e64e6c43e3d3ce97e181553961d8c2c63092d2b395f90"},
+		"aioncore":     {Name: "aioncore", Version: "v0.1.42-editfork.15", SourceRevision: "1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2"},
+		"aionui":       {Name: "aionui", Version: "2.1.0-beta.editfork.29", SourceRevision: "cea37a6fba78fddcae95564cb1f89d794051163b2481b318e6932cd76023dd52"},
 		"codex":        {Name: "codex", Version: "0.144.4", SourceRevision: "9a4a45314e80b53c4761b80067e3a68c2302f9a9026059b5f54f22dec8f34323"},
 		"kimi-code":    {Name: "kimi-code", Version: "0.29.1-fork-steer.1", SourceRevision: "d00c6a1eff46bfe4213fe9f0547b51d7d812f2e9acd2e335ef282bb8d78a97af"},
 		"noble-hashes": {Name: "noble-hashes", Version: "2.2.0", SourceRevision: "b74fceb0006b617ed388254677b3d3847aeceb7e3f57db0cc9acc54644dabba6"},

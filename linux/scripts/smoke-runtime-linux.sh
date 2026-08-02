@@ -124,7 +124,7 @@ managed_node="$runtime_root/bin/managed-resources/node/node-v24.11.0-linux-x64/b
   "$smoke_root/auth-status.json" || fail 'proxied auth status is not a JSON object'
 
 health_json="$(curl --noproxy '*' --fail --silent --show-error --max-time 10 "http://127.0.0.1:$backend_port/health")"
-[[ "$health_json" == '{"status":"ok","version":"0.1.42-editfork.10","build_time":"1784899380"}' ]] || fail "backend health response mismatch: $health_json"
+[[ "$health_json" == '{"status":"ok","version":"0.1.42-editfork.15","build_time":"1785418200"}' ]] || fail "backend health response mismatch: $health_json"
 
 kill -TERM "$web_pid"
 web_status=0

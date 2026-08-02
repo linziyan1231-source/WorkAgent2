@@ -111,9 +111,11 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "init-admin":
-		err = createUser(os.Args[2:], true, true)
+		err = createAdministrator(os.Args[2:])
+	case "migrate-admin":
+		err = migrateAdministrator(os.Args[2:])
 	case "create-user":
-		err = createUser(os.Args[2:], false, false)
+		err = createUser(os.Args[2:])
 	case "set-password":
 		err = setPassword(os.Args[2:])
 	case "set-enabled":
@@ -149,26 +151,91 @@ func main() {
 }
 
 func usage(logger *log.Logger) {
-	logger.Fatal("usage: workagent-admin <init-admin|create-user|set-password|set-enabled|activate-tenant-catalog|activate-core-fleet|service-action|assert-activation-clean|set-limits|runtime-status|runtime-start|runtime-stop|runtime-restart|list-users|set-chatgpt-pro-limit|verify-tenant|reconcile-tenant-files|verify-host> [options]")
+	logger.Fatal("usage: workagent-admin <init-admin|migrate-admin|create-user|set-password|set-enabled|activate-tenant-catalog|activate-core-fleet|service-action|assert-activation-clean|set-limits|runtime-status|runtime-start|runtime-stop|runtime-restart|list-users|set-chatgpt-pro-limit|verify-tenant|reconcile-tenant-files|verify-host> [options]")
 }
 
-func createUser(arguments []string, forceAdmin, requireEmpty bool) (resultErr error) {
+func createAdministrator(arguments []string) (resultErr error) {
+	flags := flag.NewFlagSet("init-admin", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configPath := flags.String("config", "/etc/workagent/portal.json", "Portal configuration")
+	username := flags.String("username", "admin", "Portal administrator username")
+	passwordPath := flags.String("password-file", "", "protected password input file")
+	passwordFD := flags.Int("password-fd", -1, "inherited anonymous password input descriptor")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: workagent-admin init-admin [--config <path>] [--username <name>] (--password-file <path>|--password-fd 3)")
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("Portal administrator creation must run as root")
+	}
+	if err := auth.ValidatePortalUsername(*username); err != nil {
+		return err
+	}
+	password, err := readPasswordInput(*passwordPath, *passwordFD)
+	if err != nil {
+		return err
+	}
+	defer auth.Zero(password)
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	catalog, err := acquireAuthenticatedControlConsumer(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire Portal administration lifecycle lock: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, catalog.Close()) }()
+	portalConfig, err := config.LoadPortal(*configPath)
+	if err != nil {
+		return err
+	}
+	if err := admin.VerifyPortalFiles(portalConfig, *configPath); err != nil {
+		return fmt.Errorf("verify initial Portal product files: %w", err)
+	}
+	if err := admin.AssertTenantFileCatalogClean(portalConfig); err != nil {
+		return err
+	}
+	if err := dropToPortalRuntime(portalConfig.RuntimeUser); err != nil {
+		return err
+	}
+	data, err := store.Open(portalConfig.DatabasePath(), portalConfig.AuditPath())
+	if err != nil {
+		return err
+	}
+	closeWith := func(operation error) error { return errors.Join(operation, data.Close()) }
+	count, err := data.UserCount(ctx)
+	if err != nil {
+		return closeWith(err)
+	}
+	if count != 0 {
+		return closeWith(errors.New("init-admin is allowed only on an empty Portal database"))
+	}
+	created, err := data.CreateAdministrator(ctx, *username, hash, time.Now().UTC())
+	if err != nil {
+		return closeWith(err)
+	}
+	if err := admin.VerifyLiveTenantIdentityCatalog(ctx, portalConfig, data); err != nil {
+		return closeWith(fmt.Errorf("Portal-only administrator left an invalid managed tenant catalog: %w", err))
+	}
+	if err := data.Audit(ctx, store.AuditEvent{Action: "admin.user.add", Outcome: "success", Username: created.Username, RemoteIP: "local-admin", Details: map[string]any{"admin_role": true, "portal_only": true}}); err != nil {
+		return closeWith(err)
+	}
+	if err := data.Close(); err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"created": true, "user": created})
+}
+
+func createUser(arguments []string) (resultErr error) {
 	flags := flag.NewFlagSet("create-user", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "/etc/workagent/portal.json", "Portal configuration")
 	tenantPath := flags.String("tenant-config", "", "tenant configuration")
 	username := flags.String("username", "", "Portal username")
 	passwordPath := flags.String("password-file", "", "protected password input file")
-	adminUser := flags.Bool("admin", false, "grant Portal administration")
-	initial := flags.Bool("initial", false, "initialize an administrator before the first runtime release activation")
+	passwordFD := flags.Int("password-fd", -1, "inherited anonymous password input descriptor")
 	if err := flags.Parse(arguments); err != nil {
 		return err
-	}
-	if forceAdmin {
-		*adminUser = true
-	}
-	if *initial && (!forceAdmin || !requireEmpty) {
-		return errors.New("--initial is valid only with init-admin")
 	}
 	if os.Geteuid() != 0 {
 		return errors.New("Portal identity creation must run as root")
@@ -184,7 +251,7 @@ func createUser(arguments []string, forceAdmin, requireEmpty bool) (resultErr er
 		return fmt.Errorf("acquire Portal identity/catalog lifecycle lock: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, catalog.Close()) }()
-	portalConfig, tenant, err := loadBoundTenant(*configPath, *tenantPath, *initial)
+	portalConfig, tenant, err := loadBoundTenant(*configPath, *tenantPath, false)
 	if err != nil {
 		return err
 	}
@@ -194,7 +261,7 @@ func createUser(arguments []string, forceAdmin, requireEmpty bool) (resultErr er
 	if err := auth.ValidatePortalUsername(*username); err != nil {
 		return err
 	}
-	password, err := readPassword(*passwordPath)
+	password, err := readPasswordInput(*passwordPath, *passwordFD)
 	if err != nil {
 		return err
 	}
@@ -217,34 +284,23 @@ func createUser(arguments []string, forceAdmin, requireEmpty bool) (resultErr er
 	closeWith := func(operation error) error {
 		return errors.Join(operation, data.Close())
 	}
-	if requireEmpty {
-		count, err := data.UserCount(ctx)
-		if err != nil {
-			return closeWith(err)
-		}
-		if count != 0 {
-			return closeWith(errors.New("init-admin is allowed only on an empty Portal database"))
-		}
-	}
 	pendingIdentity := store.PortalUserIdentity{
-		TenantID: tenant.TenantID, RuntimeUser: tenant.RuntimeUser, DataRoot: tenant.DataRoot, Enabled: *initial,
+		TenantID: tenant.TenantID, RuntimeUser: tenant.RuntimeUser, DataRoot: tenant.DataRoot, Enabled: false,
 	}
 	if err := admin.VerifyLiveTenantIdentityCatalogWithPendingCreate(ctx, portalConfig, data, pendingIdentity); err != nil {
 		return closeWith(fmt.Errorf("Portal identity creation would not close the tenant catalog gap: %w", err))
 	}
-	created, err := data.CreateUserWithEnabled(ctx, *username, hash, tenant.TenantID, tenant.RuntimeUser, tenant.DataRoot, *initial, *adminUser, time.Now().UTC())
+	created, err := data.CreateUserWithEnabled(ctx, *username, hash, tenant.TenantID, tenant.RuntimeUser, tenant.DataRoot, false, false, time.Now().UTC())
 	if err != nil {
 		return closeWith(err)
 	}
 	if err := admin.VerifyLiveTenantIdentityCatalog(ctx, portalConfig, data); err != nil {
 		return closeWith(fmt.Errorf("Portal identity catalog did not converge after user creation: %w", err))
 	}
-	if !*initial {
-		if err := admin.VerifyLiveTenantActivationCatalog(ctx, portalConfig, data, systemdctl.Default()); err != nil {
-			return closeWith(fmt.Errorf("disabled Portal identity did not converge with systemd activation state: %w", err))
-		}
+	if err := admin.VerifyLiveTenantActivationCatalog(ctx, portalConfig, data, systemdctl.Default()); err != nil {
+		return closeWith(fmt.Errorf("disabled Portal identity did not converge with systemd activation state: %w", err))
 	}
-	if err := data.Audit(ctx, store.AuditEvent{Action: "admin.user.add", Outcome: "success", Username: created.Username, TenantID: created.TenantID, RemoteIP: "local-admin", Details: map[string]any{"admin_role": created.Admin}}); err != nil {
+	if err := data.Audit(ctx, store.AuditEvent{Action: "admin.user.add", Outcome: "success", Username: created.Username, TenantID: created.TenantID, RemoteIP: "local-admin", Details: map[string]any{"admin_role": false}}); err != nil {
 		return closeWith(err)
 	}
 	if err := data.Close(); err != nil {
@@ -347,7 +403,7 @@ func portalActivationIdentities(ctx context.Context, data *store.Store) ([]store
 	if ctx == nil || data == nil {
 		return nil, errors.New("Portal activation identity reader is unavailable")
 	}
-	users, err := data.ListUsers(ctx)
+	users, err := data.ListTenantUsers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -461,6 +517,9 @@ func convergeStoredTenantActivationCatalogLocked(ctx context.Context, configPath
 	if err := admission(ctx, portal, data, identities); err != nil {
 		return config.Portal{}, nil, err
 	}
+	if len(identities) == 0 {
+		return portal, identities, nil
+	}
 	if err := admin.ConvergeTenantActivationCatalog(ctx, identities, controller); err != nil {
 		return config.Portal{}, nil, fmt.Errorf("converge complete tenant activation catalog: %w", err)
 	}
@@ -479,10 +538,8 @@ func validateInitialTenantCatalogActivation(ctx context.Context, data *store.Sto
 }
 
 func validateInitialTenantCatalogShape(users []store.User, identities []store.PortalUserIdentity) error {
-	if len(users) != 1 || len(identities) != 1 || !users[0].Admin || !users[0].Enabled ||
-		identities[0].TenantID != users[0].TenantID || identities[0].RuntimeUser != users[0].RuntimeUser ||
-		identities[0].DataRoot != users[0].DataRoot || !identities[0].Enabled {
-		return errors.New("initial tenant activation requires exactly one enabled administrator identity")
+	if len(users) != 1 || len(identities) != 0 || !users[0].Admin || !users[0].Enabled {
+		return errors.New("initial tenant activation requires exactly one enabled Portal-only administrator and no managed tenants")
 	}
 	return nil
 }
@@ -1248,7 +1305,7 @@ func runtimeCommand(operation string, arguments []string) (resultErr error) {
 		if operation != "runtime-status" {
 			return errors.New("--username is required")
 		}
-		users, err = data.ListUsers(ctx)
+		users, err = data.ListManagedUsers(ctx)
 	} else {
 		var value store.User
 		value, err = data.UserByUsername(ctx, *username)
@@ -1599,6 +1656,38 @@ func readPassword(path string) ([]byte, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	payload = []byte(strings.TrimSuffix(strings.TrimSuffix(string(payload), "\n"), "\r"))
+	if err := auth.ValidatePortalPassword(payload); err != nil {
+		auth.Zero(payload)
+		return nil, fmt.Errorf("invalid password input: %w", err)
+	}
+	return payload, nil
+}
+
+func readPasswordInput(path string, fd int) ([]byte, error) {
+	if (path == "") == (fd < 0) {
+		return nil, errors.New("exactly one of --password-file or --password-fd is required")
+	}
+	if fd < 0 {
+		return readPassword(path)
+	}
+	if fd != 3 {
+		return nil, errors.New("--password-fd must be inherited descriptor 3")
+	}
+	file := os.NewFile(uintptr(fd), "portal-password")
+	if file == nil {
+		return nil, errors.New("password input descriptor is unavailable")
+	}
+	defer file.Close()
+	limited := io.LimitReader(file, 1025)
+	payload, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > 1024 {
+		auth.Zero(payload)
+		return nil, errors.New("password input is too large")
 	}
 	payload = []byte(strings.TrimSuffix(strings.TrimSuffix(string(payload), "\n"), "\r"))
 	if err := auth.ValidatePortalPassword(payload); err != nil {

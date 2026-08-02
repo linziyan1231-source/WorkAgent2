@@ -19,8 +19,8 @@ import (
 // rows are deliberately included: enabled state controls activation, not
 // durable tenant identity membership.
 func VerifyTenantIdentityCatalog(tenants []config.Tenant, identities []store.PortalUserIdentity) error {
-	if len(tenants) == 0 || len(identities) == 0 || len(tenants) != len(identities) {
-		return errors.New("Portal database and tenant configuration catalogs have different non-empty cardinality")
+	if len(tenants) != len(identities) {
+		return errors.New("Portal database and tenant configuration catalogs have different cardinality")
 	}
 	tenantByID := make(map[string]config.Tenant, len(tenants))
 	tenantUsers := make(map[string]bool, len(tenants))
@@ -112,7 +112,7 @@ func verifyLiveTenantIdentityCatalog(ctx context.Context, portal config.Portal, 
 	if err != nil {
 		return nil, fmt.Errorf("load protected tenant catalog for Portal identity comparison: %w", err)
 	}
-	users, err := data.ListUsers(ctx)
+	users, err := data.ListTenantUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load Portal user identities for tenant comparison: %w", err)
 	}
@@ -125,9 +125,7 @@ func verifyLiveTenantIdentityCatalog(ctx context.Context, portal config.Portal, 
 	if pending != nil {
 		identities = append(identities, *pending)
 	}
-	if allowEmpty && len(tenants) == 0 && len(identities) == 0 {
-		return identities, nil
-	}
+	_ = allowEmpty // Empty managed catalogs are valid for a Portal-only administrator.
 	if err := VerifyTenantIdentityCatalog(tenants, identities); err != nil {
 		return nil, err
 	}
@@ -138,7 +136,7 @@ func verifyLiveTenantIdentityCatalog(ctx context.Context, portal config.Portal, 
 // WAL-aware offline identity snapshot. It intentionally rejects transient
 // enablement: reboot safety requires a persistent sockets.target link.
 func VerifyTenantActivationCatalog(ctx context.Context, identities []store.PortalUserIdentity, controller systemdctl.Controller) error {
-	if ctx == nil || controller == nil || len(identities) == 0 {
+	if ctx == nil || controller == nil {
 		return errors.New("tenant activation catalog verifier is unavailable")
 	}
 	ordered := append([]store.PortalUserIdentity(nil), identities...)

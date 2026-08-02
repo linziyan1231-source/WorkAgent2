@@ -107,17 +107,15 @@ func (s *Server) checkReadiness(ctx context.Context) readinessReport {
 }
 
 func (s *Server) checkTenantReadiness(ctx context.Context) error {
-	users, err := s.store.ListUsers(ctx)
+	users, err := s.store.ListTenantUsers(ctx)
 	if err != nil {
 		return err
 	}
-	enabled := 0
 	projectIDs := make(map[uint32]string)
 	for _, userValue := range users {
 		if !userValue.Enabled {
 			continue
 		}
-		enabled++
 		path := filepath.Join(s.cfg.Paths.TenantConfigs, userValue.TenantID+".json")
 		tenant, err := config.LoadTenant(path)
 		if err != nil {
@@ -142,9 +140,9 @@ func (s *Server) checkTenantReadiness(ctx context.Context) error {
 			return fmt.Errorf("tenant %s service verification: %w", userValue.TenantID, err)
 		}
 	}
-	if enabled == 0 {
-		return errors.New("no enabled tenants")
-	}
+	// A fresh Portal intentionally starts with only its Portal-only
+	// administrator. Employee tenants are provisioned from the administrator
+	// page after that first successful startup.
 	return nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-
 	"os"
 	"os/exec"
 	"os/user"
@@ -86,14 +85,11 @@ func TestVerifyTenantQuiescenceIsExplicitStartupOnlyMode(t *testing.T) {
 
 func TestInitialTenantCatalogActivationCannotBypassImportedOrDisabledCatalog(t *testing.T) {
 	userValue := store.User{
-		Username: "admin", TenantID: "11111111-1111-4111-8111-111111111111",
-		RuntimeUser: "workagent-u2001", DataRoot: "/srv/workagent/users/11111111-1111-4111-8111-111111111111",
+		Username: "admin", TenantID: "portal-admin:admin",
+		RuntimeUser: "portal-admin:admin", DataRoot: "portal-admin:admin",
 		Admin: true, Enabled: true,
 	}
-	identity := store.PortalUserIdentity{
-		TenantID: userValue.TenantID, RuntimeUser: userValue.RuntimeUser, DataRoot: userValue.DataRoot, Enabled: true,
-	}
-	if err := validateInitialTenantCatalogShape([]store.User{userValue}, []store.PortalUserIdentity{identity}); err != nil {
+	if err := validateInitialTenantCatalogShape([]store.User{userValue}, nil); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -101,15 +97,10 @@ func TestInitialTenantCatalogActivationCannotBypassImportedOrDisabledCatalog(t *
 		users      []store.User
 		identities []store.PortalUserIdentity
 	}{
-		{name: "multiple imported users", users: []store.User{userValue, userValue}, identities: []store.PortalUserIdentity{identity, identity}},
-		{name: "non-admin", users: []store.User{func() store.User { value := userValue; value.Admin = false; return value }()}, identities: []store.PortalUserIdentity{identity}},
-		{name: "disabled database", users: []store.User{func() store.User { value := userValue; value.Enabled = false; return value }()}, identities: []store.PortalUserIdentity{identity}},
-		{name: "disabled activation identity", users: []store.User{userValue}, identities: []store.PortalUserIdentity{func() store.PortalUserIdentity { value := identity; value.Enabled = false; return value }()}},
-		{name: "identity drift", users: []store.User{userValue}, identities: []store.PortalUserIdentity{func() store.PortalUserIdentity {
-			value := identity
-			value.RuntimeUser = "workagent-u2002"
-			return value
-		}()}},
+		{name: "multiple imported users", users: []store.User{userValue, userValue}},
+		{name: "non-admin", users: []store.User{func() store.User { value := userValue; value.Admin = false; return value }()}},
+		{name: "disabled database", users: []store.User{func() store.User { value := userValue; value.Enabled = false; return value }()}},
+		{name: "managed tenant present", users: []store.User{userValue}, identities: []store.PortalUserIdentity{{TenantID: "11111111-1111-4111-8111-111111111111", RuntimeUser: "workagent_user", DataRoot: "/srv/workagent/users/11111111-1111-4111-8111-111111111111", Enabled: false}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -146,7 +137,6 @@ type catalogReadySystemd struct {
 	actions   int
 	reads     int
 }
-
 
 func TestAdoptInheritedActivationLockBindsExactReadWriteInode(t *testing.T) {
 	if os.Geteuid() != 0 {

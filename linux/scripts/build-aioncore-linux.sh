@@ -23,11 +23,11 @@ full_tests="${AIONCORE_FULL_TESTS:-1}"
 server_pid=""
 source_date_epoch="$(tr -d '\r\n' < "$component_root/SOURCE-DATE-EPOCH")"
 
-expected_source="546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"
-expected_cargo_lock="c8bf59bf858f9ee5db372d127bfb78a6cdedcf837584bf4c9d1ead6cfa1c66c9"
+expected_source="1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2"
+expected_cargo_lock="142c7abc83debe42f8063f85fef885b0b2810274d425bcbdf450351f7e49be84"
 expected_managed="4131c117b99b83d1c36980417ba4f9f1d860500e711ad54fea9ae007d7c9d567"
 test_attestation="$component_root/TEST-ATTESTATION.json"
-expected_test_attestation="e7f2cd6fde3b3d9a65b820e067c59b33325a400ca8b9a5be1b2201f39572935a"
+expected_test_attestation="e65d892d24f7d9da060b8ea14b29e77cbb53ac2c3946bc35e18c91fd983eddec"
 
 fail() {
   printf 'build-aioncore-linux: %s\n' "$*" >&2
@@ -57,8 +57,8 @@ cleanup() {
 }
 
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || fail 'release target must be Linux x86_64'
-[[ "$version" == v0.1.42-editfork.10 ]] || fail 'unexpected AionCore version'
-[[ "$source_date_epoch" == 1784899380 ]] || fail 'unexpected AionCore SOURCE_DATE_EPOCH'
+[[ "$version" == v0.1.42-editfork.15 ]] || fail 'unexpected AionCore version'
+[[ "$source_date_epoch" == 1785418200 ]] || fail 'unexpected AionCore SOURCE_DATE_EPOCH'
 [[ "$jobs" =~ ^[1-9][0-9]*$ && "$jobs" -le 32 ]] || fail 'AIONCORE_BUILD_JOBS must be an integer from 1 to 32'
 [[ "$full_tests" == 0 || "$full_tests" == 1 ]] || fail 'AIONCORE_FULL_TESTS must be 0 or 1'
 for command in chmod curl cut env find flock grep install kill mkdir mv readelf realpath rm sed sha256sum sleep sort strings strip tail tar tr wc xargs; do
@@ -78,7 +78,7 @@ expected_build_id="$(tr -d '\r\n' < "$component_root/BUILD-ID")"
 
 [[ -z "$(find "$source_root" -type l -print -quit)" ]] || fail 'AionCore source contains a symbolic link'
 [[ -z "$(find "$source_root" ! -type d ! -type f -print -quit)" ]] || fail 'AionCore source contains a special file'
-[[ "$(find "$source_root" -type f | wc -l)" == 1396 ]] || fail 'AionCore source file count mismatch'
+[[ "$(find "$source_root" -type f | wc -l)" == 1399 ]] || fail 'AionCore source file count mismatch'
 [[ "$(canonical_tree_hash "$source_root")" == "$expected_source" ]] || fail 'AionCore source-tree checksum mismatch'
 [[ "$(hash_of "$source_root/Cargo.lock")" == "$expected_cargo_lock" ]] || fail 'AionCore Cargo.lock checksum mismatch'
 (cd "$source_root" && sha256sum --strict --check "$component_root/LICENSE.sha256") >/dev/null || fail 'AionCore license checksum mismatch'
@@ -98,7 +98,7 @@ managed_codex_entrypoint="$managed_codex/node_modules/@agentclientprotocol/codex
   "$component_root/MANAGED-COMPONENTS.json" || fail 'managed component inventory mismatch'
 [[ -f "$test_attestation" && ! -L "$test_attestation" ]] || fail 'AionCore test attestation is missing or unsafe'
 [[ "$(hash_of "$test_attestation")" == "$expected_test_attestation" ]] || fail 'AionCore test attestation checksum mismatch'
-"$managed_node" -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const gates=["ai-agent-package","application-package","auth-package","cron-package","format","runtime-package","strict-clippy","task-manager-regressions","workagent-runtime-boundary"];const actual=Array.isArray(p.records)?p.records.map((r)=>r.gate).sort():[];if(p.schema_version!==1||p.component!=="aioncore"||p.version!=="v0.1.42-editfork.10"||p.source_tree_sha256!=="546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"||p.completed_at!=="2026-07-27T12:37:47+08:00"||p.result!=="passed"||actual.length!==gates.length||actual.some((gate,index)=>gate!==gates[index])||p.records.some((record)=>record.result!=="passed")){process.exit(1)}' \
+"$managed_node" -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const gates=["acp-initialize-retry","format","workagent-help","resumable-upload","strict-clippy","workagent-runtime-boundary","workspace"];const actual=Array.isArray(p.records)?p.records.map((r)=>r.gate).sort():[];if(p.schema_version!==1||p.component!=="aioncore"||p.version!=="v0.1.42-editfork.15"||p.source_tree_sha256!=="1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2"||p.completed_at!=="2026-07-30T22:43:50+08:00"||p.result!=="passed"||actual.length!==gates.length||actual.some((gate,index)=>gate!==gates[index])||p.records.some((record)=>record.result!=="passed")){process.exit(1)}' \
   "$test_attestation" || fail 'AionCore test attestation content mismatch'
 
 install -d -m 0700 -- "$build_root"
@@ -161,7 +161,7 @@ for leaked_path in "$source_dir" "$target_dir" "$cargo_home" "$rustup_home"; do
     fail "final AionCore binary leaks an unremapped build path: $leaked_path"
 done
 readelf -h "$stage/bin/aioncore" | grep -F 'Machine:' | grep -F 'Advanced Micro Devices X86-64' >/dev/null || fail 'AionCore architecture mismatch'
-[[ "$("$stage/bin/aioncore" --version)" == 'aioncore 0.1.42-editfork.10' ]] || fail 'AionCore version smoke test failed'
+[[ "$("$stage/bin/aioncore" --version)" == 'aioncore 0.1.42-editfork.15' ]] || fail 'AionCore version smoke test failed'
 "$stage/bin/aioncore" --help | grep -F 'AionUi Backend Server' >/dev/null || fail 'AionCore help smoke test failed'
 
 install -d -m 0755 "$stage/bin/managed-resources"
@@ -190,7 +190,7 @@ fi
 smoke_port="$(sed -n 's/^AIONCORE_LISTENING {"host":"127\.0\.0\.1","port":\([0-9][0-9]*\)}$/\1/p' "$smoke_root/server.out" | tail -n 1)"
 [[ "$smoke_port" =~ ^[1-9][0-9]*$ && "$smoke_port" -le 65535 ]] || fail 'AionCore health smoke port is invalid'
 health_json="$(curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:$smoke_port/health")"
-[[ "$health_json" == '{"status":"ok","version":"0.1.42-editfork.10","build_time":"1784899380"}' ]] || \
+[[ "$health_json" == '{"status":"ok","version":"0.1.42-editfork.15","build_time":"1785418200"}' ]] || \
   fail "AionCore health response mismatch: $health_json"
 printf 'AionCore health evidence: %s\n' "$health_json"
 kill -TERM "$server_pid"
@@ -258,9 +258,9 @@ printf '%s\n' \
   '{' \
   '  "schema_version": 1,' \
   '  "component": "aioncore",' \
-  '  "version": "v0.1.42-editfork.10",' \
+  '  "version": "v0.1.42-editfork.15",' \
   '  "platform": "x86_64-unknown-linux-gnu",' \
-  '  "source_tree_sha256": "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317",' \
+  '  "source_tree_sha256": "1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2",' \
   "  \"source_date_epoch\": $source_date_epoch," \
   '  "license_file": "LICENSE",' \
   "  \"binary_sha256\": \"$expected_binary\"," \

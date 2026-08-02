@@ -172,14 +172,17 @@ func TestAdmissionExecutableRevisionRequiresCleanEmbeddedGitEvidence(t *testing.
 }
 
 func TestPreflightRequiresAnEnabledAdministrator(t *testing.T) {
-	if err := validatePreflightUserSet(nil); err == nil || !strings.Contains(err.Error(), "enabled tenant") {
+	if err := validatePreflightUserSet(nil); err == nil || !strings.Contains(err.Error(), "administrator") {
 		t.Fatalf("empty identity set was accepted: %v", err)
 	}
 	if err := validatePreflightUserSet([]store.User{{Enabled: true}}); err == nil || !strings.Contains(err.Error(), "administrator") {
 		t.Fatalf("enabled non-admin-only identity set was accepted: %v", err)
 	}
 	if err := validatePreflightUserSet([]store.User{{Enabled: true, Admin: true}}); err != nil {
-		t.Fatalf("enabled administrator was rejected: %v", err)
+		t.Fatalf("Portal-only administrator was rejected: %v", err)
+	}
+	if err := validatePreflightUserSet([]store.User{{Enabled: true, Admin: true}, {Enabled: true, Admin: true}}); err == nil {
+		t.Fatal("multiple enabled administrators were accepted")
 	}
 }
 
@@ -273,6 +276,8 @@ func TestReleaseDrainGateIncludesSocketsAndServices(t *testing.T) {
 		"workagent-userhost@" + tenantID + ".socket":  "active",
 		"workagent-userhost@" + tenantID + ".service": "inactive",
 		"workagent-portal.service":                    "inactive",
+		"workagent-provision.socket":                  "inactive",
+		"workagent-provision.service":                 "inactive",
 	}}
 	portal := config.Portal{Renderer: config.RendererRelease{Scope: release.ScopeRuntime}}
 	if err := ensureReleaseFleetStopped(context.Background(), portal, configs, release.ScopeRuntime, controller); err == nil {
@@ -290,7 +295,10 @@ func TestReleaseDrainGateRejectsFailedBusyAndUnconfiguredTenantUnits(t *testing.
 	socket := "workagent-userhost@" + tenantID + ".socket"
 	configs := map[string]string{tenantID: "/etc/workagent/users/" + tenantID + ".json"}
 	portal := config.Portal{Renderer: config.RendererRelease{Scope: release.ScopeRuntime}}
-	baseStates := map[string]string{service: "inactive", socket: "inactive", "workagent-portal.service": "inactive"}
+	baseStates := map[string]string{
+		service: "inactive", socket: "inactive", "workagent-portal.service": "inactive",
+		"workagent-provision.socket": "inactive", "workagent-provision.service": "inactive",
+	}
 
 	failed := releaseSystemd{states: maps.Clone(baseStates)}
 	failed.states[service] = "failed"
@@ -395,6 +403,8 @@ func TestFixedRootConsumerContractsMatchProductionEvidence(t *testing.T) {
 		"share/deploy/systemd/workagent-portal.service",
 		"share/deploy/systemd/workagent-portal.service.d/chatforward.conf",
 		"share/deploy/systemd/workagent-portal.service.d/credentials.conf.example",
+		"share/deploy/systemd/workagent-provision.service",
+		"share/deploy/systemd/workagent-provision.socket",
 		"share/deploy/systemd/workagent-tenant-catalog-ready.target",
 		"share/deploy/systemd/workagent-tenant-config-reconcile.service",
 		"share/deploy/systemd/workagent-userhost@.service",
@@ -462,6 +472,8 @@ func TestFixedRootDrainProvesExactControlFleetAndOrder(t *testing.T) {
 		"workagent-chatforward.service",
 		"cliproxyapi.service",
 		"workagent-portal.service",
+		"workagent-provision.socket",
+		"workagent-provision.service",
 		"workagent-backup.service",
 		"workagent-healthcheck.service",
 		"workagent-notification.service",
@@ -524,6 +536,8 @@ func TestFixedRootDrainRejectsActiveSharedConsumerAndUnknownInitialTenant(t *tes
 		"workagent-chatforward.service":             "inactive",
 		"cliproxyapi.service":                       "inactive",
 		"workagent-portal.service":                  "inactive",
+		"workagent-provision.socket":                "inactive",
+		"workagent-provision.service":               "inactive",
 		"workagent-backup.service":                  "inactive",
 		"workagent-healthcheck.service":             "inactive",
 		"workagent-notification.service":            "inactive",

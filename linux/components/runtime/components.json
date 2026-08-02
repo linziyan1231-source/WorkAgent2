@@ -1,13 +1,13 @@
 [
   {
     "name": "aioncore",
-    "version": "v0.1.42-editfork.10",
-    "source_revision": "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317"
+    "version": "v0.1.42-editfork.15",
+    "source_revision": "1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2"
   },
   {
     "name": "aionui",
-    "version": "2.1.0-beta.editfork.21",
-    "source_revision": "ec97e4aea496fdd7721e64e6c43e3d3ce97e181553961d8c2c63092d2b395f90"
+    "version": "2.1.0-beta.editfork.29",
+    "source_revision": "cea37a6fba78fddcae95564cb1f89d794051163b2481b318e6932cd76023dd52"
   },
   {
     "name": "codex",

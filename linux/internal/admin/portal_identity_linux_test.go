@@ -88,6 +88,9 @@ func TestVerifyTenantIdentityCatalogRequiresExactBidirectionalBindings(t *testin
 	if err := VerifyTenantIdentityCatalog([]config.Tenant{first, second}, identities); err != nil {
 		t.Fatalf("exact enabled+disabled identity catalog rejected: %v", err)
 	}
+	if err := VerifyTenantIdentityCatalog(nil, nil); err != nil {
+		t.Fatalf("empty managed identity catalog rejected: %v", err)
+	}
 	for _, test := range []struct {
 		name       string
 		tenants    []config.Tenant
@@ -98,7 +101,6 @@ func TestVerifyTenantIdentityCatalogRequiresExactBidirectionalBindings(t *testin
 		{name: "runtime mismatch", tenants: []config.Tenant{first, second}, identities: []store.PortalUserIdentity{identities[0], {TenantID: second.TenantID, RuntimeUser: "workagent_other", DataRoot: second.DataRoot}}},
 		{name: "root mismatch", tenants: []config.Tenant{first, second}, identities: []store.PortalUserIdentity{identities[0], {TenantID: second.TenantID, RuntimeUser: second.RuntimeUser, DataRoot: first.DataRoot}}},
 		{name: "duplicate DB user", tenants: []config.Tenant{first, second}, identities: []store.PortalUserIdentity{identities[0], {TenantID: second.TenantID, RuntimeUser: first.RuntimeUser, DataRoot: second.DataRoot}}},
-		{name: "empty", tenants: nil, identities: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := VerifyTenantIdentityCatalog(test.tenants, test.identities); err == nil {

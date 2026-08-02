@@ -22,6 +22,8 @@ const (
 	workagentBrandingMarkerPath    = "config/workagent-branding-v1.applied"
 	workagentBrandingMarkerContent = "assistant=aionui-assistant;brand=WorkAgent2;skills=v1\n"
 	workagentAssistantPromptPath   = "workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md"
+	legacyDisplayBrand       = "WorkAgent" + " AI"
+	legacyBrandingMarker     = "assistant=aionui-assistant;brand=" + legacyDisplayBrand + ";skills=v1\n"
 )
 
 var workagentManagedSkillFiles = []string{
@@ -48,11 +50,17 @@ func loadWorkAgentAssistantPrompt(releaseRoot string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !utf8.Valid(prompt) || strings.ContainsRune(string(prompt), 0) || strings.TrimSpace(string(prompt)) == "" || containsLegacyDisplayBrand(string(prompt)) {
+	if !utf8.Valid(prompt) || strings.ContainsRune(string(prompt), 0) || strings.TrimSpace(string(prompt)) == "" {
 		clear(prompt)
-		return nil, errors.New("signed WorkAgent2 assistant prompt is empty, invalid, or contains legacy branding")
+		return nil, errors.New("signed WorkAgent2 assistant prompt is empty or invalid")
 	}
-	return prompt, nil
+	branded := []byte(workagentBrandDisplayText(string(prompt)))
+	clear(prompt)
+	if strings.TrimSpace(string(branded)) == "" || containsLegacyDisplayBrand(string(branded)) {
+		clear(branded)
+		return nil, errors.New("signed WorkAgent2 assistant prompt could not be branded safely")
+	}
+	return branded, nil
 }
 
 func applyWorkAgentBranding(ctx context.Context, root *projectfs.Root, databaseRelative string, prompt []byte, expectedUID uint32, now time.Time) (bool, error) {
@@ -199,10 +207,10 @@ func verifyWorkAgentBranding(ctx context.Context, transaction *sql.Tx, prompt st
 	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_definitions
 WHERE assistant_id='aionui-assistant' AND source='builtin' AND owner_type='system' AND deleted_at IS NULL
   AND rule_resource_type='inline' AND rule_resource_ref IS NULL AND rule_inline_content=?
-  AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'AionUi')=0
-  AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'AionUI')=0
-	AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'WorkAgent2')=0
-	AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'WorkAgent2')>0`, prompt).Scan(&count); err != nil {
+	  AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'AionUi')=0
+	  AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'AionUI')=0
+	  AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),?)=0
+	  AND instr(COALESCE(name,'')||COALESCE(name_i18n,'')||COALESCE(description,'')||COALESCE(description_i18n,'')||COALESCE(recommended_prompts,'')||COALESCE(recommended_prompts_i18n,''),'WorkAgent2')>0`, prompt, legacyDisplayBrand).Scan(&count); err != nil {
 		return fmt.Errorf("verify WorkAgent2 assistant: %w", err)
 	}
 	if count != 1 {
@@ -210,7 +218,7 @@ WHERE assistant_id='aionui-assistant' AND source='builtin' AND owner_type='syste
 	}
 	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM skills WHERE source='builtin' AND deleted_at IS NULL
 AND name IN ('aionui-config','aionui-troubleshooting','aionui-webui-public','aionui-webui-setup')
-AND (instr(COALESCE(description,''),'AionUi')>0 OR instr(COALESCE(description,''),'AionUI')>0 OR instr(COALESCE(description,''),'WorkAgent2')>0)`).Scan(&count); err != nil {
+AND (instr(COALESCE(description,''),'AionUi')>0 OR instr(COALESCE(description,''),'AionUI')>0 OR instr(COALESCE(description,''),?)>0)`, legacyDisplayBrand).Scan(&count); err != nil {
 		return fmt.Errorf("verify WorkAgent2 skill descriptions: %w", err)
 	}
 	if count != 0 {
@@ -285,9 +293,9 @@ func workagentBrandSkillFileText(value string) string {
 
 func workagentBrandDisplayText(value string) string {
 	return strings.NewReplacer(
-		"WorkAgent2 管家", "WorkAgent2 管家",
-		"WorkAgent2 Butler", "WorkAgent2 Butler",
-		"WorkAgent2", "WorkAgent2",
+		legacyDisplayBrand+" 管家", "WorkAgent2 管家",
+		legacyDisplayBrand+" Butler", "WorkAgent2 Butler",
+		legacyDisplayBrand, "WorkAgent2",
 		"AionUi管家", "WorkAgent2 管家",
 		"AionUI管家", "WorkAgent2 管家",
 		"AionUi 管家", "WorkAgent2 管家",
@@ -298,7 +306,7 @@ func workagentBrandDisplayText(value string) string {
 }
 
 func containsLegacyDisplayBrand(value string) bool {
-	return strings.Contains(value, "AionUi") || strings.Contains(value, "AionUI") || strings.Contains(strings.ToLower(value), "workagent ai")
+	return strings.Contains(value, "AionUi") || strings.Contains(value, "AionUI") || strings.Contains(strings.ToLower(value), strings.ToLower(legacyDisplayBrand))
 }
 
 func ensureWorkAgentBrandingMarker(root *projectfs.Root, expectedUID uint32) (bool, error) {
@@ -312,7 +320,18 @@ func ensureWorkAgentBrandingMarker(root *projectfs.Root, expectedUID uint32) (bo
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		payload, readErr := io.ReadAll(io.LimitReader(file, 4097))
 		file.Close()
-		if !ok || stat.Uid != expectedUID || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > 4096 || readErr != nil || string(payload) != workagentBrandingMarkerContent {
+		if !ok || stat.Uid != expectedUID || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > 4096 || readErr != nil {
+			clear(payload)
+			return false, errors.New("WorkAgent2 branding marker is unsafe or has unexpected content")
+		}
+		if string(payload) == legacyBrandingMarker {
+			clear(payload)
+			if err := root.WriteFileAtomic(workagentBrandingMarkerPath, []byte(workagentBrandingMarkerContent), 0o600); err != nil {
+				return false, fmt.Errorf("migrate WorkAgent2 branding marker: %w", err)
+			}
+			return true, nil
+		}
+		if string(payload) != workagentBrandingMarkerContent {
 			clear(payload)
 			return false, errors.New("WorkAgent2 branding marker is unsafe or has unexpected content")
 		}

@@ -270,6 +270,75 @@ const portalOAuthBridgeScript = `(function () {
   if (window.__workagentOAuthBridge) return;
   window.__workagentOAuthBridge = true;
   var nativeFetch = window.fetch.bind(window);
+  var brandLogoURL = "/brand/logo?v=workagent-v1";
+  var brandIconURL = "/brand/app-icon?v=workagent-v1";
+  var rendererLogoPath = /^\/assets\/app-[A-Za-z0-9_-]{8,}\.png$/;
+  var legacyBrandName = "WorkAgent" + " AI";
+
+  function brandedText(value) {
+    return typeof value === "string" ? value.split(legacyBrandName).join("WorkAgent2") : value;
+  }
+
+  function replaceRendererBrandText(root) {
+    if (!root) return;
+    if (root.nodeType === 3) {
+      if (root.parentElement && /^(SCRIPT|STYLE|TEXTAREA)$/.test(root.parentElement.tagName)) return;
+      var text = brandedText(root.nodeValue);
+      if (text !== root.nodeValue) root.nodeValue = text;
+      return;
+    }
+    if (root.nodeType !== 1) return;
+    var elements = [root];
+    if (root.querySelectorAll) elements = elements.concat(Array.prototype.slice.call(root.querySelectorAll("*")));
+    elements.forEach(function (element) {
+      ["title", "aria-label", "alt", "placeholder", "content"].forEach(function (name) {
+        if (!element.hasAttribute || !element.hasAttribute(name)) return;
+        var value = element.getAttribute(name);
+        var branded = brandedText(value);
+        if (branded !== value) element.setAttribute(name, branded);
+      });
+    });
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    var node;
+    while ((node = walker.nextNode())) replaceRendererBrandText(node);
+  }
+
+  function replaceRendererBranding(root) {
+    replaceRendererBrandText(root);
+    if (!root || root.nodeType !== 1) return;
+    var images = [];
+    var icons = [];
+    if (root.matches && root.matches("img")) images.push(root);
+    if (root.matches && root.matches('link[rel~="icon"], link[rel="apple-touch-icon"]')) icons.push(root);
+    if (root.querySelectorAll) images = images.concat(Array.prototype.slice.call(root.querySelectorAll("img")));
+    images.forEach(function (image) {
+      try {
+        var source = image.getAttribute("src") || "";
+        if (!rendererLogoPath.test(new URL(source, location.href).pathname)) return;
+        if (source !== brandLogoURL) image.setAttribute("src", brandLogoURL);
+        if (!image.alt || image.alt === "WorkAgent" + " AI") image.alt = "WorkAgent2";
+        image.style.setProperty("object-fit", "contain", "important");
+        image.style.setProperty("object-position", "center center", "important");
+      } catch (_) {}
+    });
+    if (root.querySelectorAll) icons = icons.concat(Array.prototype.slice.call(root.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]')));
+    icons.forEach(function (link) {
+      if (link.getAttribute("href") !== brandIconURL) link.setAttribute("href", brandIconURL);
+    });
+  }
+
+  function installBrandBridge() {
+    replaceRendererBranding(document.documentElement);
+    new MutationObserver(function (records) {
+      records.forEach(function (record) {
+        if (record.type === "characterData") replaceRendererBranding(record.target);
+        record.addedNodes.forEach(replaceRendererBranding);
+      });
+    }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
+
+  if (document.documentElement) installBrandBridge();
+  else document.addEventListener("DOMContentLoaded", installBrandBridge, { once: true });
 
   function jsonResult(success, error) {
     return new Response(JSON.stringify({ success: success, error: error || undefined }), {

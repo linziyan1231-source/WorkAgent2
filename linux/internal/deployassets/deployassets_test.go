@@ -346,8 +346,8 @@ func TestRuntimeComponentSourcesBindTheQualifiedLinuxInputs(t *testing.T) {
 		actual[component.Name] = component.SourceRevision
 	}
 	expected := map[string]string{
-		"aioncore":     "546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317",
-		"aionui":       "ec97e4aea496fdd7721e64e6c43e3d3ce97e181553961d8c2c63092d2b395f90",
+		"aioncore":     "1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2",
+		"aionui":       "cea37a6fba78fddcae95564cb1f89d794051163b2481b318e6932cd76023dd52",
 		"codex":        "9a4a45314e80b53c4761b80067e3a68c2302f9a9026059b5f54f22dec8f34323",
 		"kimi-code":    "d00c6a1eff46bfe4213fe9f0547b51d7d812f2e9acd2e335ef282bb8d78a97af",
 		"noble-hashes": "b74fceb0006b617ed388254677b3d3847aeceb7e3f57db0cc9acc54644dabba6",
@@ -393,10 +393,10 @@ func TestSharedComponentSourcesBindTheQualifiedLinuxInputs(t *testing.T) {
 
 func TestArtifactAssemblersRequireExternallyPinnedCompleteTrees(t *testing.T) {
 	pins := map[string]string{
-		"components/aioncore/LINUX-ARTIFACT-MANIFEST.sha256":    "6c79826411e8ed508c79a984d5f9bd99f556e8a2eb7fda6c022101c57663b12c  share/workagent-components/aioncore/SHA256SUMS\n",
-		"components/aioncore/LINUX-ARTIFACT-TREE.sha256":        "08b05b39a9629a0eaf1f16f69e8b1c8b469e72e630213e50905526198493f2e4  canonical-tree\n",
-		"components/aionui/LINUX-ARTIFACT-MANIFEST.sha256":      "5cd5b6bcc746a6345770638c3c799c44978c1f4c08f2089591bca8a74baafdae  share/workagent-components/aionui/SHA256SUMS\n",
-		"components/aionui/LINUX-ARTIFACT-TREE.sha256":          "103f45055521ecca5b0f402b112b929454cb878aff635e095c6b0d7d35ff7e5d  canonical-tree\n",
+		"components/aioncore/LINUX-ARTIFACT-MANIFEST.sha256":    "6ae33ce76b6872a2db2fa2d586184a853100754831c9bf728b17c78c4606aa69  share/workagent-components/aioncore/SHA256SUMS\n",
+		"components/aioncore/LINUX-ARTIFACT-TREE.sha256":        "ff7eb32e1bbc349d72b3531fef070b3d60eda734c334094dc4af2ba998a646ff  canonical-tree\n",
+		"components/aionui/LINUX-ARTIFACT-MANIFEST.sha256":      "57345de9975f1b8b4899deb36716ab5b4f15f9272529d2fdafdccb3c5cec7cbb  share/workagent-components/aionui/SHA256SUMS\n",
+		"components/aionui/LINUX-ARTIFACT-TREE.sha256":          "a6576a94b31bf8b36fbddbffba430fb6d66eab52ba3e5409da3d82d6b908aa5d  canonical-tree\n",
 		"components/chatforward/LINUX-ARTIFACT.sha256":          "aa86856f45b65a4a0727fb4068f6d7f6c778ad18a9c9a81a0d90ed3f3e07b4d0  workagent-chatforward-zombie-reap-20260725-2329-linux-x64.tar.gz\n",
 		"components/cliproxyapi/LINUX-ARTIFACT-MANIFEST.sha256": "1d5039df7ed55aa78f5c870e42547092cd8c1b2b6a6088552f78861c6b2c7f8a  share/workagent-components/cliproxyapi/SHA256SUMS\n",
 		"components/cliproxyapi/LINUX-ARTIFACT-TREE.sha256":     "88345b11939cad9c20d37c48c5555852ce3ade87e385db8bc436621b946ecd9f  canonical-tree\n",
@@ -407,8 +407,8 @@ func TestArtifactAssemblersRequireExternallyPinnedCompleteTrees(t *testing.T) {
 		"components/kimi-code/LINUX-ARTIFACT-TREE.sha256":       "4193a818f8d67dc80dfef3c2302999f42ba3f13d5bcfd3789f92224c29a3bb0a  canonical-tree\n",
 		"components/python/LINUX-ARTIFACT-MANIFEST.sha256":      "d4d6812c442d431e79679851fa7cfe808360caeb246b306852d1c3aef8a520e5  share/workagent-components/python/SHA256SUMS\n",
 		"components/python/LINUX-ARTIFACT-TREE.sha256":          "c74cd45be6b8b2754912e9ed246db74d7f2e610e1c6b4ef172ecc751665bc2b2  canonical-tree\n",
-		"components/runtime/LINUX-PAYLOAD-MANIFEST.sha256":      "fc4b784aa0f4fcd65b8f4f9eba3e4683c7e64cb48576e60a13b6c579800e28ef  share/workagent-components/runtime/SHA256SUMS\n",
-		"components/runtime/LINUX-PAYLOAD-TREE.sha256":          "0921ba54ab153bec177ae7e693f70ae2be213e3a971c8fa6b16ce7fe834137f5  canonical-tree\n",
+		"components/runtime/LINUX-PAYLOAD-MANIFEST.sha256":      "999129162d1057095a529198b6f33984bb2f4ff99eee22c03ac0acb354d10b05  share/workagent-components/runtime/SHA256SUMS\n",
+		"components/runtime/LINUX-PAYLOAD-TREE.sha256":          "6941784175b04957deb31e1d6ff9bce7c9cd5416a3d7f2496c80899adc59b1fa  canonical-tree\n",
 	}
 	for relative, expected := range pins {
 		if actual := repositoryFile(t, relative); actual != expected {
@@ -457,9 +457,9 @@ func TestArtifactAssemblersRequireExternallyPinnedCompleteTrees(t *testing.T) {
 
 	runtimeAssembler := repositoryFile(t, "scripts/assemble-runtime-linux.sh")
 	requireContains(t, runtimeAssembler,
-		"aionui-2.1.0-beta.editfork.21-linux-x64",
-		"9edd87cdadb47d9d8398d8a708e636b8c595800bf0e495cb0a65e110c6e4e387",
-		`== 2.1.0-beta.editfork.21 ]] || fail 'assembled AionUi version probe failed'`,
+		"aionui-2.1.0-beta.editfork.29-linux-x64",
+		"bff182e607d8bdefadaf116f0363af0fe4559e488df5ae9b1c1180b388862ce8",
+		`== 2.1.0-beta.editfork.29 ]] || fail 'assembled AionUi version probe failed'`,
 		`verify_protected_input_tree "$name artifact" "$root"`,
 		`"$repo_root/scripts/assemble-runtime-linux.sh"`,
 		`"$repo_root/components/aioncore/BINARY.sha256"`,

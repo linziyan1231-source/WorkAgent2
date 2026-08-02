@@ -447,6 +447,8 @@ for unit_asset in \
   'workagent-tenant-catalog-ready.target:deploy/systemd/workagent-tenant-catalog-ready.target' \
   'workagent-tenant-config-reconcile.service:deploy/systemd/workagent-tenant-config-reconcile.service' \
   'workagent-portal.service:deploy/systemd/workagent-portal.service' \
+  'workagent-provision.service:deploy/systemd/workagent-provision.service' \
+  'workagent-provision.socket:deploy/systemd/workagent-provision.socket' \
   'workagent-userhost@.service:deploy/systemd/workagent-userhost@.service' \
   'workagent-userhost@.socket:deploy/systemd/workagent-userhost@.socket' \
   'workagent-backup.service:deploy/systemd/workagent-backup.service' \

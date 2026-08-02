@@ -484,7 +484,7 @@ func quickCheckOfflinePortal(ctx context.Context, transaction *sql.Tx) error {
 }
 
 func queryOfflinePortalIdentities(ctx context.Context, transaction *sql.Tx) ([]PortalUserIdentity, error) {
-	rows, err := transaction.QueryContext(ctx, `SELECT tenant_id,typeof(tenant_id),runtime_user,typeof(runtime_user),data_root,typeof(data_root),enabled,typeof(enabled) FROM portal_users ORDER BY tenant_id,runtime_user,data_root,id`)
+	rows, err := transaction.QueryContext(ctx, `SELECT tenant_id,typeof(tenant_id),runtime_user,typeof(runtime_user),data_root,typeof(data_root),enabled,typeof(enabled),is_admin,typeof(is_admin) FROM portal_users ORDER BY tenant_id,runtime_user,data_root,id`)
 	if err != nil {
 		return nil, fmt.Errorf("read Portal user identities: %w", err)
 	}
@@ -494,7 +494,9 @@ func queryOfflinePortalIdentities(ctx context.Context, transaction *sql.Tx) ([]P
 		var tenantID, tenantType, runtimeUser, runtimeType, dataRoot, dataRootType string
 		var enabled any
 		var enabledType string
-		if err := rows.Scan(&tenantID, &tenantType, &runtimeUser, &runtimeType, &dataRoot, &dataRootType, &enabled, &enabledType); err != nil {
+		var admin any
+		var adminType string
+		if err := rows.Scan(&tenantID, &tenantType, &runtimeUser, &runtimeType, &dataRoot, &dataRootType, &enabled, &enabledType, &admin, &adminType); err != nil {
 			return nil, fmt.Errorf("decode Portal user identity: %w", err)
 		}
 		if tenantType != "text" || runtimeType != "text" || dataRootType != "text" || tenantID == "" || runtimeUser == "" || dataRoot == "" ||
@@ -505,6 +507,13 @@ func queryOfflinePortalIdentities(ctx context.Context, transaction *sql.Tx) ([]P
 		enabledInteger, ok := enabled.(int64)
 		if !ok || enabledType != "integer" || (enabledInteger != 0 && enabledInteger != 1) {
 			return nil, errors.New("Portal user enabled value is not exactly integer 0 or 1")
+		}
+		adminInteger, ok := admin.(int64)
+		if !ok || adminType != "integer" || (adminInteger != 0 && adminInteger != 1) {
+			return nil, errors.New("Portal user administrator value is not exactly integer 0 or 1")
+		}
+		if adminInteger == 1 && strings.HasPrefix(tenantID, portalAdministratorIdentityPrefix) && tenantID == runtimeUser && tenantID == dataRoot {
+			continue
 		}
 		identities = append(identities, PortalUserIdentity{
 			TenantID: tenantID, RuntimeUser: runtimeUser, DataRoot: dataRoot, Enabled: enabledInteger == 1,

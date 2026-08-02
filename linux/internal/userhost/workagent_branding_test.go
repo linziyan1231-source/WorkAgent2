@@ -12,6 +12,26 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/projectfs"
 )
 
+func TestLoadWorkAgentAssistantPromptBrandsLegacySignedContent(t *testing.T) {
+	releaseRoot := t.TempDir()
+	promptPath := filepath.Join(releaseRoot, filepath.FromSlash(workagentAssistantPromptPath))
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacyPrompt := "# " + legacyDisplayBrand + " 管家\n\n帮助用户管理 " + legacyDisplayBrand + "。\n"
+	if err := os.WriteFile(promptPath, []byte(legacyPrompt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := loadWorkAgentAssistantPrompt(releaseRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(prompt)
+	if !strings.Contains(string(prompt), "WorkAgent2") || strings.Contains(string(prompt), legacyDisplayBrand) {
+		t.Fatalf("signed prompt was not branded: %q", prompt)
+	}
+}
+
 func TestApplyWorkAgentBrandingConvergesBuiltinStateAndPreservesCustomState(t *testing.T) {
 	rootPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(rootPath, "data"), 0o700); err != nil {
@@ -20,10 +40,9 @@ func TestApplyWorkAgentBrandingConvergesBuiltinStateAndPreservesCustomState(t *t
 	if err := os.MkdirAll(filepath.Join(rootPath, "config"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Windows production already carries this exact marker.  Accepting it before
-	// convergence makes the Linux migration idempotent instead of treating a
-	// valid WorkAgent tenant as foreign state.
-	if err := os.WriteFile(filepath.Join(rootPath, workagentBrandingMarkerPath), []byte(workagentBrandingMarkerContent), 0o600); err != nil {
+	// Existing tenants carry the previous brand marker. Migrate it in place
+	// instead of treating a valid tenant as foreign state.
+	if err := os.WriteFile(filepath.Join(rootPath, workagentBrandingMarkerPath), []byte(legacyBrandingMarker), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	seedWorkAgentSkillFiles(t, rootPath)
@@ -42,6 +61,10 @@ func TestApplyWorkAgentBrandingConvergesBuiltinStateAndPreservesCustomState(t *t
 	changed, err := applyWorkAgentBranding(context.Background(), root, "data/aionui-backend.db", prompt, uint32(os.Getuid()), time.Unix(100, 0))
 	if err != nil || !changed {
 		t.Fatalf("first branding convergence changed=%v err=%v", changed, err)
+	}
+	marker, err := os.ReadFile(filepath.Join(rootPath, workagentBrandingMarkerPath))
+	if err != nil || string(marker) != workagentBrandingMarkerContent {
+		t.Fatalf("legacy branding marker was not migrated: marker=%q err=%v", marker, err)
 	}
 	database, err = sql.Open("sqlite", databasePath)
 	if err != nil {
@@ -69,7 +92,7 @@ func TestApplyWorkAgentBrandingConvergesBuiltinStateAndPreservesCustomState(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "WorkAgent2") || strings.Contains(string(content), "WorkAgent2") || !strings.Contains(string(content), "https://github.com/iOfficeAI/AionUi") {
+	if !strings.Contains(string(content), "WorkAgent2") || strings.Contains(string(content), legacyDisplayBrand) || !strings.Contains(string(content), "https://github.com/iOfficeAI/AionUi") {
 		t.Fatalf("skill branding or protected technical literal is wrong: %q", content)
 	}
 	changed, err = applyWorkAgentBranding(context.Background(), root, "data/aionui-backend.db", prompt, uint32(os.Getuid()), time.Unix(200, 0))

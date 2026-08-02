@@ -180,6 +180,69 @@ func TestFreshUserAndSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestPortalOnlyAdministratorIsUniqueAndExcludedFromManagedUsers(t *testing.T) {
+	ctx := context.Background()
+	value := openTestStore(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	administrator, err := value.CreateAdministrator(ctx, "Admin", "hash-placeholder", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !administrator.Admin || !administrator.Enabled || administrator.TenantID != "portal-admin:admin" ||
+		administrator.RuntimeUser != administrator.TenantID || administrator.DataRoot != administrator.TenantID {
+		t.Fatalf("unexpected Portal-only administrator: %+v", administrator)
+	}
+	if _, err := value.CreateAdministrator(ctx, "other-admin", "hash-placeholder", now); err == nil {
+		t.Fatal("second Portal administrator was accepted")
+	}
+	managed, err := value.ListManagedUsers(ctx)
+	if err != nil || len(managed) != 0 {
+		t.Fatalf("administrator entered managed user catalog: %+v err=%v", managed, err)
+	}
+	if count, err := value.ManagedUserCount(ctx); err != nil || count != 0 {
+		t.Fatalf("unexpected managed user count: %d err=%v", count, err)
+	}
+	tenants, err := value.ListTenantUsers(ctx)
+	if err != nil || len(tenants) != 0 {
+		t.Fatalf("Portal-only administrator entered tenant catalog: %+v err=%v", tenants, err)
+	}
+	users, err := value.ListUsers(ctx)
+	if err != nil || len(users) != 1 || users[0].ID != administrator.ID {
+		t.Fatalf("administrator missing from complete Portal user list: %+v err=%v", users, err)
+	}
+}
+
+func TestLegacyAdministratorConversionPreservesAccountAndRevokesSessions(t *testing.T) {
+	ctx := context.Background()
+	value := openTestStore(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	legacy, err := value.CreateUser(ctx, "Admin", "hash-placeholder", testTenantID, "workagent_admin", "/srv/workagent/users/"+testTenantID, true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := value.CreateSession(ctx, "opaque-session-token", "opaque-csrf-token", legacy, "192.0.2.10", "test-agent", now, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	tenants, err := value.ListTenantUsers(ctx)
+	if err != nil || len(tenants) != 1 || tenants[0].TenantID != testTenantID {
+		t.Fatalf("legacy administrator tenant was hidden before migration: %+v err=%v", tenants, err)
+	}
+	previous, current, err := value.ConvertAdministratorToPortalOnly(ctx, "admin", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous.TenantID != testTenantID || !IsPortalOnlyAdministrator(current) || current.ID != previous.ID || current.AuthVersion != previous.AuthVersion+1 {
+		t.Fatalf("unexpected converted administrator: previous=%+v current=%+v", previous, current)
+	}
+	if _, err := value.SessionByToken(ctx, "opaque-session-token"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("administrator conversion did not revoke sessions: %v", err)
+	}
+	tenants, err = value.ListTenantUsers(ctx)
+	if err != nil || len(tenants) != 0 {
+		t.Fatalf("converted administrator remained in tenant catalog: %+v err=%v", tenants, err)
+	}
+}
+
 func TestLoginRateLimit(t *testing.T) {
 	ctx := context.Background()
 	value := openTestStore(t)

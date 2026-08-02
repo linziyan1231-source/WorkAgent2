@@ -31,6 +31,7 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/ipc"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/portalusage"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/productconfig"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/provisionipc"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/release"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 )
@@ -64,6 +65,7 @@ type Server struct {
 	ensureRuntime      func(context.Context, store.User) error
 	readStorageUsage   func(context.Context, store.User) (portalusage.StorageUsage, error)
 	writeUsageSnapshot func(context.Context, store.User, []byte) error
+	provision          func(context.Context, provisionipc.Request) (provisionipc.Response, error)
 	static             http.Handler
 	usage              usageReader
 	notifications      *notificationSource
@@ -152,7 +154,8 @@ func New(cfg config.Portal, data *store.Store, brand productconfig.Brand, policy
 			return nil, fmt.Errorf("verify Renderer release: %w", verifyErr)
 		}
 		rendererRoot = filepath.Join(verified.Path, filepath.FromSlash(cfg.Renderer.RelativeRoot))
-		static, err = newRendererStaticHandler(rendererRoot)
+		brandLogoPath, _ := brand.AssetPath("logo")
+		static, err = newRendererStaticHandler(rendererRoot, brandLogoPath)
 		if err != nil {
 			return nil, err
 		}
@@ -182,6 +185,7 @@ func New(cfg config.Portal, data *store.Store, brand productconfig.Brand, policy
 	server.ensureRuntime = server.ensureRuntimeOnce
 	server.readStorageUsage = server.readRuntimeStorageUsage
 	server.writeUsageSnapshot = server.writeRuntimeUsageSnapshot
+	server.provision = provisionipc.Call
 	return server, nil
 }
 
@@ -201,30 +205,35 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.withSession(s.requireCSRF(s.logout)))
 	mux.HandleFunc("POST /logout", s.logoutCompatibility)
 	mux.HandleFunc("GET /api/policy", s.withSession(s.policyAPI))
-	mux.HandleFunc("GET /api/portal/me/usage", s.withSession(s.currentUsage))
-	mux.HandleFunc("GET /api/portal/me/notifications", s.withSession(s.currentNotifications))
-	mux.HandleFunc("GET /api/portal/me/chatgpt/pro-events", s.withSession(s.chatGPTProEvents))
-	mux.HandleFunc("POST /api/portal/me/chatgpt/pro-events", s.withSession(s.chatGPTProEvents))
-	mux.HandleFunc("GET /api/runtime/status", s.withSession(s.runtimeStatus))
-	mux.HandleFunc("GET /api/projects", s.withSession(s.listProjects))
-	mux.HandleFunc("POST /api/projects", s.withSession(s.requireCSRF(s.createProject)))
-	mux.HandleFunc("POST /api/projects/rename", s.withSession(s.requireCSRF(s.renameProject)))
-	mux.HandleFunc("POST /api/portal/me/projects", s.withSession(s.createProject))
-	mux.HandleFunc("PATCH /api/portal/me/projects", s.withSession(s.renameProjectCompatibility))
-	mux.HandleFunc("POST /api/mcp/oauth/login", s.withSession(s.mcpOAuthStart))
+	mux.HandleFunc("GET /api/portal/me/usage", s.withEmployee(s.currentUsage))
+	mux.HandleFunc("GET /api/portal/me/notifications", s.withEmployee(s.currentNotifications))
+	mux.HandleFunc("GET /api/portal/me/chatgpt/pro-events", s.withEmployee(s.chatGPTProEvents))
+	mux.HandleFunc("POST /api/portal/me/chatgpt/pro-events", s.withEmployee(s.chatGPTProEvents))
+	mux.HandleFunc("GET /api/runtime/status", s.withEmployee(s.runtimeStatus))
+	mux.HandleFunc("GET /api/projects", s.withEmployee(s.listProjects))
+	mux.HandleFunc("POST /api/projects", s.withEmployee(s.requireCSRF(s.createProject)))
+	mux.HandleFunc("POST /api/projects/rename", s.withEmployee(s.requireCSRF(s.renameProject)))
+	mux.HandleFunc("POST /api/portal/me/projects", s.withEmployee(s.createProject))
+	mux.HandleFunc("PATCH /api/portal/me/projects", s.withEmployee(s.renameProjectCompatibility))
+	mux.HandleFunc("POST /api/mcp/oauth/login", s.withEmployee(s.mcpOAuthStart))
 	mux.HandleFunc("GET /api/mcp/oauth/callback", s.mcpOAuthCallback)
-	mux.HandleFunc("POST /api/mcp/oauth/cancel", s.withSession(s.mcpOAuthCancel))
-	mux.HandleFunc("GET /api/mcp/oauth/popup", s.withSession(s.mcpOAuthPopup))
+	mux.HandleFunc("POST /api/mcp/oauth/cancel", s.withEmployee(s.mcpOAuthCancel))
+	mux.HandleFunc("GET /api/mcp/oauth/popup", s.withEmployee(s.mcpOAuthPopup))
 	mux.HandleFunc("GET /portal-mcp-oauth.js", s.mcpOAuthBridge)
 	mux.HandleFunc("POST /internal/chatforward/quota/reserve", s.chatForwardQuotaReserve)
 	mux.HandleFunc("POST /internal/chatforward/quota/settle", s.chatForwardQuotaSettle)
 	mux.HandleFunc("GET /api/users", s.withAdmin(s.listUsers))
-	mux.Handle("/chatgpt", s.withSession(s.chatForwardProxy))
-	mux.Handle("/chatgpt/", s.withSession(s.chatForwardProxy))
-	mux.Handle("/runtime/", s.withSession(s.requireCSRFForUnsafe(http.HandlerFunc(s.runtimeProxy))))
-	mux.Handle("/api", s.withSession(http.HandlerFunc(s.rootRuntimeProxy)))
-	mux.Handle("/api/", s.withSession(http.HandlerFunc(s.rootRuntimeProxy)))
-	mux.Handle("GET /ws", s.withSession(http.HandlerFunc(s.rootRuntimeProxy)))
+	mux.HandleFunc("GET /api/portal/admin/users", s.withAdmin(s.adminUsers))
+	mux.HandleFunc("POST /api/portal/admin/users", s.withAdmin(s.requireCSRF(s.adminUsers)))
+	mux.HandleFunc("POST /api/portal/admin/users/enable", s.withAdmin(s.requireCSRF(s.enableManagedUser)))
+	mux.HandleFunc("POST /api/portal/admin/users/disable", s.withAdmin(s.requireCSRF(s.disableManagedUser)))
+	mux.HandleFunc("POST /api/portal/admin/users/reset-password", s.withAdmin(s.requireCSRF(s.resetManagedUserPassword)))
+	mux.Handle("/chatgpt", s.withEmployee(s.chatForwardProxy))
+	mux.Handle("/chatgpt/", s.withEmployee(s.chatForwardProxy))
+	mux.Handle("/runtime/", s.withEmployee(s.requireCSRFForUnsafe(http.HandlerFunc(s.runtimeProxy))))
+	mux.Handle("/api", s.withEmployee(http.HandlerFunc(s.rootRuntimeProxy)))
+	mux.Handle("/api/", s.withEmployee(http.HandlerFunc(s.rootRuntimeProxy)))
+	mux.Handle("GET /ws", s.withEmployee(http.HandlerFunc(s.rootRuntimeProxy)))
 	mux.HandleFunc("GET /brand/{asset}", s.brandAsset)
 	mux.Handle("/", s.static)
 	return s.metrics.middleware(s.security(mux))
@@ -392,7 +401,11 @@ func (s *Server) brandAsset(writer http.ResponseWriter, request *http.Request) {
 		http.NotFound(writer, request)
 		return
 	}
-	writer.Header().Set("Cache-Control", "public, max-age=3600")
+	if request.URL.Query().Get("v") == rendererBrandVersion {
+		writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		writer.Header().Set("Cache-Control", "public, max-age=3600")
+	}
 	http.ServeFile(writer, request, assetPath)
 }
 
@@ -438,17 +451,19 @@ func (s *Server) login(writer http.ResponseWriter, request *http.Request) {
 		s.loginFailure(writer, request, body.Username, "invalid_credentials")
 		return
 	}
-	runtimeContext, cancelRuntime := context.WithTimeout(request.Context(), 3*time.Minute)
-	err = s.ensureRuntime(runtimeContext, userValue)
-	cancelRuntime()
-	if err != nil {
-		if auditErr := s.store.Audit(request.Context(), store.AuditEvent{OccurredAt: now, Action: "portal.login", Outcome: "instance_failed", Username: userValue.Username, TenantID: userValue.TenantID, RemoteIP: remoteIP}); auditErr != nil {
-			s.internalError(writer, "audit runtime start failure", errors.Join(err, auditErr))
+	if !userValue.Admin {
+		runtimeContext, cancelRuntime := context.WithTimeout(request.Context(), 3*time.Minute)
+		err = s.ensureRuntime(runtimeContext, userValue)
+		cancelRuntime()
+		if err != nil {
+			if auditErr := s.store.Audit(request.Context(), store.AuditEvent{OccurredAt: now, Action: "portal.login", Outcome: "instance_failed", Username: userValue.Username, TenantID: userValue.TenantID, RemoteIP: remoteIP}); auditErr != nil {
+				s.internalError(writer, "audit runtime start failure", errors.Join(err, auditErr))
+				return
+			}
+			s.logger.Printf("tenant runtime failed to become ready tenant=%s: %v", userValue.TenantID, err)
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Your AionUi instance could not be started"})
 			return
 		}
-		s.logger.Printf("tenant runtime failed to become ready tenant=%s: %v", userValue.TenantID, err)
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Your AionUi instance could not be started"})
-		return
 	}
 	currentUser, err := s.store.UserByID(request.Context(), userValue.ID)
 	if err != nil || !currentUser.Enabled || currentUser.AuthVersion != userValue.AuthVersion {
@@ -682,7 +697,7 @@ func (s *Server) policyAPI(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) listUsers(writer http.ResponseWriter, request *http.Request) {
-	users, err := s.store.ListUsers(request.Context())
+	users, err := s.store.ListManagedUsers(request.Context())
 	if err != nil {
 		http.Error(writer, "cannot list users", http.StatusInternalServerError)
 		return
@@ -692,6 +707,186 @@ func (s *Server) listUsers(writer http.ResponseWriter, request *http.Request) {
 		result = append(result, publicUser(value))
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"users": result})
+}
+
+func (s *Server) adminUsers(writer http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodGet {
+		users, err := s.store.ListManagedUsers(request.Context())
+		if err != nil {
+			s.internalError(writer, "list managed users", err)
+			return
+		}
+		items := make([]map[string]any, len(users))
+		var usageWait sync.WaitGroup
+		for index, userValue := range users {
+			items[index] = managedUserPayload(userValue)
+			if !userValue.Enabled {
+				items[index]["resource_usage_unavailable"] = true
+				continue
+			}
+			usageWait.Add(1)
+			go func(index int, userValue store.User) {
+				defer usageWait.Done()
+				usageContext, cancel := context.WithTimeout(request.Context(), time.Duration(s.cfg.Usage.QueryTimeoutSeconds)*time.Second)
+				defer cancel()
+				summary, usageErr := s.managedUserUsage(usageContext, userValue)
+				if usageErr == nil {
+					items[index]["resource_usage"] = summary
+					return
+				}
+				items[index]["resource_usage_unavailable"] = true
+				s.logger.Printf("administrator resource usage unavailable tenant=%s", userValue.TenantID)
+			}(index, userValue)
+		}
+		usageWait.Wait()
+		writeJSON(writer, http.StatusOK, map[string]any{"success": true, "users": items})
+		return
+	}
+	var body struct {
+		Username       string `json:"username"`
+		PortalPassword string `json:"portal_password"`
+	}
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid account request"})
+		return
+	}
+	password := []byte(body.PortalPassword)
+	body.PortalPassword = ""
+	defer auth.Zero(password)
+	if err := auth.ValidatePortalUsername(body.Username); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	if err := auth.ValidatePortalPassword(password); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	nonce, err := auth.RandomToken(18)
+	if err != nil {
+		s.internalError(writer, "create provision nonce", err)
+		return
+	}
+	actor := request.Context().Value(userContextKey).(store.User)
+	callContext, cancel := context.WithTimeout(request.Context(), 10*time.Minute)
+	defer cancel()
+	response, err := s.provision(callContext, provisionipc.Request{Command: "add-user", Username: body.Username, PortalPassword: password, Actor: actor.Username, Nonce: nonce})
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	if response.User == nil {
+		s.internalError(writer, "read provisioned user", errors.New("provision service returned no user"))
+		return
+	}
+	created, err := s.store.UserByUsername(request.Context(), response.User.Username)
+	if err != nil {
+		s.internalError(writer, "read provisioned user", err)
+		return
+	}
+	if created.Admin {
+		s.internalError(writer, "read provisioned user", errors.New("provision service returned an administrator"))
+		return
+	}
+	if err := s.store.Audit(request.Context(), store.AuditEvent{OccurredAt: s.now(), Action: "portal.admin.user.add", Outcome: "success", Username: created.Username, TenantID: created.TenantID, RemoteIP: request.Context().Value(remoteIPContextKey).(string), Details: map[string]any{"actor": actor.Username}}); err != nil {
+		s.internalError(writer, "audit administrator user add", err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, map[string]any{"success": true, "user": managedUserPayload(created)})
+}
+
+func managedUserPayload(userValue store.User) map[string]any {
+	item := map[string]any{
+		"username": userValue.Username, "tenant_id": userValue.TenantID, "runtime_user": userValue.RuntimeUser,
+		// The synchronized Windows UI still names these transport fields after
+		// its account model. Populate them with the equivalent Linux runtime
+		// identity so the account column is useful instead of blank.
+		"windows_username": userValue.RuntimeUser, "windows_sid": userValue.TenantID,
+		"enabled": userValue.Enabled, "created_at": userValue.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if userValue.LastLoginAt != nil {
+		item["last_login_at"] = userValue.LastLoginAt.UTC().Format(time.RFC3339)
+	}
+	return item
+}
+
+func (s *Server) enableManagedUser(writer http.ResponseWriter, request *http.Request) {
+	s.setManagedUserEnabled(writer, request, true)
+}
+
+func (s *Server) disableManagedUser(writer http.ResponseWriter, request *http.Request) {
+	s.setManagedUserEnabled(writer, request, false)
+}
+
+func (s *Server) setManagedUserEnabled(writer http.ResponseWriter, request *http.Request, enabled bool) {
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := httpjson.Decode(request, &body, 4*1024); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid account state request"})
+		return
+	}
+	userValue, err := s.store.UserByUsername(request.Context(), body.Username)
+	if err != nil || userValue.Admin {
+		writeJSON(writer, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	nonce, err := auth.RandomToken(18)
+	if err != nil {
+		s.internalError(writer, "create account state nonce", err)
+		return
+	}
+	actor := request.Context().Value(userContextKey).(store.User)
+	callContext, cancel := context.WithTimeout(request.Context(), 3*time.Minute)
+	defer cancel()
+	response, err := s.provision(callContext, provisionipc.Request{Command: "set-enabled", Username: userValue.Username, Enabled: &enabled, Actor: actor.Username, Nonce: nonce})
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	if response.User == nil || response.User.Enabled != enabled {
+		s.internalError(writer, "read updated managed user", errors.New("provision service returned inconsistent user state"))
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"success": true})
+}
+
+func (s *Server) resetManagedUserPassword(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Username       string `json:"username"`
+		PortalPassword string `json:"portal_password"`
+	}
+	if err := httpjson.Decode(request, &body, 16*1024); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid password reset request"})
+		return
+	}
+	password := []byte(body.PortalPassword)
+	body.PortalPassword = ""
+	defer auth.Zero(password)
+	if err := auth.ValidatePortalPassword(password); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	userValue, err := s.store.UserByUsername(request.Context(), body.Username)
+	if err != nil || userValue.Admin {
+		writeJSON(writer, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		s.internalError(writer, "hash reset password", err)
+		return
+	}
+	now := s.now()
+	if err := s.store.SetPassword(request.Context(), userValue.Username, hash, now); err != nil {
+		s.internalError(writer, "reset managed user password", err)
+		return
+	}
+	actor := request.Context().Value(userContextKey).(store.User)
+	if err := s.store.Audit(request.Context(), store.AuditEvent{OccurredAt: now, Action: "portal.admin.user.reset_password", Outcome: "success", Username: userValue.Username, TenantID: userValue.TenantID, RemoteIP: request.Context().Value(remoteIPContextKey).(string), Details: map[string]any{"actor": actor.Username}}); err != nil {
+		s.internalError(writer, "audit managed user password reset", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"success": true})
 }
 
 func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
@@ -729,6 +924,16 @@ func (s *Server) withAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return s.withSession(func(writer http.ResponseWriter, request *http.Request) {
 		if !request.Context().Value(userContextKey).(store.User).Admin {
 			writeJSON(writer, http.StatusForbidden, map[string]any{"success": false, "code": "ADMIN_REQUIRED", "message": "Administrator access is required"})
+			return
+		}
+		next(writer, request)
+	})
+}
+
+func (s *Server) withEmployee(next http.HandlerFunc) http.HandlerFunc {
+	return s.withSession(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Context().Value(userContextKey).(store.User).Admin {
+			writeJSON(writer, http.StatusForbidden, map[string]any{"success": false, "code": "EMPLOYEE_REQUIRED", "message": "Employee runtime access is required"})
 			return
 		}
 		next(writer, request)
@@ -980,7 +1185,12 @@ func sessionToken(request *http.Request, name string) (string, error) {
 }
 
 func publicUser(value store.User) map[string]any {
-	return map[string]any{"id": strconv.FormatInt(value.ID, 10), "username": value.Username, "tenant_id": value.TenantID, "enabled": value.Enabled, "admin": value.Admin, "created_at": value.CreatedAt, "last_login_at": value.LastLoginAt}
+	result := map[string]any{"id": strconv.FormatInt(value.ID, 10), "username": value.Username, "enabled": value.Enabled, "admin": value.Admin, "created_at": value.CreatedAt, "last_login_at": value.LastLoginAt}
+	if !value.Admin {
+		result["tenant_id"] = value.TenantID
+		result["runtime_user"] = value.RuntimeUser
+	}
+	return result
 }
 
 func isUnsafe(method string) bool {

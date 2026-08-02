@@ -11,6 +11,37 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 )
 
+func (s *Server) managedUserUsage(ctx context.Context, userValue store.User) (portalusage.Summary, error) {
+	if userValue.Admin || s.usage == nil {
+		return portalusage.Summary{}, errors.New("managed user usage is unavailable")
+	}
+	if err := s.ensureRuntime(ctx, userValue); err != nil {
+		return portalusage.Summary{}, err
+	}
+	summary, err := s.usage.Current(ctx, userValue.TenantID)
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	if s.cfg.ChatForward.Enabled {
+		quota, err := s.store.ChatGPTProQuota(ctx, userValue.ID, s.cfg.ChatForward.WeeklyProLimit, s.now())
+		if err != nil {
+			return portalusage.Summary{}, err
+		}
+		for index := range summary.Providers {
+			if summary.Providers[index].Kind == "chatgpt" {
+				summary.Providers[index].Pro = &portalusage.CountWindow{Used: quota.Confirmed + quota.Pending, Limit: quota.Limit, ResetAt: quota.ResetAt.Format(time.RFC3339)}
+				break
+			}
+		}
+	}
+	storage, err := s.readStorageUsage(ctx, userValue)
+	if err != nil {
+		return portalusage.Summary{}, err
+	}
+	summary.Storage = &storage
+	return summary, nil
+}
+
 func (s *Server) currentUsage(writer http.ResponseWriter, request *http.Request) {
 	if request.URL.RawQuery != "" {
 		writeJSON(writer, http.StatusBadRequest, map[string]any{"success": false, "message": "Quota request does not accept query parameters"})

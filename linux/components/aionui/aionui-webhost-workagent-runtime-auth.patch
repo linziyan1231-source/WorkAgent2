@@ -2085,7 +2085,7 @@ index 0000000..1622231
 +    fs.closeSync(observerFD);
 +    unreadPacket.fill(0);
 +  }
-+  if (standaloneExit.code !== 0 || standalone.output().trim() !== '2.1.0-beta.editfork.21') {
++  if (standaloneExit.code !== 0 || standalone.output().trim() !== '2.1.0-beta.editfork.29') {
 +    throw new Error(`standalone fd3 version smoke failed\n${standalone.output()}`);
 +  }
 +  if (unreadLength !== WORKAGENT_RUNTIME_FRAME_BYTES) {

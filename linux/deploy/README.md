@@ -196,7 +196,7 @@ revision that differs from its own clean embedded Git revision:
   --required-executable bin/python3
 ```
 
-Portal's Renderer and every UserHost resolve the release JSON pointer at startup. The production runtime lock is AionUi `2.1.0-beta.editfork.21`, whose static/assistant payload is byte-verified against the read-only Windows `.20` reference and whose Linux host adds the fd3 possession-channel boundary, plus the Linux compatibility upgrade AionCore `v0.1.42-editfork.10`, `@noble/hashes` 2.2.0, Codex 0.144.4, Kimi Code `0.29.1-fork-steer.1`, and Python 3.13.13. The `.21` Renderer must contain the locked pure-JS SHA-256 upload path and must not depend on `crypto.subtle`; `.21/.10` must pass the 1 GiB limit, 16 MiB chunk, three-concurrent-upload, SHA/offset, 24-hour resume, idempotent init/complete and no-overwrite acceptance suite. A version string alone is not browser evidence. The shared lock also covers CLIProxyAPI 7.2.81, `per-key-models.4`, `cpa-key-policy` 0.4.5, ChatForward `zombie-reap-20260725-2329`, extension 0.16.0, Node.js 24.15.0 and ws 8.21.1. Do not claim production activation until every required verified component and external login prerequisite is present at its approved version.
+Portal's Renderer and every UserHost resolve the release JSON pointer at startup. The production runtime lock is AionUi `2.1.0-beta.editfork.29`, whose static/assistant payload is byte-verified against the read-only Windows `.28` snapshot and whose Linux host retains the fd3 possession-channel boundary, plus AionCore `v0.1.42-editfork.15`, `@noble/hashes` 2.2.0, Codex 0.144.4, Kimi Code `0.29.1-fork-steer.1`, and Python 3.13.13. `.29/.15` must pass the 1 GiB limit, 16 MiB chunk, three-concurrent-upload, SHA/offset, 24-hour resume, idempotent init/complete and no-overwrite acceptance suite. A version string alone is not browser evidence. The shared lock also covers CLIProxyAPI 7.2.81, `per-key-models.4`, `cpa-key-policy` 0.4.5, ChatForward `zombie-reap-20260725-2329`, extension 0.16.0, Node.js 24.15.0 and ws 8.21.1. Do not claim production activation until every required verified component and external login prerequisite is present at its approved version.
 
 ## 5. Provision tenants and users
 
@@ -217,13 +217,13 @@ Create the first Portal administrator from a protected password file:
 
 ```bash
 /opt/workagent/control/bin/workagent-admin init-admin \
-  --tenant-config /etc/workagent/users/TENANT_UUID.json \
   --username USERNAME \
-  --password-file /absolute/root-only/password.input \
-  --initial
+  --password-file /absolute/root-only/password.input
 ```
 
-`init-admin --initial` is root-only, requires the same missing pointer and verified tenant infrastructure, and holds the lifecycle lock until the enabled administrator is durable. After reading the protected password input it permanently drops to the configured `workagent` identity before creating the Portal database, SQLite sidecars, audit sink or runtime lock, so no root-owned state can strand Portal startup. Use `create-user`, `set-password`, `set-enabled`, `set-limits`, `runtime-status`, `runtime-start`, `runtime-stop`, `runtime-restart` and `set-chatgpt-pro-limit` for later lifecycle operations. Each enabled-state change first persists a complete previous/desired transaction, commits the database bit and session revocation as its linearization point, replays systemd to that complete state, and removes the transaction only after exact full-catalog readback. Re-enablement additionally verifies identity, ACL, release, drop-ins and the live socket before success.
+`init-admin` is root-only and creates one Portal-only administrator without allocating a tenant or starting a user runtime. After reading the protected password input it permanently drops to the configured `workagent` identity before creating the Portal database, SQLite sidecars, audit sink or runtime lock, so no root-owned state can strand Portal startup. Once Portal is active, the administrator page lists employee resource usage and supports add, enable, disable and password reset. Add/enable/disable calls cross the fixed root-owned `workagent-provision.socket`; its service serializes provisioning and keeps only stable non-secret pending identifiers under `/var/lib/workagent/provisioning`, so retry reuses the same tenant UUID, runtime account and project ID. Quota/limit and explicit runtime controls remain root CLI operations.
+
+On an upgrade from the historical tenant-bound administrator, first create and verify a complete backup no older than four hours, then run `workagent-admin migrate-admin --backup-archive ... --backup-receipt ...`. The command disables the old tenant, moves its protected configuration to `/etc/workagent/retired-tenants`, converts the account in place, revokes sessions, and retains its data root and runtime account as an offline retirement hold. Do not delete that hold until the backup has completed its restore rehearsal.
 
 ## 6. Initial activation and upgrades
 
@@ -246,7 +246,7 @@ For every upgrade, make the configured `/notification` source return a new notic
   --backup-receipt /absolute/verified/receipt
 ```
 
-For the first activation, omit `--maintenance-session-file` and pass `--initial` to `activate`; there is no existing user session to notify. Immediately after the release pointer is active, and before attempting `provision --start`, `runtime-start`, or Portal startup, close the bootstrap enabled-state gap with `/opt/workagent/control/bin/workagent-admin activate-tenant-catalog --initial --config /etc/workagent/portal.json`. Initial mode requires exactly one enabled administrator. This full-catalog transaction is required because `init-admin --initial` deliberately committed an enabled Portal identity while the not-yet-resolvable runtime socket remained disabled. It is idempotent and is the only supported first-start bridge; do not manually enable the socket.
+For the first activation, omit `--maintenance-session-file` and pass `--initial` to `activate`; there is no existing user session to notify. Immediately after the release pointer is active, run `/opt/workagent/control/bin/workagent-admin activate-tenant-catalog --initial --config /etc/workagent/portal.json`. Initial mode requires exactly one enabled Portal-only administrator and no managed tenants; the empty tenant catalog is valid. Start Portal and its provisioning socket, sign in as the administrator, and create the first employee in the browser rather than pre-allocating an administrator tenant.
 
 The report output is immutable and must not already exist. Its parent must be a protected directory owned by the invoking root identity; the command rejects symbolic-link paths, hard-link aliases and any alias of a bound input.
 

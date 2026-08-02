@@ -6,8 +6,8 @@ umask 022
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 component_root="$repo_root/components/aionui"
 noble_component_root="$repo_root/components/noble-hashes"
-source_root="${AIONUI_SOURCE_DIR:-$repo_root/.tools/sources/aionui}"
-reference_root="${AIONUI_REFERENCE_DIR:-$repo_root/.tools/reference/aionui-2.1.0-beta.editfork.20}"
+source_root="${AIONUI_SOURCE_DIR:-$repo_root/.tools/sources/aionui-editfork28-windows}"
+reference_root="${AIONUI_REFERENCE_DIR:-$repo_root/.tools/reference/aionui-2.1.0-beta.editfork.28}"
 bun_binary="${AIONUI_BUN_BINARY:-$repo_root/.tools/toolchains/bun-linux-x64/bun}"
 noble_root="${AIONUI_NOBLE_HASHES_DIR:-$source_root/node_modules/.bun/@noble+hashes@2.2.0/node_modules/@noble/hashes}"
 version="$(tr -d '\r\n' < "$component_root/VERSION")"
@@ -34,7 +34,7 @@ canonical_absent_output() {
 }
 
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || fail 'release target must be Linux x86_64'
-[[ "$version" == 2.1.0-beta.editfork.21 ]] || fail 'unexpected AionUi release identity'
+[[ "$version" == 2.1.0-beta.editfork.29 ]] || fail 'unexpected AionUi release identity'
 for command in chmod cmp cut find grep head install mkdir mktemp mv node patch realpath rm sed sha256sum sort tar wc xargs; do
   command -v "$command" >/dev/null 2>&1 || fail "required command is missing: $command"
 done
@@ -55,9 +55,9 @@ if find "$noble_root" \( -type l -o \( ! -type d ! -type f \) \) -print -quit | 
 fi
 (cd "$noble_root" && sha256sum --strict --check "$noble_component_root/FILES.sha256") >/dev/null
 [[ "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$noble_root/package.json" | head -n 1)" == 2.2.0 ]] || fail '@noble/hashes version mismatch'
-[[ "$(hash_of "$reference_root/release-manifest.json")" == d5cae6e67732f9e787006a9a08b60ed1612a3304566e030a340b9920f03b02d5 ]] || fail 'Windows release manifest checksum mismatch'
-[[ "$(hash_of "$reference_root/package.json")" == ea99bf3988e23ec5ef31d908e336dedccab9d7293fbfb2eff69afc213db65cf1 ]] || fail 'Windows package metadata checksum mismatch'
-[[ "$(hash_of "$component_root/package.json")" == fb06783a1a9b44c8cd868e04faed2f86ee278555b9eafb4c09da0c2e7221c13c ]] || fail 'Linux package metadata checksum mismatch'
+[[ "$(hash_of "$reference_root/windows-reference.json")" == 667154aa35b523cee01e32bc717db9f35fb9be6c748a4523f150461ea0023b0e ]] || fail 'Windows reference identity checksum mismatch'
+[[ "$(hash_of "$reference_root/package.json")" == b5142c71c44dc092bbd00514f9c7ac1868b42c5cd48cadfad4150a7b17948b83 ]] || fail 'Windows package metadata checksum mismatch'
+[[ "$(hash_of "$component_root/package.json")" == 55ae9e09c666ad9e3482fd1f0908b46c850b410e9a38494639f8c9da4d03228e ]] || fail 'Linux package metadata checksum mismatch'
 
 mkdir -p -- "$repo_root/.tools/build"
 work_dir="$(mktemp -d "$repo_root/.tools/build/aionui.XXXXXX")"
@@ -128,15 +128,15 @@ done < "$component_root/WEB-HOST-BASE-ABSENT"
 
 expected_files="$work_dir/reference.expected"
 actual_files="$work_dir/reference.actual"
-sed -E 's#^[0-9a-f]{64}  \.tools/reference/aionui-2\.1\.0-beta\.editfork\.20/##' \
+sed -E 's#^[0-9a-f]{64}  \.tools/reference/aionui-2\.1\.0-beta\.editfork\.28/##' \
   "$reference_root.files.sha256" | LC_ALL=C sort > "$expected_files"
-(cd "$reference_root" && find . -type f ! -name 'aionui-2.1.0-beta.editfork.20.files.sha256' -printf '%P\n' | LC_ALL=C sort) > "$actual_files"
+(cd "$reference_root" && find . -type f -printf '%P\n' | LC_ALL=C sort) > "$actual_files"
 cmp -s "$expected_files" "$actual_files" || fail 'Windows reference file set differs from its pinned manifest'
 if find "$reference_root" \( -type l -o \( ! -type d ! -type f \) \) -print -quit | grep -q .; then
   fail 'Windows reference contains a link or special file'
 fi
 (cd "$repo_root" && sha256sum --strict --check "$reference_root.files.sha256") >/dev/null
-[[ "$(find "$reference_root/static" -type f | wc -l)" == 548 ]] || fail 'Windows static file count mismatch'
+[[ "$(find "$reference_root/static" -type f | wc -l)" == 549 ]] || fail 'Windows static file count mismatch'
 [[ "$(find "$reference_root/workagent-builtin-assistants" -type f | wc -l)" == 83 ]] || fail 'WorkAgent assistant file count mismatch'
 
 stage="$work_dir/artifact"
@@ -144,7 +144,9 @@ install -d -m 0755 "$stage/bin" "$stage/share/workagent-components/aionui" \
   "$stage/share/workagent-components/noble-hashes"
 "$bun_binary" build --compile --target=bun-linux-x64 \
   --outfile="$stage/bin/aionui-web" "$source_root/packages/web-cli/src/workagent-bootstrap.ts"
-[[ "$(hash_of "$stage/bin/aionui-web")" == 9edd87cdadb47d9d8398d8a708e636b8c595800bf0e495cb0a65e110c6e4e387 ]] || fail 'Linux web-host binary checksum mismatch'
+expected_web_host_binary="$(cut -d' ' -f1 < "$component_root/WEB-HOST-BINARY.sha256")"
+actual_web_host_binary="$(hash_of "$stage/bin/aionui-web")"
+[[ "$actual_web_host_binary" == "$expected_web_host_binary" ]] || fail "Linux web-host binary checksum mismatch: expected $expected_web_host_binary, got $actual_web_host_binary"
 install -m 0444 "$component_root/package.json" "$stage/bin/package.json"
 (cd "$reference_root" && tar -cf - static workagent-builtin-assistants) | (cd "$stage" && tar -xf - --no-same-owner --no-same-permissions)
 
@@ -169,18 +171,18 @@ printf '%s\n' \
   '{' \
   '  "schema_version": 1,' \
   '  "component": "aionui",' \
-  '  "version": "2.1.0-beta.editfork.21",' \
+  '  "version": "2.1.0-beta.editfork.29",' \
   '  "platform": "linux-x64",' \
   '  "frontend_material": "windows-readonly-reference",' \
-  '  "frontend_reference_manifest_sha256": "ddfc402330149e25714a0e17a1eb59e4d4c82af446001a4195372c30b17f65bb",' \
-  '  "linux_web_host_source": "2.1.0-beta.editfork.21-compatibility-snapshot+workagent-runtime-auth",' \
+  '  "frontend_reference_manifest_sha256": "975fb6f54c6debdb06934bb3f4d24142cbffa7b2e9b391a9795a7fea07058776",' \
+  '  "linux_web_host_source": "2.1.0-beta.editfork.28-dirty-readonly-snapshot+workagent-runtime-auth",' \
   '  "linux_web_host_source_manifest_sha256": "'"$(hash_of "$component_root/WEB-HOST-SOURCE.sha256")"'",' \
   '  "linux_web_host_base_manifest_sha256": "'"$(hash_of "$component_root/WEB-HOST-BASE.sha256")"'",' \
   '  "linux_web_host_base_absent_manifest_sha256": "'"$(hash_of "$component_root/WEB-HOST-BASE-ABSENT")"'",' \
   '  "linux_web_host_patch_sha256": "'"$(hash_of "$component_root/aionui-webhost-workagent-runtime-auth.patch")"'",' \
   '  "workagent_runtime_auth": "fd3-seqpacket-possession-token-v1",' \
   '  "license_file": "LICENSE",' \
-  '  "linux_web_host_sha256": "9edd87cdadb47d9d8398d8a708e636b8c595800bf0e495cb0a65e110c6e4e387"' \
+  '  "linux_web_host_sha256": "'"$actual_web_host_binary"'"' \
   '}' > "$stage/share/workagent-components/aionui/BUILD-INFO.json"
 
 [[ "$("$stage/bin/aionui-web" version)" == "$version" ]] || fail 'final AionUi version smoke test failed'

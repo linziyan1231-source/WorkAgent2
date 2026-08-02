@@ -27,15 +27,28 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "tenant" {
-		fatal("usage: workagent-provision tenant [options]")
+	if len(os.Args) < 2 {
+		fatal("usage: workagent-provision <tenant|serve> [options]")
 	}
-	if err := provisionTenant(os.Args[2:]); err != nil {
+	var err error
+	switch os.Args[1] {
+	case "tenant":
+		err = provisionTenant(os.Args[2:])
+	case "serve":
+		err = serveProvisionRequests(os.Args[2:])
+	default:
+		fatal("usage: workagent-provision <tenant|serve> [options]")
+	}
+	if err != nil {
 		fatal(err.Error())
 	}
 }
 
 func provisionTenant(arguments []string) (resultErr error) {
+	return provisionTenantTo(arguments, os.Stdout)
+}
+
+func provisionTenantTo(arguments []string, output io.Writer) (resultErr error) {
 	flags := flag.NewFlagSet("tenant", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	portalConfigPath := flags.String("portal-config", "/etc/workagent/portal.json", "Portal configuration")
@@ -251,7 +264,7 @@ func provisionTenant(arguments []string) (resultErr error) {
 			return err
 		}
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{"provisioned": true, "initial_bootstrap": *initial, "tenant_id": tenant.TenantID, "runtime_user": tenant.RuntimeUser, "runtime_uid": runtimeUID, "project_id": tenant.Capacity.ProjectID, "socket_unit": unit, "started": socketShouldBeReady})
+	return json.NewEncoder(output).Encode(map[string]any{"provisioned": true, "initial_bootstrap": *initial, "tenant_id": tenant.TenantID, "runtime_user": tenant.RuntimeUser, "runtime_uid": runtimeUID, "project_id": tenant.Capacity.ProjectID, "socket_unit": unit, "started": socketShouldBeReady})
 }
 
 func verifyProvisionCatalogAdmission(ctx context.Context, portal config.Portal, candidate config.Tenant, reconciling bool) error {
@@ -277,7 +290,7 @@ func verifyProvisionCatalogAdmission(ctx context.Context, portal config.Portal, 
 			verifyErr = lookupErr
 		}
 	} else {
-		verifyErr = admin.VerifyLiveTenantIdentityCatalogAllowEmpty(ctx, portal, data)
+		verifyErr = admin.VerifyLiveTenantIdentityCatalog(ctx, portal, data)
 	}
 	return errors.Join(verifyErr, data.Close())
 }

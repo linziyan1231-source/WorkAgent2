@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="480" height="132" viewBox="0 0 480 132" role="img" aria-labelledby="title">
-  <title id="title">WorkAgent2</title>
-  <rect width="480" height="132" rx="20" fill="#ffffff"/>
-  <path d="M34 30h58c31 0 50 16 50 43s-19 43-50 43H62v-18h28c15 0 24-9 24-25s-9-25-24-25H62v68H34z" fill="#EA3E00"/>
-  <text x="164" y="87" font-family="Arial, sans-serif" font-size="54" font-weight="700" fill="#20242b">WorkAgent</text>
-  <text x="338" y="87" font-family="Arial, sans-serif" font-size="54" font-weight="700" fill="#EA3E00">AI</text>
-</svg>

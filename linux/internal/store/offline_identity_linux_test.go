@@ -285,7 +285,7 @@ func TestQueryOfflinePortalIdentitiesRequiresExactIntegerBoolean(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer database.Close()
-			if _, err := database.Exec(`CREATE TABLE portal_users (id INTEGER PRIMARY KEY, tenant_id TEXT, runtime_user TEXT, data_root TEXT, enabled); INSERT INTO portal_users VALUES(1,'11111111-1111-4111-8111-111111111111','workagent_invalid','/srv/workagent/users/11111111-1111-4111-8111-111111111111',?)`, test.enabled); err != nil {
+			if _, err := database.Exec(`CREATE TABLE portal_users (id INTEGER PRIMARY KEY, tenant_id TEXT, runtime_user TEXT, data_root TEXT, enabled, is_admin); INSERT INTO portal_users VALUES(1,'11111111-1111-4111-8111-111111111111','workagent_invalid','/srv/workagent/users/11111111-1111-4111-8111-111111111111',?,0)`, test.enabled); err != nil {
 				t.Fatal(err)
 			}
 			transaction, err := database.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})

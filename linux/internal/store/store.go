@@ -25,6 +25,8 @@ const schemaVersion = 4
 
 var ErrNotFound = errors.New("not found")
 
+const portalAdministratorIdentityPrefix = "portal-admin:"
+
 type Store struct {
 	db        *sql.DB
 	auditPath string
@@ -392,6 +394,99 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+func (s *Store) ManagedUserCount(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM portal_users WHERE is_admin=0`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count managed users: %w", err)
+	}
+	return count, nil
+}
+
+// CreateAdministrator creates the single Portal-only administrator. The
+// reserved identity values deliberately cannot be mistaken for a canonical
+// Linux tenant if a caller forgets to filter administrators from a runtime
+// catalog.
+func (s *Store) CreateAdministrator(ctx context.Context, username, passwordHash string, now time.Time) (User, error) {
+	username = strings.TrimSpace(username)
+	norm := NormalizeUsername(username)
+	if norm == "" || strings.TrimSpace(passwordHash) == "" {
+		return User{}, errors.New("administrator username and password hash are required")
+	}
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return User{}, err
+	}
+	defer transaction.Rollback()
+	var count int
+	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM portal_users WHERE is_admin=1`).Scan(&count); err != nil {
+		return User{}, fmt.Errorf("count Portal administrators: %w", err)
+	}
+	if count != 0 {
+		return User{}, errors.New("a Portal administrator already exists")
+	}
+	identity := portalAdministratorIdentityPrefix + norm
+	stamp := now.UTC().Unix()
+	result, err := transaction.ExecContext(ctx, `INSERT INTO portal_users
+ (username,username_norm,password_hash,tenant_id,runtime_user,data_root,enabled,is_admin,auth_version,created_at,updated_at)
+ VALUES(?,?,?,?,?, ?,1,1,1,?,?)`, username, norm, passwordHash, identity, identity, identity, stamp, stamp)
+	if err != nil {
+		return User{}, fmt.Errorf("create Portal administrator: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return User{}, fmt.Errorf("read created administrator ID: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return User{}, err
+	}
+	return s.UserByID(ctx, id)
+}
+
+// ConvertAdministratorToPortalOnly detaches the single legacy administrator
+// from its Linux tenant identity. Host-level retirement is deliberately a
+// separate, privileged step; callers must first stop the old tenant and
+// archive its protected configuration after a verified backup.
+func (s *Store) ConvertAdministratorToPortalOnly(ctx context.Context, username string, now time.Time) (User, User, error) {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return User{}, User{}, err
+	}
+	defer transaction.Rollback()
+	previous, err := scanUser(transaction.QueryRowContext(ctx, userSelect+` WHERE username_norm=?`, NormalizeUsername(username)))
+	if err != nil {
+		return User{}, User{}, err
+	}
+	if !previous.Admin {
+		return User{}, User{}, errors.New("Portal user is not an administrator")
+	}
+	var administrators int
+	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM portal_users WHERE is_admin=1`).Scan(&administrators); err != nil {
+		return User{}, User{}, fmt.Errorf("count Portal administrators: %w", err)
+	}
+	if administrators != 1 {
+		return User{}, User{}, errors.New("Portal database must contain exactly one administrator")
+	}
+	if isPortalAdministratorIdentity(previous) {
+		return previous, previous, nil
+	}
+	identity := portalAdministratorIdentityPrefix + previous.UsernameNorm
+	stamp := now.UTC().Unix()
+	if _, err := transaction.ExecContext(ctx, `UPDATE portal_users SET tenant_id=?,runtime_user=?,data_root=?,enabled=1,auth_version=auth_version+1,updated_at=? WHERE id=?`, identity, identity, identity, stamp, previous.ID); err != nil {
+		return User{}, User{}, fmt.Errorf("convert Portal administrator identity: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `DELETE FROM portal_sessions WHERE user_id=?`, previous.ID); err != nil {
+		return User{}, User{}, fmt.Errorf("revoke Portal administrator sessions: %w", err)
+	}
+	current, err := scanUser(transaction.QueryRowContext(ctx, userSelect+` WHERE id=?`, previous.ID))
+	if err != nil {
+		return User{}, User{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return User{}, User{}, err
+	}
+	return previous, current, nil
+}
+
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash, tenantID, runtimeUser, dataRoot string, admin bool, now time.Time) (User, error) {
 	return s.CreateUserWithEnabled(ctx, username, passwordHash, tenantID, runtimeUser, dataRoot, true, admin, now)
 }
@@ -435,9 +530,45 @@ func (s *Store) UserByTenantID(ctx context.Context, tenantID string) (User, erro
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, userSelect+` ORDER BY username_norm`)
+	return s.listUsers(ctx, userSelect+` ORDER BY username_norm`, "list users")
+}
+
+func (s *Store) ListManagedUsers(ctx context.Context) ([]User, error) {
+	return s.listUsers(ctx, userSelect+` WHERE is_admin=0 ORDER BY username_norm`, "list managed users")
+}
+
+// ListTenantUsers returns identities that still own Linux tenant
+// infrastructure. A tenant-bound administrator from an older installation is
+// retained here until the explicit administrator migration retires that
+// tenant; newly created Portal-only administrators are excluded.
+func (s *Store) ListTenantUsers(ctx context.Context) ([]User, error) {
+	users, err := s.ListUsers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list users: %w", err)
+		return nil, err
+	}
+	tenants := make([]User, 0, len(users))
+	for _, user := range users {
+		if user.Admin && isPortalAdministratorIdentity(user) {
+			continue
+		}
+		tenants = append(tenants, user)
+	}
+	return tenants, nil
+}
+
+func isPortalAdministratorIdentity(user User) bool {
+	return strings.HasPrefix(user.TenantID, portalAdministratorIdentityPrefix) &&
+		user.TenantID == user.RuntimeUser && user.TenantID == user.DataRoot
+}
+
+func IsPortalOnlyAdministrator(user User) bool {
+	return user.Admin && isPortalAdministratorIdentity(user)
+}
+
+func (s *Store) listUsers(ctx context.Context, query, operation string) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", operation, err)
 	}
 	defer rows.Close()
 	var users []User

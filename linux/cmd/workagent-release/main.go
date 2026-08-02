@@ -311,6 +311,8 @@ func productionFixedRootSpec(destination string) (fixedRootSpec, error) {
 			"share/deploy/systemd/workagent-portal.service",
 			"share/deploy/systemd/workagent-portal.service.d/chatforward.conf",
 			"share/deploy/systemd/workagent-portal.service.d/credentials.conf.example",
+			"share/deploy/systemd/workagent-provision.service",
+			"share/deploy/systemd/workagent-provision.socket",
 			"share/deploy/systemd/workagent-tenant-catalog-ready.target",
 			"share/deploy/systemd/workagent-tenant-config-reconcile.service",
 			"share/deploy/systemd/workagent-userhost@.service",
@@ -589,14 +591,15 @@ func preflight(arguments []string) error {
 		return fmt.Errorf("preflight Portal database check: %w", err)
 	}
 	users, listErr := data.ListUsers(context.Background())
+	tenantUsers, tenantListErr := data.ListTenantUsers(context.Background())
 	closeErr := data.Close()
-	if listErr != nil || closeErr != nil {
-		return fmt.Errorf("preflight Portal identity check: %w", errors.Join(listErr, closeErr))
+	if listErr != nil || tenantListErr != nil || closeErr != nil {
+		return fmt.Errorf("preflight Portal identity check: %w", errors.Join(listErr, tenantListErr, closeErr))
 	}
 	if err := validatePreflightUserSet(users); err != nil {
 		return err
 	}
-	for _, userValue := range users {
+	for _, userValue := range tenantUsers {
 		if !userValue.Enabled {
 			continue
 		}
@@ -661,21 +664,17 @@ func preflight(arguments []string) error {
 }
 
 func validatePreflightUserSet(users []store.User) error {
-	enabled, enabledAdmins := 0, 0
+	enabledAdmins := 0
 	for _, userValue := range users {
 		if !userValue.Enabled {
 			continue
 		}
-		enabled++
 		if userValue.Admin {
 			enabledAdmins++
 		}
 	}
-	if enabled == 0 {
-		return errors.New("preflight found no enabled tenant")
-	}
-	if enabledAdmins == 0 {
-		return errors.New("preflight found no enabled administrator")
+	if enabledAdmins != 1 {
+		return errors.New("preflight requires exactly one enabled Portal administrator")
 	}
 	return nil
 }
@@ -929,7 +928,7 @@ func ensureReleaseFleetStopped(ctx context.Context, portal config.Portal, tenant
 		units = append(units, tenantUnits...)
 	}
 	if scope == release.ScopePortal || scope == release.ScopeCombined || (scope == release.ScopeRuntime && portal.Renderer.Scope == release.ScopeRuntime) {
-		units = append(units, "workagent-portal.service")
+		units = append(units, "workagent-portal.service", "workagent-provision.socket", "workagent-provision.service")
 	}
 	// ChatForward's browser owns the Chromium process and must be drained
 	// before the bridge whenever the shared payload can change. Requiring both
@@ -969,6 +968,8 @@ func ensureFixedRootFleetStopped(ctx context.Context, destination string, tenant
 			"workagent-chatforward.service",
 			"cliproxyapi.service",
 			"workagent-portal.service",
+			"workagent-provision.socket",
+			"workagent-provision.service",
 			"workagent-backup.service",
 			"workagent-healthcheck.service",
 			"workagent-notification.service",

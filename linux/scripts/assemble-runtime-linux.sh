@@ -6,8 +6,8 @@ umask 022
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 runtime_component_root="$repo_root/components/runtime"
-aionui_dir="${AIONUI_ARTIFACT_DIR:-$repo_root/.tools/artifacts/aionui-2.1.0-beta.editfork.21-linux-x64}"
-aioncore_dir="${AIONCORE_ARTIFACT_DIR:-$repo_root/.tools/artifacts/aioncore-v0.1.42-editfork.10-linux-x64}"
+aionui_dir="${AIONUI_ARTIFACT_DIR:-$repo_root/.tools/artifacts/aionui-2.1.0-beta.editfork.29-linux-x64}"
+aioncore_dir="${AIONCORE_ARTIFACT_DIR:-$repo_root/.tools/artifacts/aioncore-v0.1.42-editfork.15-linux-x64}"
 codex_dir="${CODEX_ARTIFACT_DIR:-$repo_root/.tools/artifacts/codex-0.144.4-linux-x64}"
 kimi_dir="${KIMI_CODE_ARTIFACT_DIR:-$repo_root/.tools/artifacts/kimi-code-0.29.1-fork-steer.1-linux-x64}"
 python_dir="${PYTHON_ARTIFACT_DIR:-$repo_root/.tools/artifacts/python-3.13.13-linux-x64}"
@@ -67,7 +67,7 @@ verify_protected_input_tree() {
 }
 
 verify_complete_artifact_manifest() {
-  local name=$1 root=$2 manifest=$3 external_pin=$4 dialect=$5 external_tree_pin=$6 expected expected_tree manifest_files actual_files
+  local name=$1 root=$2 manifest=$3 external_pin=$4 dialect=$5 external_tree_pin=$6 expected expected_tree actual actual_tree manifest_files actual_files
   [[ -f $external_pin && ! -L $external_pin ]] || fail "$name external artifact-manifest pin is missing or unsafe"
   verify_protected_input_file "$name external artifact-manifest pin" "$external_pin"
   if ! expected=$(awk -v required_path="$manifest" '
@@ -77,7 +77,8 @@ verify_complete_artifact_manifest() {
     fail "$name external artifact-manifest pin is malformed"
   fi
   [[ -f $root/$manifest && ! -L $root/$manifest ]] || fail "$name artifact manifest is missing or unsafe"
-  [[ $(hash_of "$root/$manifest") == "$expected" ]] || fail "$name artifact manifest checksum mismatch"
+  actual=$(hash_of "$root/$manifest")
+  [[ $actual == "$expected" ]] || fail "$name artifact manifest checksum mismatch: expected $expected, got $actual"
   [[ -f $external_tree_pin && ! -L $external_tree_pin ]] || fail "$name external artifact-tree pin is missing or unsafe"
   verify_protected_input_file "$name external artifact-tree pin" "$external_tree_pin"
   if ! expected_tree=$(awk '
@@ -86,7 +87,8 @@ verify_complete_artifact_manifest() {
   ' "$external_tree_pin"); then
     fail "$name external artifact-tree pin is malformed"
   fi
-  [[ $(canonical_tree_hash "$root" .) == "$expected_tree" ]] || fail "$name canonical artifact tree checksum mismatch"
+  actual_tree=$(canonical_tree_hash "$root" .)
+  [[ $actual_tree == "$expected_tree" ]] || fail "$name canonical artifact tree checksum mismatch: expected $expected_tree, got $actual_tree"
   if ! manifest_files=$(awk -v required_dialect="$dialect" -v manifest_path="$manifest" '
     function valid_path(value, count, parts, item) {
       if (value == "" || value ~ /^\// || value ~ /[\\\r]/ || value ~ /[[:cntrl:]]/) return 0
@@ -203,8 +205,8 @@ verify_complete_artifact_manifest Python "$python_dir" share/workagent-component
 (cd "$codex_dir/share/workagent-components/codex" && sha256sum --strict --check LICENSE.sha256) >/dev/null || fail 'Codex license checksum failed'
 [[ "$(hash_of "$kimi_dir/LICENSE")" == "$(cut -d' ' -f1 < "$repo_root/components/kimi-code/LICENSE.sha256")" ]] || fail 'Kimi Code license checksum failed'
 
-[[ "$(hash_of "$aionui_dir/bin/aionui-web")" == 9edd87cdadb47d9d8398d8a708e636b8c595800bf0e495cb0a65e110c6e4e387 ]] || fail 'AionUi binary checksum mismatch'
-[[ "$(find "$aionui_dir/static" -type f | wc -l)" == 548 ]] || fail 'AionUi static file count mismatch'
+[[ "$(hash_of "$aionui_dir/bin/aionui-web")" == bff182e607d8bdefadaf116f0363af0fe4559e488df5ae9b1c1180b388862ce8 ]] || fail 'AionUi binary checksum mismatch'
+[[ "$(find "$aionui_dir/static" -type f | wc -l)" == 549 ]] || fail 'AionUi static file count mismatch'
 [[ "$(find "$aionui_dir/workagent-builtin-assistants" -type f | wc -l)" == 83 ]] || fail 'WorkAgent assistant file count mismatch'
 [[ "$(cut -d' ' -f1 < "$aionui_dir/share/workagent-components/noble-hashes/SOURCE.sha256")" == b74fceb0006b617ed388254677b3d3847aeceb7e3f57db0cc9acc54644dabba6 ]] || fail '@noble/hashes evidence mismatch'
 
@@ -306,8 +308,8 @@ printf '%s\n' \
   '  "signed_release_required": true' \
   '}' > "$stage/share/workagent-components/runtime/BUILD-INFO.json"
 
-[[ "$("$stage/bin/aionui-web" version)" == 2.1.0-beta.editfork.21 ]] || fail 'assembled AionUi version probe failed'
-[[ "$("$stage/bin/aioncore" --version)" == 'aioncore 0.1.42-editfork.10' ]] || fail 'assembled AionCore version probe failed'
+[[ "$("$stage/bin/aionui-web" version)" == 2.1.0-beta.editfork.29 ]] || fail 'assembled AionUi version probe failed'
+[[ "$("$stage/bin/aioncore" --version)" == 'aioncore 0.1.42-editfork.15' ]] || fail 'assembled AionCore version probe failed'
 [[ "$("$stage/bin/codex" --version)" == 'codex-cli 0.144.4' ]] || fail 'assembled Codex version probe failed'
 kimi_home="$work_dir/kimi-home"
 mkdir -m 0700 -- "$kimi_home"

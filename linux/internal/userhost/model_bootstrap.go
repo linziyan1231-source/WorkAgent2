@@ -30,14 +30,15 @@ const (
 	kimiConfigPath            = "home/.kimi-code/config.toml"
 	maxModelConfigBytes       = 1024 * 1024
 	managedKimiProvider       = "managed:kimi-code"
-	kimiTopBlockStart         = "# BEGIN WORKAGENT2 MANAGED KIMI DEFAULTS"
-	kimiTopBlockEnd           = "# END WORKAGENT2 MANAGED KIMI DEFAULTS"
-	kimiTableBlockStart       = "# BEGIN WORKAGENT2 MANAGED KIMI CATALOG"
-	kimiTableBlockEnd         = "# END WORKAGENT2 MANAGED KIMI CATALOG"
-	legacyKimiTopBlockStart   = "# BEGIN WorkAgent2 MANAGED KIMI DEFAULTS"
-	legacyKimiTopBlockEnd     = "# END WorkAgent2 MANAGED KIMI DEFAULTS"
-	legacyKimiTableBlockStart = "# BEGIN WorkAgent2 MANAGED KIMI CATALOG"
-	legacyKimiTableBlockEnd   = "# END WorkAgent2 MANAGED KIMI CATALOG"
+	kimiTopBlockStart         = "# BEGIN WorkAgent2 MANAGED KIMI DEFAULTS"
+	kimiTopBlockEnd           = "# END WorkAgent2 MANAGED KIMI DEFAULTS"
+	kimiTableBlockStart       = "# BEGIN WorkAgent2 MANAGED KIMI CATALOG"
+	kimiTableBlockEnd         = "# END WorkAgent2 MANAGED KIMI CATALOG"
+	legacyKimiBrand           = "WORKAGENT" + " AI"
+	legacyKimiTopBlockStart   = "# BEGIN " + legacyKimiBrand + " MANAGED KIMI DEFAULTS"
+	legacyKimiTopBlockEnd     = "# END " + legacyKimiBrand + " MANAGED KIMI DEFAULTS"
+	legacyKimiTableBlockStart = "# BEGIN " + legacyKimiBrand + " MANAGED KIMI CATALOG"
+	legacyKimiTableBlockEnd   = "# END " + legacyKimiBrand + " MANAGED KIMI CATALOG"
 )
 
 var managedCodexAssignment = regexp.MustCompile(`^\s*(?:["']?(openai_base_url|model_reasoning_effort|model|cli_auth_credentials_store)["']?)\s*=`)

@@ -17,6 +17,7 @@ import (
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/auth"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/config"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/productconfig"
+	"github.com/linziyan1231-source/WorkAgent2/linux/internal/provisionipc"
 	"github.com/linziyan1231-source/WorkAgent2/linux/internal/store"
 )
 
@@ -47,7 +48,7 @@ func newPortalFixture(t *testing.T) portalFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { data.Close() })
-	brand := productconfig.Brand{SchemaVersion: 1, BrandID: "workagent", CompanyName: "WorkAgent", PlatformName: "WorkAgent2", PrimaryColor: "#EA3E00", Assets: productconfig.Assets{Logo: "logo.svg", LogoDark: "logo-dark.svg", Favicon: "favicon.svg", AppIcon: "app-icon.svg"}}
+	brand := productconfig.Brand{SchemaVersion: 1, BrandID: "workagent", CompanyName: "WorkAgent", PlatformName: "WorkAgent2", PrimaryColor: "#EA3E00", Assets: productconfig.Assets{Logo: "workagent-logo.png", LogoDark: "workagent-logo.png", Favicon: "workagent-logo.png", AppIcon: "workagent-logo.png"}}
 	policy := productconfig.Policy{SchemaVersion: 1, PolicyID: "workagent-deny-all-v1", DefaultAction: "deny", Models: []productconfig.Model{}, Aliases: map[string]string{}, Pricing: map[string]productconfig.Price{}, Quotas: map[string]productconfig.Quota{}, ApprovalRequired: true}
 	server, err := New(cfg, data, brand, policy, nil)
 	if err != nil {
@@ -60,7 +61,7 @@ func newPortalFixture(t *testing.T) portalFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.CreateUser(context.Background(), "alice", hash, portalTestTenant, "workagent_alice", filepath.Join(root, "users", portalTestTenant), true, now); err != nil {
+	if _, err := data.CreateUser(context.Background(), "alice", hash, portalTestTenant, "workagent_alice", filepath.Join(root, "users", portalTestTenant), false, now); err != nil {
 		t.Fatal(err)
 	}
 	return portalFixture{server: server, store: data, cfg: cfg}
@@ -115,6 +116,107 @@ func TestLoginSessionAndCSRF(t *testing.T) {
 	fixture.server.Handler().ServeHTTP(accepted, logout)
 	if accepted.Code != http.StatusOK {
 		t.Fatalf("valid logout failed: %d %s", accepted.Code, accepted.Body.String())
+	}
+}
+
+func TestAdministratorLoginAndEmployeeLifecycleAPIs(t *testing.T) {
+	fixture := newPortalFixture(t)
+	adminHash, err := auth.HashPassword([]byte("correct administrator value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.CreateAdministrator(context.Background(), "admin", adminHash, fixture.server.now()); err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	fixture.server.ensureRuntime = func(context.Context, store.User) error {
+		starts++
+		return nil
+	}
+	login := httptest.NewRecorder()
+	fixture.server.Handler().ServeHTTP(login, secureRequest(http.MethodPost, "https://portal.example.test/api/login", `{"username":"admin","password":"correct administrator value"}`))
+	if login.Code != http.StatusOK || starts != 0 {
+		t.Fatalf("administrator login status=%d starts=%d body=%s", login.Code, starts, login.Body.String())
+	}
+	var loginBody struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &loginBody); err != nil || loginBody.CSRFToken == "" {
+		t.Fatalf("decode administrator login: %v", err)
+	}
+	cookies := login.Result().Cookies()
+	adminRequest := func(method, target, body string) *http.Request {
+		request := secureRequest(method, target, body)
+		for _, cookie := range cookies {
+			request.AddCookie(cookie)
+		}
+		if method != http.MethodGet && method != http.MethodHead {
+			request.Header.Set("X-CSRF-Token", loginBody.CSRFToken)
+		}
+		return request
+	}
+	if err := fixture.store.SetUserEnabled(context.Background(), "alice", false, fixture.server.now()); err != nil {
+		t.Fatal(err)
+	}
+	list := httptest.NewRecorder()
+	fixture.server.Handler().ServeHTTP(list, adminRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users", ""))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"username":"alice"`) || strings.Contains(list.Body.String(), `"username":"admin"`) {
+		t.Fatalf("administrator list status=%d body=%s", list.Code, list.Body.String())
+	}
+	fixture.server.provision = func(ctx context.Context, request provisionipc.Request) (provisionipc.Response, error) {
+		switch request.Command {
+		case "add-user":
+			hash, err := auth.HashPassword(request.PortalPassword)
+			if err != nil {
+				return provisionipc.Response{}, err
+			}
+			created, err := fixture.store.CreateUser(ctx, request.Username, hash, "22222222-2222-4222-8222-222222222222", "workagent_bob", filepath.Join(fixture.cfg.Paths.TenantData, "22222222-2222-4222-8222-222222222222"), false, fixture.server.now())
+			if err != nil {
+				return provisionipc.Response{}, err
+			}
+			return provisionipc.Response{OK: true, User: &provisionipc.User{Username: created.Username, TenantID: created.TenantID, RuntimeUser: created.RuntimeUser, Enabled: created.Enabled}}, nil
+		case "set-enabled":
+			if err := fixture.store.SetUserEnabled(ctx, request.Username, *request.Enabled, fixture.server.now()); err != nil {
+				return provisionipc.Response{}, err
+			}
+			value, err := fixture.store.UserByUsername(ctx, request.Username)
+			if err != nil {
+				return provisionipc.Response{}, err
+			}
+			return provisionipc.Response{OK: true, User: &provisionipc.User{Username: value.Username, TenantID: value.TenantID, RuntimeUser: value.RuntimeUser, Enabled: value.Enabled}}, nil
+		default:
+			return provisionipc.Response{}, errors.New("unexpected command")
+		}
+	}
+	created := httptest.NewRecorder()
+	fixture.server.Handler().ServeHTTP(created, adminRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users", `{"username":"bob","portal_password":"correct employee value"}`))
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"username":"bob"`) {
+		t.Fatalf("administrator create status=%d body=%s", created.Code, created.Body.String())
+	}
+	disable := httptest.NewRecorder()
+	fixture.server.Handler().ServeHTTP(disable, adminRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/disable", `{"username":"bob"}`))
+	if disable.Code != http.StatusOK {
+		t.Fatalf("administrator disable status=%d body=%s", disable.Code, disable.Body.String())
+	}
+	enable := httptest.NewRecorder()
+	fixture.server.Handler().ServeHTTP(enable, adminRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/enable", `{"username":"bob"}`))
+	if enable.Code != http.StatusOK {
+		t.Fatalf("administrator enable status=%d body=%s", enable.Code, enable.Body.String())
+	}
+	bob, err := fixture.store.UserByUsername(context.Background(), "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.CreateSession(context.Background(), "bob-session", "bob-csrf", bob, "192.0.2.11", "portal-test-agent", fixture.server.now(), fixture.server.now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	reset := httptest.NewRecorder()
+	fixture.server.Handler().ServeHTTP(reset, adminRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/reset-password", `{"username":"bob","portal_password":"replacement employee value"}`))
+	if reset.Code != http.StatusOK {
+		t.Fatalf("administrator reset status=%d body=%s", reset.Code, reset.Body.String())
+	}
+	if _, err := fixture.store.SessionByToken(context.Background(), "bob-session"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("employee session survived administrator password reset: %v", err)
 	}
 }
 
@@ -298,7 +400,7 @@ func TestRootServesWorkAgentAILoginPageWithoutRedirect(t *testing.T) {
 	request := secureRequest(http.MethodGet, "https://portal.example.test/", "")
 	recorder := httptest.NewRecorder()
 	fixture.server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "WorkAgent2") || strings.Contains(recorder.Body.String(), "WorkAgent2") {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "WorkAgent2") || strings.Contains(recorder.Body.String(), "WorkAgent"+" AI") {
 		t.Fatalf("unexpected login page: status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 	if !strings.Contains(recorder.Header().Get("Permissions-Policy"), "microphone=(self)") {

@@ -14,7 +14,7 @@ func TestPolicyDefaultsToDeny(t *testing.T) {
 }
 
 func TestBrandBaseline(t *testing.T) {
-	value := Brand{SchemaVersion: 1, BrandID: "workagent", CompanyName: "WorkAgent", PlatformName: "WorkAgent2", PrimaryColor: "#EA3E00", Assets: Assets{Logo: "logo.svg", LogoDark: "logo-dark.svg", Favicon: "favicon.svg", AppIcon: "app-icon.svg"}}
+	value := Brand{SchemaVersion: 1, BrandID: "workagent", CompanyName: "WorkAgent", PlatformName: "WorkAgent2", PrimaryColor: "#EA3E00", Assets: Assets{Logo: "workagent-logo.png", LogoDark: "workagent-logo.png", Favicon: "workagent-logo.png", AppIcon: "workagent-logo.png"}}
 	if err := value.Validate(); err != nil {
 		t.Fatal(err)
 	}

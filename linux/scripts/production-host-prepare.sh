@@ -147,6 +147,8 @@ workagent_services_inactive() {
   local unit state active=0
   local -a units=(
     workagent-portal.service
+    workagent-provision.socket
+    workagent-provision.service
     workagent-tenant-catalog-ready.target
     workagent-tenant-config-reconcile.service
     cliproxyapi.service

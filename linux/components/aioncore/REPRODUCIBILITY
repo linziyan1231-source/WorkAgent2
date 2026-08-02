@@ -1,28 +1,27 @@
-AionCore v0.1.42-editfork.10 reproducibility qualification, 2026-07-27.
+AionCore v0.1.42-editfork.15 reproducibility qualification, 2026-07-30.
 
 Two sequential clean release builds use the same canonical source and target paths,
 Rust/Cargo 1.95.0, four build jobs, offline locked dependencies, SOURCE_DATE_EPOCH
-1784899380, explicit physical-to-virtual path remapping, and a SHA-1 linker build ID.
+1785418200, explicit physical-to-virtual path remapping, and a SHA-1 linker build ID.
 Each build validates formatting, strict workspace clippy, the focused channel regression,
 and the byte-pinned test attestation for this exact source tree before compiling.
 
-Source tree SHA-256: 546ce672233f30e4821723c58d91bf6c868632388a3b55114d47c9d06981f317
-Cargo.lock SHA-256: c8bf59bf858f9ee5db372d127bfb78a6cdedcf837584bf4c9d1ead6cfa1c66c9
-Test attestation SHA-256: e7f2cd6fde3b3d9a65b820e067c59b33325a400ca8b9a5be1b2201f39572935a
+Source tree SHA-256: 1edfde5edbdc8ed2931ad2c6bd06204149101c91d16b91b6eca19f0bcbedcef2
+Cargo.lock SHA-256: 142c7abc83debe42f8063f85fef885b0b2810274d425bcbdf450351f7e49be84
+Test attestation SHA-256: e65d892d24f7d9da060b8ea14b29e77cbb53ac2c3946bc35e18c91fd983eddec
 Managed-resource tree SHA-256: 4131c117b99b83d1c36980417ba4f9f1d860500e711ad54fea9ae007d7c9d567
-Unstripped ELF SHA-256: adf4bdafd962e30c1801258fc6deec4b213d41094842df08d920d6e35b8c6ea3
-Unstripped ELF size: 90155624 bytes
-Stripped ELF SHA-256: 81633673e000adae0cc57686421f6f7dad027811294777b12ee288c59aa5d12a
-Stripped ELF size: 70518936 bytes
-GNU Build ID: 6ebe44b3346046f38041ad7771b02fde63ffe1f0
+Unstripped ELF SHA-256: e193d59e921212555f69b7bd0e8ca83ee3854bcacbb1d336767dbff0bf938ebc
+Unstripped ELF size: 90514656 bytes
+Stripped ELF SHA-256: e5b0f1413f1f85224a03d7aef50aa8fd2090c9f55be776c4e71fc7babf110ae5
+GNU Build ID: cd1a903f0d1b84ea2130db64541aea1fb0359d07
 
 Both outputs must pass byte-for-byte payload and SHA256SUMS comparison. The qualification
-build exposed the exact health response {"status":"ok","version":"0.1.42-editfork.10","build_time":"1784899380"},
+build exposed the exact health response {"status":"ok","version":"0.1.42-editfork.15","build_time":"1785418200"},
 passed the Codex ACP 1.1.2 fork/steer wire smoke, and shut down gracefully after SIGTERM.
 Physical source, target, Cargo, and Rustup paths were absent from the stripped binary.
 
 Final build directories:
-.tools/artifacts/aioncore-v0.1.42-editfork.10-linux-x64
-.tools/artifacts/aioncore-v0.1.42-editfork.10-linux-x64-repro
+.tools/artifacts/aioncore-v0.1.42-editfork.15-linux-x64
+.tools/artifacts/aioncore-v0.1.42-editfork.15-linux-x64-repro
 
 This qualification is build evidence only; it is not signed release provenance.

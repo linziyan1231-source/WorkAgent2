@@ -1,7 +1,6 @@
-Windows production migration reference: AionUi Web release 2.1.0-beta.editfork.20
-Reference file manifest SHA-256: ddfc402330149e25714a0e17a1eb59e4d4c82af446001a4195372c30b17f65bb
-Reference release-manifest.json SHA-256: d5cae6e67732f9e787006a9a08b60ed1612a3304566e030a340b9920f03b02d5
-Linux web-host compatibility base: AionUi 2.1.0-beta.editfork.21 read-only snapshot, pinned by WEB-HOST-BASE.sha256 and WEB-HOST-BASE-ABSENT
-Linux release identity: AionUi 2.1.0-beta.editfork.21 (fd3 SOCK_SEQPACKET possession-channel contract)
-WorkAgent runtime-auth and qualification-stability patch SHA-256: c4733da4e5dc6342cbbdb9bff7156ab05247b38d9bd0a5dbee288a9f6fd019a7
-Linux web-host patched source manifest SHA-256: ec97e4aea496fdd7721e64e6c43e3d3ce97e181553961d8c2c63092d2b395f90
+Windows production migration reference: AionUi Web 2.1.0-beta.editfork.28 read-only snapshot from AionUi source revision 1694a28a5a265a552c3bba745d3648514dea72ff with recorded uncommitted source changes
+Reference file manifest SHA-256: 975fb6f54c6debdb06934bb3f4d24142cbffa7b2e9b391a9795a7fea07058776
+Linux web-host compatibility base: the corresponding 2.1.0-beta.editfork.28 read-only source snapshot, pinned by WEB-HOST-BASE.sha256 and WEB-HOST-BASE-ABSENT
+Linux release identity: AionUi 2.1.0-beta.editfork.29 (Windows feature parity plus the Linux fd3 SOCK_SEQPACKET possession-channel contract)
+WorkAgent runtime-auth and qualification-stability patch SHA-256: e30d4397524a66067ec228dcf58838c448687954e5d09fa98ddd25ba14f84c16
+Linux web-host patched source manifest SHA-256: cea37a6fba78fddcae95564cb1f89d794051163b2481b318e6932cd76023dd52

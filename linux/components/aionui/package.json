@@ -1,6 +1,6 @@
 {
   "name": "@aionui/web-cli",
-  "version": "2.1.0-beta.editfork.21",
+  "version": "2.1.0-beta.editfork.29",
   "private": true,
   "description": "AionUi WebUI CLI - standalone web runtime (no Electron)",
   "bin": {
