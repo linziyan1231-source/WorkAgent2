@@ -367,11 +367,11 @@ func TestConfiguredRuntimeConsumerContractMatchesProductionExamples(t *testing.T
 		t.Fatal(err)
 	}
 	wantData := []string{
+		"static/index.html",
 		"workagent-builtin-assistants/assistants.json",
 		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md",
 		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md",
 		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md",
-		"static/index.html",
 	}
 	wantExecutables := []string{"bin/aioncore", "bin/aionui-web", "bin/codex", "bin/kimi", "bin/python3"}
 	if !slices.Equal(contract.RequiredPaths, wantData) || !slices.Equal(contract.RequiredExecutablePaths, wantExecutables) {

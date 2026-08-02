@@ -78,7 +78,7 @@ func TestModelBootstrapPersistsClientsProvidersAndKeyFreeMarker(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	legacyKimi := legacyKimiTopBlockStart + "\ndefault_model = \"workagent-managed/kimi-for-coding\"\n" + legacyKimiTopBlockEnd + "\n\n" +
+	legacyKimi := legacyKimiTopBlockStart + "\ndefault_model = \"" + legacyKimiModelPrefix + "kimi-for-coding\"\n" + legacyKimiTopBlockEnd + "\n\n" +
 		"[ui]\ntheme = \"dark\"\n\n" + legacyKimiTableBlockStart + "\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"legacy-secret\"\n" + legacyKimiTableBlockEnd + "\n"
 	if err := root.WriteFileAtomic(kimiConfigPath, []byte(legacyKimi), 0o600); err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestModelBootstrapPersistsClientsProvidersAndKeyFreeMarker(t *testing.T) {
 	}
 	kimi, err := root.ReadFile(kimiConfigPath, maxModelConfigBytes)
 	if err != nil || !strings.Contains(string(kimi), "theme = \"dark\"") || !strings.Contains(string(kimi), bundle.KimiAPIKey) ||
-		!strings.Contains(string(kimi), "WorkAgent2 MANAGED") || !strings.Contains(string(kimi), "workagent-managed/kimi-k3") || strings.Contains(string(kimi), legacyKimiBrand) || strings.Contains(string(kimi), "workagent-managed/") || strings.Contains(string(kimi), "legacy-secret") {
+		!strings.Contains(string(kimi), "WorkAgent2 MANAGED") || !strings.Contains(string(kimi), "workagent-managed/kimi-k3") || strings.Contains(string(kimi), legacyKimiBrand) || strings.Contains(string(kimi), legacyKimiModelPrefix) || strings.Contains(string(kimi), "legacy-secret") {
 		t.Fatalf("Kimi configuration was not safely reconciled: err=%v", err)
 	}
 	loaded, found, err := host.loadStartupModelBundle()

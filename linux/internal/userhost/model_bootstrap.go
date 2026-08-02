@@ -35,6 +35,7 @@ const (
 	kimiTableBlockStart       = "# BEGIN WorkAgent2 MANAGED KIMI CATALOG"
 	kimiTableBlockEnd         = "# END WorkAgent2 MANAGED KIMI CATALOG"
 	legacyKimiBrand           = "WORKAGENT" + " AI"
+	legacyKimiModelPrefix     = "legacy-managed/"
 	legacyKimiTopBlockStart   = "# BEGIN " + legacyKimiBrand + " MANAGED KIMI DEFAULTS"
 	legacyKimiTopBlockEnd     = "# END " + legacyKimiBrand + " MANAGED KIMI DEFAULTS"
 	legacyKimiTableBlockStart = "# BEGIN " + legacyKimiBrand + " MANAGED KIMI CATALOG"
@@ -356,7 +357,7 @@ func (h *Host) writeKimiConfig(bundle modelbootstrap.Bundle) error {
 	}
 	for _, line := range strings.Split(preserved, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == `[providers."`+managedKimiProvider+`"]` || strings.HasPrefix(trimmed, `[models."workagent-managed/`) || strings.HasPrefix(trimmed, `[models."workagent-managed/`) {
+		if trimmed == `[providers."`+managedKimiProvider+`"]` || strings.HasPrefix(trimmed, `[models."workagent-managed/`) || strings.HasPrefix(trimmed, `[models."`+legacyKimiModelPrefix) {
 			return errors.New("unmanaged Kimi configuration collides with the WorkAgent2 managed catalog")
 		}
 	}
