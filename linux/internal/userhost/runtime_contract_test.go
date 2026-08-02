@@ -81,7 +81,7 @@ func TestRuntimeCredentialStrippingRejectsAllBrowserIdentityNamespaces(t *testin
 		"Forwarded":                   {"for=203.0.113.7"},
 		"X-Forwarded-For":             {"203.0.113.7"},
 		"X-Windows-Sid":               {"forged"},
-		"X-WorkAgent-Tenant":                {"forged"},
+		"X-Workagent-Tenant":                {"forged"},
 		"X-Aionui-Portal-Admin":       {"forged"},
 		"X-Chatforward-Signature":     {"forged"},
 		"X-WorkAgent-Runtime-Token":   {"forged"},

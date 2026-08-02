@@ -5,10 +5,10 @@
   "platform_name": "WorkAgent2",
   "primary_color": "#EA3E00",
   "assets": {
-    "logo": "workagent-logo.png",
-    "logo_dark": "workagent-logo.png",
-    "favicon": "workagent-logo.png",
-    "app_icon": "workagent-logo.png"
+    "logo": "logo.svg",
+    "logo_dark": "logo-dark.svg",
+    "favicon": "favicon.svg",
+    "app_icon": "app-icon.svg"
   },
   "help_url": null,
   "support_url": null

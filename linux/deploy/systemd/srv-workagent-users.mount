@@ -1,6 +1,6 @@
 [Unit]
 Description=WorkAgent2 tenant project-quota filesystem
-Documentation=file:/opt/workagent/control/share/docs/PRODUCTION_HOST.md
+Documentation=file:/opt/workagent/control/share/docs/ARCHITECTURE.md
 Before=workagent-portal.service
 ConditionPathIsReadWrite=/var/lib/workagent-storage
 ConditionPathExists=/var/lib/workagent-storage/tenants.xfs

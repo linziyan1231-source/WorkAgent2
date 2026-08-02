@@ -1,45 +1,39 @@
-# WorkAgent2
+# WorkAgent2 Linux
 
-WorkAgent2 是 Linux AI 工作空间平台。生产数据只能进入 Git 忽略、权限受控的本机区域；客户数据、项目、凭据、OAuth 状态、会话、日志、缓存和备份不得进入仓库。
+WorkAgent2 Linux 是集中托管、浏览器访问的多用户 AI 工作空间实现。它将模型接入、员工工作区、运行时组件和行业工具统一部署在 Linux 服务器上，让任务不依赖个人电脑持续在线，同时为不同用户提供独立的数据、进程和资源边界。
 
-## 当前状态
+## 核心能力
 
-Linux 控制面、运行时/共享组件组装和生产门禁已实现：浏览器员工账号管理与资源用量、可恢复的特权开通、租户账号/ACL/XFS 配额、systemd socket 激活、AionCore 监督、登录与可选管理员代登录、受控出站代理、长流代理、OAuth、项目事务、CLIProxy 逐 key 策略、ChatForward、日志脱敏、哈希校验发布、兼容回滚、强制异机加密备份和空白主机恢复均已落到代码与测试。同步锁定的生产组件为 AionUi `2.1.0-beta.editfork.29`（静态资源与内置助手逐字节绑定只读 Windows `.28` 参考，Linux host 保留 fd3 possession-channel 边界）、AionCore `v0.1.42-editfork.15`、Codex `0.144.4`、Kimi Code `0.29.1-fork-steer.1`、Python `3.13.13`、CLIProxyAPI `7.2.81 / per-key-models.4`、`cpa-key-policy 0.4.5`，以及 ChatForward `zombie-reap-20260725-2329` / 扩展 `0.16.0`。Portal 配置、tenant 配置均为 schema v5；Portal SQLite 数据库为 schema v4。
+- 浏览器端 Portal、员工账号管理和资源用量视图
+- 每位用户独立的 Linux 身份、私有目录、Unix socket、cgroup 与 XFS 项目配额
+- 可恢复、可并发的员工开通流程，以及受保护的进度 IPC
+- AionUi、AionCore、Codex、Kimi Code、CLIProxyAPI 和 ChatForward 的集中运行时管理
+- OAuth、模型目录、逐 Key 策略、配额与共享容量管理
+- 项目事务、运行时监督、日志脱敏与故障恢复
+- 哈希校验发布、升级预检、兼容回滚和加密备份边界
+- systemd socket activation、最小权限服务账号和 fail-closed 配置验证
 
-当前仍不能宣称已经生产启用。代码无法代替有权负责人完成品牌审批，也不能自行开放公网 443、提供正式 TLS/OAuth 注册、启用生产 XFS `prjquota`、接入异机备份与告警、提供真实 Provider 账号或完成双租户浏览器和空白主机恢复验收。AionCore 的两次干净 Linux 构建已经逐字节及完整树一致并由外部 pin 固定；这只是构建资格证据，仍须纳入源码干净、哈希清单验证的正式 release，不能以版本字符串代替该发布链。完成这些外部门禁后，日常用户开通才可收敛为：在本机安装对应 Codex/Kimi/Python CLI，完成 CLIProxyAPI OAuth，并对聊天模式做一次账号登录。完整边界见 [生产交接输入](docs/PRODUCTION_HANDOFF.md)、[发布证据](docs/RELEASE_EVIDENCE.md)和[生产一致性合同](docs/PRODUCTION_PARITY.md)。
+## 架构概览
 
-## 历史合成 staging
+Portal 只负责浏览器认证、会话和输入校验。租户文件、凭据、项目、OAuth 状态及运行时操作由对应的 UserHost 在用户隔离边界内完成。专用 UID、私有数据根、ACL、cgroup 和 XFS project ID 共同构成租户身份与资源边界。
 
-2026-07-22 的合成 staging 使用 runtime release v3，但 Portal 配置和数据库仍是 schema v2。它只验证了 loopback 和双租户隔离，不能代表当前 Portal/tenant 配置 schema v5、Portal 数据库 schema v4 或真实发布组件已部署。若保留该环境，只能通过 `https://127.0.0.1:42580` 或 SSH 端口转发访问；不要开放公网安全组。
+运行时组件使用锁定版本、哈希清单和不可变发布目录组装。Portal 不接触上游凭据；一次性凭据通过受限 IPC 或 systemd credentials 传递，并在消费后删除明文。
 
-两个 staging 密码分别保存在以下 Git 忽略、root-only 文件中，值不会出现在本文档、命令参数或日志里：
-
-- `.local-deployment/credentials/workagent-admin.password`
-- `.local-deployment/credentials/stage-user.password`
-
-自签名证书只用于 loopback staging。浏览器可临时信任 `/etc/workagent/tls/staging.crt`；生产必须更换为 WorkAgent2 正式域名证书。
-
-## 代码边界
-
-- Windows 参考服务器始终只读；任何修改、构建和部署只发生在这台 Linux 主机。
-- 参考快照、内部审批、连接信息和扫描隔离区位于 Git 忽略目录，不进入产品仓库。
-- 新配置只使用 `tenant_id` UUID、`runtime_user` 和 `data_root`。
-- 不提交密钥、数据库、租户数据、日志、备份、构建工具或二进制。
-
-## 主要目录
+## 目录结构
 
 | 路径 | 用途 |
 |---|---|
-| `cmd/` | Portal、UserHost、管理、发布、备份、租户、凭据和非生产验收工具 |
-| `internal/` | Linux 身份、UDS、存储、发布、路径和 Web 安全实现 |
-| `config/` | WorkAgent2 品牌、deny-all policy 和 fail-closed 配置示例 |
-| `deploy/` | systemd、sysusers.d 和 tmpfiles.d 模板 |
-| `docs/` | 架构、部署边界和上线门禁 |
-| `audit/` | 不含敏感参考值的技术审计结果 |
+| `cmd/` | Portal、UserHost、管理、发布、备份、凭据和开通工具 |
+| `internal/` | Linux 身份、存储、IPC、租户隔离、发布和 Web 安全实现 |
+| `config/` | 非敏感配置示例、模型策略与通用品牌资源 |
+| `deploy/` | systemd、Caddy、sysusers.d、tmpfiles.d 和监控模板 |
+| `components/` | 锁定的共享组件版本、补丁、清单和可复现构建信息 |
+| `scripts/` | 构建、验证、发布和运维脚本 |
+| `docs/` | 架构、安全边界、发布流程和组件说明 |
 
-## 开发门禁
+## 开发与验证
 
-使用精确的 Go 1.26.5：
+项目使用 Go 1.26.5。基础检查：
 
 ```bash
 go test ./...
@@ -48,4 +42,12 @@ go vet ./...
 scripts/audit-tree.sh
 ```
 
-`scripts/source-gate.sh` 默认运行 `quality` 模式，固定执行 ShellCheck 0.11.0、Gitleaks 8.28.0 和 govulncheck 1.6.0，但不生成可发布 payload。只有 CI 中在同一 revision 的 quality job 通过后、从全新主机执行的最终 `verify` artifact job，才会生成九个在线控制面二进制、健康检查 helper 和校验记录。本地 artifact 模式产物只能用于演练，不是生产授权。真实发布随后必须通过 `workagent-release` 的哈希清单验证、数据 schema 兼容性、预检和备份门禁；具体流程见 [发布证据](docs/RELEASE_EVIDENCE.md)。
+部分组件测试还需要 Node.js、ShellCheck、Gitleaks 和 govulncheck。构建与部署前请使用仓库锁定的工具版本，并在非生产环境验证配置、ACL、配额、备份和回滚流程。
+
+## 安全
+
+不要把客户数据、项目内容、密码、OAuth 状态、会话、日志、数据库、备份或本机部署配置提交到仓库。详细边界见 [SECURITY.md](SECURITY.md) 和 [架构文档](docs/ARCHITECTURE.md)。
+
+## 许可
+
+本目录适用仓库根目录的 [Personal and Internal Non-Monetized Source License](../LICENSE)。允许个人非商业使用及单一企业内部使用，不允许销售、对外托管、提供收费服务或以本项目及其衍生版本盈利。

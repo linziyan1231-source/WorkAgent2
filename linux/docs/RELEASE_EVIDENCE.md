@@ -141,5 +141,5 @@ manifest, build logs, independent-build comparison, component input hashes,
 each `manifest.json`, the preflight report, a verified backup receipt and the
 activation/rollback rehearsal. Production traffic additionally requires the
 host, external TLS/WebSocket, two-tenant browser/provider, OAuth, ChatForward
-login, quota, monitoring and blank-host recovery evidence listed in
-`docs/PRODUCTION_PARITY.md`.
+login, quota, monitoring and blank-host recovery evidence described by the
+deployment guide and `SECURITY.md`.

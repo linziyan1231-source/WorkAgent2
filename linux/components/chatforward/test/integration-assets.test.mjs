@@ -52,7 +52,7 @@ test("browser service keeps the profile private without disabling Chromium sandb
 test("configuration contains no secret and cannot override the fixed listener", async () => {
   const configuration = await repositoryFile("config/chatforward.example.env");
   assert.match(configuration, /^CHATFORWARD_PORTAL_URL=http:\/\/127\.0\.0\.1:42580$/m);
-  assert.match(configuration, /^CHATFORWARD_MIRROR_URL=https:\/\/workagent2\.110-40-207-226\.nip\.io\/chatgpt\/$/m);
+  assert.match(configuration, /^CHATFORWARD_MIRROR_URL=http:\/\/192\.0\.2\.1:8443\/chatgpt\/$/m);
   assert.match(configuration, /^CHATFORWARD_CHROMIUM_BIN=\/usr\/bin\/google-chrome-stable$/m);
   assert.match(configuration, /^CHATFORWARD_OUTBOUND_PROXY_URL=http:\/\/127\.0\.0\.1:8118$/m);
   assert.doesNotMatch(configuration, /SECRET|CHATFORWARD_HOST|CHATFORWARD_PORT=/);

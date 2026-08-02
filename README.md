@@ -1,13 +1,13 @@
 # WorkAgent2
 
-WorkAgent2 is a centrally hosted, browser-accessible multi-user AI agent platform for Windows. It separates agent execution from personal computers, gives each user an isolated workspace, and centralizes model access, shared capacity, domain tools, and operational policy.
+WorkAgent2 is a centrally hosted, browser-accessible multi-user AI agent platform with Windows and Linux implementations. It separates agent execution from personal computers, gives each user an isolated workspace, and centralizes model access, shared capacity, domain tools, and operational policy.
 
-The repository contains the Windows control plane, per-user runtime supervisor, stable agent launchers, provider integration, persistence, and release-contract code.
+The repository root contains the Windows control plane and runtime supervisor. The complete Linux implementation, including systemd deployment templates and reproducible component inputs, is maintained under [`linux/`](linux/README.md).
 
 ## Why WorkAgent2
 
 - **Browser-first access:** users reach their workspace from a browser while agent processes run on centrally managed infrastructure.
-- **Per-user isolation:** Windows SID identity, private data roots, ACLs, loopback listeners, and Job Objects keep user workspaces and process trees separated.
+- **Per-user isolation:** Windows SID and Job Object boundaries or Linux UID, ACL, cgroup, Unix socket, and XFS project-quota boundaries keep user workspaces and process trees separated.
 - **Centralized model access:** provider credentials, model catalogs, aliases, quotas, and usage accounting are managed consistently instead of being configured independently on every endpoint.
 - **Resumable employee onboarding:** account creation runs as an isolated per-user job, streams privileged milestones over protected IPC, and can safely resume after profile or bootstrap failures.
 - **Shared capacity:** centrally managed runtimes reduce duplicated desktop resource use and make capacity available independently of whether a user's personal computer remains online.
@@ -36,6 +36,8 @@ The portal authenticates browser requests and resolves each session to a server-
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component responsibilities, trust boundaries, and core invariants.
 
+The Linux control plane follows the same Portal/UserHost separation with dedicated Linux identities and service boundaries. See [linux/README.md](linux/README.md) and [linux/docs/ARCHITECTURE.md](linux/docs/ARCHITECTURE.md).
+
 ## Repository map
 
 | Path | Purpose |
@@ -54,6 +56,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component responsibilities,
 | `internal/cliproxy` | Provider provisioning, catalog convergence, and management transport |
 | `scripts` | Build and release-contract scripts |
 | `patches` | Reproducible source patches for independently maintained agent runtimes |
+| `linux` | Complete Linux control plane, runtime assembly, deployment templates, and tests |
 
 ## Build and test
 
@@ -79,6 +82,14 @@ go build ./cmd/portal
 ```
 
 Windows service identity, ACL inheritance, filesystem quotas, TLS, OAuth callbacks, provider connectivity, firewall policy, process races, upgrades, and rollback should also be verified in the target environment before production use.
+
+Run the Linux test suite from its module directory on a supported Linux host:
+
+```bash
+cd linux
+go test ./...
+go vet ./...
+```
 
 ## Runtime extensions
 
@@ -112,6 +123,6 @@ This is a custom source-available license and is not an OSI-approved open-source
 
 ## 中文简介
 
-WorkAgent2 是一个集中托管、通过浏览器访问的 Windows 多用户 AI Agent 平台。平台让 Agent 独立运行在统一管理的基础设施上，为每位用户提供基于 Windows SID 的隔离工作区，并集中管理模型访问、共享容量、行业工具、配额和运行策略。
+WorkAgent2 是一个集中托管、通过浏览器访问的多用户 AI Agent 平台，同时提供 Windows 和 Linux 实现。平台让 Agent 独立运行在统一管理的基础设施上，通过 Windows SID 或 Linux UID/ACL/cgroup/XFS 配额为每位用户提供隔离工作区，并集中管理模型访问、共享容量、行业工具、配额和运行策略。
 
 项目允许个人使用和单一企业法人内部使用，包括内部修改、部署和效率提升；禁止出售、分许可、组织外传播、客户交付、收费托管、SaaS，以及用于对外营利的产品或服务。完整条款以 [LICENSE](LICENSE) 为准。

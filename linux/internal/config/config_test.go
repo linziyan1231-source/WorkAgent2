@@ -169,7 +169,7 @@ func TestProductionLayoutRequiresSharedHTTPSProxyBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Portal){
-		"legacy branding path": func(value *Portal) { value.BrandFile = "/etc/workagent/branding/workagent/brand.json" },
+		"legacy branding path": func(value *Portal) { value.BrandFile = "/etc/workagent/branding/legacy/brand.json" },
 		"unix listener without a peer identity contract": func(value *Portal) {
 			value.Listener.Network = "unix"
 			value.Listener.Address = "/run/workagent/portal.sock"
