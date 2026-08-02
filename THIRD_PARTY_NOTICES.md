@@ -2,7 +2,7 @@
 
 The custom license in [LICENSE](LICENSE) applies only to first-party material owned by this repository's copyright holder. It does not replace or restrict the licenses of third-party projects.
 
-This repository does not vendor complete third-party source trees or release binaries. Go dependencies and exact versions are declared in `go.mod` and `go.sum`. Direct dependencies include:
+This repository does not vendor complete third-party source trees or release binaries. Go dependencies and exact versions are declared by the independent modules in `windows/go.mod`, `windows/go.sum`, `linux/go.mod`, and `linux/go.sum`. Direct dependencies include:
 
 - `github.com/Microsoft/go-winio`
 - `golang.org/x/crypto`

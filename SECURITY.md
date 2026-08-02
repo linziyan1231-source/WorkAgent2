@@ -21,12 +21,12 @@ Use synthetic identities, paths, credentials, and infrastructure details in repo
 ## Core security boundaries
 
 - Browser authentication does not authorize browser-provided host paths or internal credentials.
-- Windows SID is the tenant identity for private runtime and filesystem operations.
-- Per-user process trees are constrained by ACLs, loopback listeners, restricted tokens where applicable, and Job Objects.
+- A Windows SID or dedicated Linux UID is the tenant identity for private runtime and filesystem operations.
+- Per-user process trees are constrained by platform-native ownership and ACLs, private listeners, and either Windows restricted tokens and Job Objects or Linux systemd services and cgroups.
 - Secret material must not enter command-line arguments, shared releases, logs, or browser responses.
 - Immutable release files are validated against manifests before launch.
 - Provider identities, model aliases, keys, and quotas are bound to stable server-managed records.
 
 ## Deployment responsibility
 
-Passing unit tests is not a production security certification. Deployments must independently verify Windows service identities, profile ownership, ACL inheritance, reparse-point handling, filesystem quotas, TLS, cookies, public origin, OAuth callbacks, firewall rules, provider access, release hashes, upgrade behavior, and rollback evidence.
+Passing unit tests is not a production security certification. Deployments must independently verify platform service identities, profile ownership, ACL inheritance, link and traversal defenses, filesystem quotas, TLS, cookies, public origin, OAuth callbacks, firewall rules, provider access, release hashes, upgrade behavior, and rollback evidence.

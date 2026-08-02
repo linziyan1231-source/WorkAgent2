@@ -1,10 +1,10 @@
-# Architecture
+# Cross-platform architecture
 
 ## Goal
 
-WorkAgent exposes one browser entry point while keeping each Windows user's runtime, credentials, projects, and processes inside a SID-specific boundary. The core design question is not merely how to proxy traffic; it is how to prevent a browser request, another tenant, or a writable shared release from crossing that boundary.
+WorkAgent2 exposes a browser entry point while keeping every user's runtime, credentials, projects, files, and processes inside a platform-native identity boundary. Windows and Linux use different operating-system primitives, but enforce the same control-plane contract.
 
-## Component flow
+## Common component flow
 
 ```mermaid
 sequenceDiagram
@@ -15,50 +15,51 @@ sequenceDiagram
     participant Runtime
 
     Browser->>Portal: Authenticated request
-    Portal->>Store: Resolve session to managed user and SID
-    Portal->>UserHost: Protected IPC request for that SID
+    Portal->>Store: Resolve session to a managed identity
+    Portal->>UserHost: Protected request for that identity
     UserHost->>UserHost: Validate operation, private paths, and release
     UserHost->>Runtime: Start or reuse constrained process tree
-    Runtime-->>UserHost: Loopback endpoint and health state
+    Runtime-->>UserHost: Private endpoint and health state
     UserHost-->>Portal: Server-owned route metadata
     Portal-->>Browser: Proxied HTTP, WebSocket, or stream
 ```
 
-## Trust boundaries
+## Shared responsibilities
 
-| Boundary | Responsibility |
+| Layer | Responsibility |
 |---|---|
-| Browser ↔ Portal | Login, session validation, request shape, lexical input validation |
-| Portal ↔ UserHost | Server-selected SID, protected IPC, bounded request/response types |
-| UserHost ↔ filesystem | SID-private roots, ACL verification, quota and reparse-point defenses |
-| UserHost ↔ runtime | Immutable release verification, private configuration, Job Object lifecycle |
-| Portal ↔ loopback runtime | Route ownership, HTTP/WebSocket streaming, credential non-disclosure |
-| Control plane ↔ providers | Stable provider IDs, aliases, policy serialization, bounded credentials |
+| Browser and Portal | Login, session validation, request-shape validation, and public routing |
+| Portal and UserHost | Server-selected user identity, protected control channel, and bounded messages |
+| UserHost and filesystem | Private roots, ownership checks, quotas, and link/traversal defenses |
+| UserHost and runtime | Verified releases, private configuration, process-tree lifecycle, and health |
+| Portal and private runtime | Route ownership, streamed proxying, and credential non-disclosure |
+| Control plane and providers | Stable provider IDs, model aliases, policy serialization, quotas, and bounded credentials |
 
-## Principal invariants
+## Platform mapping
 
-1. **Tenant identity is a Windows SID.** Usernames and browser parameters are labels, not authorization identities.
-2. **Private operations stay in UserHost.** Portal owns browser authentication and routing; filesystem, credentials, OAuth, projects, and processes are performed by the SID-specific host.
-3. **Shared releases are immutable.** Runtime files are selected by a protected version pointer and checked against a hash manifest before use.
-4. **Secrets use bounded channels.** Plaintext secrets are not accepted in shared files, process arguments, logs, or browser-visible data.
-5. **Internal listeners are loopback-only.** Public origin, cookies, TLS, callbacks, and proxy behavior form one transport contract.
-6. **Lifecycle is explicit.** Start, health, idle collection, rename, upgrade, rollback, and failure recovery are modeled as state transitions rather than best-effort shell actions.
-7. **Provisioning is per account.** Each username has at most one active provisioning job, passwords stay outside job state, and unrelated employee accounts may initialize concurrently.
+| Concern | Windows | Linux |
+|---|---|---|
+| Tenant identity | Windows SID | Dedicated Linux UID |
+| Control channel | Protected named pipe | Protected Unix socket |
+| Filesystem boundary | NTFS ownership and ACLs | Ownership, ACLs, and XFS project quotas |
+| Process boundary | Restricted token and Job Object | systemd service and cgroup |
+| Private listeners | Loopback endpoints owned by the mapped route | Loopback or protected Unix-socket endpoints |
+| Service management | Windows services and supervised processes | systemd units and per-user service instances |
 
-## Package responsibilities
+## Common invariants
 
-- `internal/portal`: login and sessions, proxying, OAuth-facing routes, notifications, quotas, static content.
-- `internal/admin` and `internal/provisionipc`: privileged account creation, resumable milestones, duplicate-job rejection, and bounded progress streaming.
-- `internal/instance`: mapping managed users to UserHost routes and lifecycle state.
-- `internal/ipc` and `internal/adminipc`: typed named-pipe protocols and servers.
-- `internal/userhost`: private credentials, projects, runtime launch, activity, OAuth, and model defaults.
-- `internal/winutil`: Windows-native identity, ACL, restricted-token, process, profile, TCP, and restart-manager helpers.
-- `internal/release` and `internal/agentcli`: immutable releases, manifests, stable launchers, and version pointers.
-- `internal/store`: SQLite-backed users, sessions, bindings, policies, and usage state.
-- `internal/cliproxy`, `internal/chatgptproxy`, and `internal/portalusage`: provider transport, catalog convergence, stream inspection, and quota accounting.
+1. Browser-supplied usernames, paths, hostnames, and credentials are never authorization identities.
+2. Filesystem, credential, OAuth, project, and runtime operations stay inside the mapped UserHost boundary.
+3. Shared releases are immutable, selected explicitly, and verified against hash manifests before launch.
+4. Plaintext secrets do not enter browser responses, logs, shared releases, or process arguments.
+5. Provider identities, model aliases, keys, quotas, and usage remain bound to stable server-managed records.
+6. Start, health, idle collection, rename, upgrade, rollback, and recovery are explicit state transitions.
+7. Provisioning is isolated per account so unrelated users can initialize concurrently without sharing secret state.
 
-## Verification strategy
+## Platform documentation
 
-Most security-sensitive packages pair implementation files with unit tests. Tests exercise malformed IPC, cross-user paths, auth state, proxy headers and streams, catalog convergence, release hashes, rollback behavior, and Windows resource controls. Selected PowerShell scripts add release-manifest contract checks.
+- [Windows implementation](../windows/README.md) and [Windows architecture](../windows/docs/ARCHITECTURE.md)
+- [Linux implementation](../linux/README.md) and [Linux architecture](../linux/docs/ARCHITECTURE.md)
+- [Shared runtime patches](../patches/README.md)
 
-Production acceptance requires more than this repository can show: real Windows accounts, service identities, ACL inheritance, filesystem quotas, provider callbacks, TLS, firewall policy, process races, upgrade snapshots, and rollback evidence must be verified in the target environment.
+Passing repository tests is not a production security certification. Each deployment must verify its real identities, ownership and ACL inheritance, quotas, network boundary, callbacks, provider access, release hashes, upgrade path, and rollback evidence.

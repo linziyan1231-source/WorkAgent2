@@ -10,14 +10,14 @@ id = "generic-api-key"
   description = "Synthetic CLIProxy API keys used only by deterministic Go tests"
   condition = "AND"
   regexTarget = "secret"
-  paths = ['''(?:^|/)internal/(?:cliproxy|modelbootstrap|userhost)/.*_test\.go$''']
+  paths = ['''(?:^|/)windows/internal/(?:cliproxy|modelbootstrap|userhost)/.*_test\.go$''']
   regexes = ['''^cpa_(?:abcdefghijklmnopqrstuvwxyz012345|zyxwvutsrqponmlkjihgfedcba987654)$''']
 
   [[rules.allowlists]]
   description = "RFC 6455 sample nonce in WebSocket tests and the byte-pinned AionUi patch"
   condition = "AND"
   regexTarget = "secret"
-  paths = ['''(?:^|/)(?:internal/portal/server_test\.go|linux/components/aionui/aionui-webhost-workagent-runtime-auth\.patch)$''']
+  paths = ['''(?:^|/)(?:windows/internal/portal/server_test\.go|linux/components/aionui/aionui-webhost-workagent-runtime-auth\.patch)$''']
   regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
 
   [[rules.allowlists]]
