@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	testSID1 = "S-1-5-21-1335169958-1819941586-1322872941-1322"
-	testSID2 = "S-1-5-21-1836781275-1957422218-1832856846-7828"
+	testSID1 = "S-1-5-21-100-200-300-1017"
+	testSID2 = "S-1-5-21-100-200-300-1018"
 )
 
 type fakeInstances struct {
@@ -56,6 +56,9 @@ type fakeInstances struct {
 	projectRename       *ipc.ProjectRenameRequest
 	projectRenameResult ipc.ProjectRenameResult
 	projectRenameError  error
+	sharedProject       *ipc.SharedProjectRequest
+	sharedProjectResult ipc.SharedProjectResult
+	sharedProjectError  error
 	oauthStartError     error
 	oauthCompleteError  error
 	oauthCancelError    error
@@ -66,8 +69,11 @@ type fakeInstances struct {
 	modelKeyIDSIDs      []string
 	storageUsage        ipc.StorageUsage
 	storageUsageError   error
+	storageErrorsBySID  map[string]error
 	storageUsageSIDs    []string
 	stopSIDs            []string
+	restartSIDs         []string
+	restartError        error
 }
 
 func (f *fakeInstances) Ensure(_ context.Context, sid string) (ipc.Status, error) {
@@ -144,6 +150,68 @@ func (f *fakeInstances) RenameProject(_ context.Context, sid, oldName, newName s
 	return f.projectRenameResult, f.projectRenameError
 }
 
+func (f *fakeInstances) ResolveProject(_ context.Context, _ string, _ string) (ipc.ProjectResolveResult, error) {
+	return ipc.ProjectResolveResult{Path: `C:\Users\test\AionUiPortal\workspace\project`}, nil
+}
+
+func (f *fakeInstances) ListProjects(_ context.Context, _ string) (ipc.ProjectListResult, error) {
+	return ipc.ProjectListResult{}, nil
+}
+
+func (f *fakeInstances) ProvisionSharedProject(_ context.Context, sid string, request ipc.SharedProjectRequest) (ipc.SharedProjectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureSIDs = append(f.ensureSIDs, sid)
+	f.sharedProject = &request
+	result := f.sharedProjectResult
+	if result.ProjectID == "" {
+		result.ProjectID = request.ProjectID
+	}
+	return result, f.sharedProjectError
+}
+
+func (f *fakeInstances) FinishSharedProjectProvisioning(_ context.Context, _ string, _ ipc.SharedProjectRequest, _ bool) error {
+	return nil
+}
+
+func (f *fakeInstances) RunSharedAgent(_ context.Context, _ string, _ ipc.SharedAgentRequest) (ipc.SharedAgentResult, error) {
+	return ipc.SharedAgentResult{RuntimeConversationID: "runtime-test", AssistantBody: "done"}, nil
+}
+
+func (f *fakeInstances) StopSharedAgent(_ context.Context, _ string, _ ipc.SharedAgentStopRequest) error {
+	return nil
+}
+
+func (f *fakeInstances) InstallSharedAgentCredential(_ context.Context, _ string, _ ipc.SharedAgentCredentialRequest) error {
+	return nil
+}
+
+func (f *fakeInstances) VerifySharedAgentCredential(_ context.Context, _ string, _ string) (bool, error) {
+	return true, nil
+}
+
+func (f *fakeInstances) SharedFile(_ context.Context, _ string, _ ipc.SharedFileRequest) (ipc.SharedFileResult, error) {
+	return ipc.SharedFileResult{Data: json.RawMessage(`[]`)}, nil
+}
+
+func (f *fakeInstances) TransferSharedProject(_ context.Context, _ string, _ ipc.SharedTransferRequest) error {
+	return nil
+}
+func (f *fakeInstances) FinishSharedProjectTransfer(_ context.Context, _ string, _ ipc.SharedTransferRequest, _ bool) error {
+	return nil
+}
+func (f *fakeInstances) RelocateSharedProjectConversations(_ context.Context, _ string, _ ipc.SharedConversationRelocateRequest) error {
+	return nil
+}
+
+func (f *fakeInstances) UpdateSharedProjectACL(_ context.Context, sid string, request ipc.SharedProjectRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureSIDs = append(f.ensureSIDs, sid)
+	f.sharedProject = &request
+	return f.sharedProjectError
+}
+
 func (f *fakeInstances) BeginRequest(sid string, webSocket bool) (func(), error) {
 	f.mu.Lock()
 	f.beginSIDs = append(f.beginSIDs, sid)
@@ -182,13 +250,14 @@ func (f *fakeInstances) StorageUsage(_ context.Context, sid string) (ipc.Storage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.storageUsageSIDs = append(f.storageUsageSIDs, sid)
-	if f.storageUsage.LimitBytes == 0 {
+	if f.storageUsage.Personal.LimitBytes == 0 {
 		f.storageUsage = ipc.StorageUsage{
-			LimitBytes:     20 * 1024 * 1024 * 1024,
-			UsedBytes:      2 * 1024 * 1024 * 1024,
-			RemainingBytes: 18 * 1024 * 1024 * 1024,
-			MeasuredAt:     "2026-07-26T08:00:00Z",
+			Personal: ipc.StorageBucketUsage{LimitBytes: 60 * 1024 * 1024 * 1024, UsedBytes: 2 * 1024 * 1024 * 1024, RemainingBytes: 58 * 1024 * 1024 * 1024, MeasuredAt: "2026-07-26T08:00:00Z"},
+			Shared:   ipc.StorageBucketUsage{LimitBytes: 20 * 1024 * 1024 * 1024, UsedBytes: 2 * 1024 * 1024 * 1024, RemainingBytes: 18 * 1024 * 1024 * 1024, MeasuredAt: "2026-07-26T08:00:00Z"},
 		}
+	}
+	if err := f.storageErrorsBySID[sid]; err != nil {
+		return ipc.StorageUsage{}, err
 	}
 	return f.storageUsage, f.storageUsageError
 }
@@ -202,9 +271,17 @@ func (f *fakeInstances) Stop(_ context.Context, sid string) error {
 	return nil
 }
 
+func (f *fakeInstances) Restart(_ context.Context, sid string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restartSIDs = append(f.restartSIDs, sid)
+	return f.restartError
+}
+
 type fakeUsageService struct {
 	mu           sync.Mutex
 	calls        []usageCall
+	batchCalls   [][]string
 	summary      portalusage.Summary
 	summaryBySID map[string]portalusage.Summary
 	err          error
@@ -223,6 +300,24 @@ func (f *fakeUsageService) Current(_ context.Context, sid string, ids modelboots
 		return summary, f.err
 	}
 	return f.summary, f.err
+}
+
+func (f *fakeUsageService) CurrentMany(_ context.Context, sids []string) (map[string]portalusage.Summary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.batchCalls = append(f.batchCalls, append([]string(nil), sids...))
+	if f.err != nil {
+		return nil, f.err
+	}
+	result := make(map[string]portalusage.Summary, len(sids))
+	for _, sid := range sids {
+		summary := f.summary
+		if value, exists := f.summaryBySID[sid]; exists {
+			summary = value
+		}
+		result[strings.ToUpper(sid)] = summary
+	}
+	return result, nil
 }
 
 func validUsageSummary() portalusage.Summary {
@@ -265,6 +360,52 @@ func TestWrongPasswordNeverStartsInstance(t *testing.T) {
 	}
 }
 
+func TestEmployeeCanRestartOnlyTheirSIDOwnedService(t *testing.T) {
+	server, data, instances := testServer(t)
+	token := createPortalSession(t, data)
+	request := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/me/restart-service", nil)
+	request.Header.Set("Origin", "https://portal.example.test")
+	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"reconnect_after_ms":2000`) {
+		t.Fatalf("restart status=%d body=%s", response.Code, response.Body.String())
+	}
+	instances.mu.Lock()
+	defer instances.mu.Unlock()
+	if len(instances.restartSIDs) != 1 || instances.restartSIDs[0] != testSID1 {
+		t.Fatalf("restart SIDs=%v, want current employee SID", instances.restartSIDs)
+	}
+	if len(instances.stopSIDs) != 0 {
+		t.Fatalf("restart used administrator stop path: %v", instances.stopSIDs)
+	}
+}
+
+func TestServiceRestartRejectsUntrustedOriginAndReportsRuntimeFailure(t *testing.T) {
+	server, data, instances := testServer(t)
+	token := createPortalSession(t, data)
+	untrusted := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/me/restart-service", nil)
+	untrusted.Header.Set("Origin", "https://attacker.example")
+	untrusted.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	untrustedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(untrustedResponse, untrusted)
+	if untrustedResponse.Code != http.StatusForbidden {
+		t.Fatalf("untrusted restart status=%d body=%s", untrustedResponse.Code, untrustedResponse.Body.String())
+	}
+
+	instances.restartError = errors.New("protected UserHost pipe unavailable")
+	failed := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/me/restart-service", nil)
+	failed.Header.Set("Origin", "https://portal.example.test")
+	failed.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	failedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(failedResponse, failed)
+	if failedResponse.Code != http.StatusServiceUnavailable || !strings.Contains(failedResponse.Body.String(), "restart could not be started") {
+		t.Fatalf("failed restart status=%d body=%s", failedResponse.Code, failedResponse.Body.String())
+	}
+}
+
 func TestAdministratorLoginSkipsInstanceAndCanManageUsers(t *testing.T) {
 	server, data, instances := testServer(t)
 	password := []byte("correct-administrator-portal-password")
@@ -298,7 +439,7 @@ func TestAdministratorLoginSkipsInstanceAndCanManageUsers(t *testing.T) {
 	server.provision = func(_ context.Context, request provisionipc.Request, report func(provisionipc.Progress)) (provisionipc.Response, error) {
 		report(provisionipc.Progress{Percent: 62, Step: "creating_portal_account"})
 		provisionRequests <- request
-		created, err := data.CreateUser(context.Background(), request.Username, hash, "S-1-5-21-1875785998-1615036399-1837640303-5768", `SERVER\test3`, false, time.Now())
+		created, err := data.CreateUser(context.Background(), request.Username, hash, "S-1-5-21-100-200-300-1019", `SERVER\test3`, false, time.Now())
 		if err != nil {
 			return provisionipc.Response{}, err
 		}
@@ -374,36 +515,56 @@ func TestAdministratorLoginSkipsInstanceAndCanManageUsers(t *testing.T) {
 	}
 	instances.mu.Unlock()
 
-	usageRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users/usage?username=employee-two", nil)
+	server.provision = func(_ context.Context, request provisionipc.Request, _ func(provisionipc.Progress)) (provisionipc.Response, error) {
+		if request.Command != "set-kimi-datasource" || request.Username != "employee-two" || !request.Enabled ||
+			len(request.AllowedSources) != 2 || request.AllowedSources[0] != "arxiv" || request.DailyLimit != 25 || request.MonthlyLimit != 250 {
+			t.Fatalf("unexpected Kimi datasource request: %+v", request)
+		}
+		return provisionipc.Response{OK: true, KimiDatasource: &provisionipc.KimiDatasourceGrant{Enabled: true, AllowedSources: request.AllowedSources,
+			DailyLimit: request.DailyLimit, MonthlyLimit: request.MonthlyLimit}}, nil
+	}
+	kimiRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/kimi-datasource",
+		strings.NewReader(`{"username":"employee-two","enabled":true,"allowed_sources":["arxiv","scholar"],"daily_limit":25,"monthly_limit":250}`))
+	kimiRequest.Header.Set("Content-Type", "application/json")
+	kimiRequest.Header.Set("Origin", "https://portal.example.test")
+	kimiRequest.AddCookie(cookies[0])
+	kimiResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(kimiResponse, kimiRequest)
+	if kimiResponse.Code != http.StatusOK || !strings.Contains(kimiResponse.Body.String(), `"enabled":true`) {
+		t.Fatalf("Kimi datasource policy status=%d body=%s", kimiResponse.Code, kimiResponse.Body.String())
+	}
+
+	instances.storageErrorsBySID = map[string]error{"S-1-5-21-100-200-300-1019": errors.New("UserHost IPC is unavailable")}
+	usageRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users/usage", nil)
 	usageRequest.AddCookie(cookies[0])
 	usageResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(usageResponse, usageRequest)
-	if usageResponse.Code != http.StatusOK || !strings.Contains(usageResponse.Body.String(), `"resource_usage"`) ||
-		!strings.Contains(usageResponse.Body.String(), `"used_bytes":2147483648`) {
+	if usageResponse.Code != http.StatusOK || strings.Count(usageResponse.Body.String(), `"resource_usage"`) != 2 ||
+		!strings.Contains(usageResponse.Body.String(), `"used_bytes":2147483648`) ||
+		!strings.Contains(usageResponse.Body.String(), `"username":"employee-three"`) {
 		t.Fatalf("administrator usage status=%d body=%s", usageResponse.Code, usageResponse.Body.String())
 	}
 	instances.mu.Lock()
-	if len(instances.ensureSIDs) != 0 || len(instances.statusSIDs) != 1 || instances.statusSIDs[0] != testSID2 {
+	if len(instances.ensureSIDs) != 0 || len(instances.modelKeyIDSIDs) != 0 || len(instances.storageUsageSIDs) != 2 {
 		instances.mu.Unlock()
-		t.Fatalf("administrator usage started or inspected the wrong runtime: ensure=%v status=%v", instances.ensureSIDs, instances.statusSIDs)
+		t.Fatalf("administrator batch usage touched heavy runtime state: ensure=%v mappings=%v storage=%v", instances.ensureSIDs, instances.modelKeyIDSIDs, instances.storageUsageSIDs)
 	}
-	instances.statusError = errors.New("UserHost IPC is unavailable")
 	instances.mu.Unlock()
+	usage := server.usage.(*fakeUsageService)
+	usage.mu.Lock()
+	if len(usage.batchCalls) != 1 || len(usage.batchCalls[0]) != 2 || len(usage.calls) != 0 {
+		usage.mu.Unlock()
+		t.Fatalf("administrator usage did not use one batch quota query: batch=%v single=%v", usage.batchCalls, usage.calls)
+	}
+	usage.mu.Unlock()
 
-	unavailableUsageRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users/usage?username=employee-three", nil)
-	unavailableUsageRequest.AddCookie(cookies[0])
-	unavailableUsageResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(unavailableUsageResponse, unavailableUsageRequest)
-	if unavailableUsageResponse.Code != http.StatusServiceUnavailable {
-		t.Fatalf("stopped user usage status=%d body=%s", unavailableUsageResponse.Code, unavailableUsageResponse.Body.String())
+	invalidUsageRequest := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/admin/users/usage?username=employee-two", nil)
+	invalidUsageRequest.AddCookie(cookies[0])
+	invalidUsageResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidUsageResponse, invalidUsageRequest)
+	if invalidUsageResponse.Code != http.StatusBadRequest {
+		t.Fatalf("administrator batch usage accepted per-user query: status=%d body=%s", invalidUsageResponse.Code, invalidUsageResponse.Body.String())
 	}
-	instances.mu.Lock()
-	if len(instances.ensureSIDs) != 0 {
-		instances.mu.Unlock()
-		t.Fatalf("stopped user usage started an instance: %v", instances.ensureSIDs)
-	}
-	instances.statusError = nil
-	instances.mu.Unlock()
 
 	disableRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/admin/users/disable", strings.NewReader(`{"username":"employee-two"}`))
 	disableRequest.Header.Set("Content-Type", "application/json")
@@ -498,7 +659,7 @@ func TestAdministratorLoginSkipsInstanceAndCanManageUsers(t *testing.T) {
 }
 
 func TestFilesystemBrowseStartsAtWorkspaceAndRejectsEscape(t *testing.T) {
-	root := `C:\Users\user-1b4f0e98\AionUiPortal`
+	root := `C:\Users\test1\AionUiPortal`
 	initial := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path=&showFiles=true", nil)
 	if err := constrainFilesystemBrowse(initial, root); err != nil {
 		t.Fatal(err)
@@ -508,18 +669,18 @@ func TestFilesystemBrowseStartsAtWorkspaceAndRejectsEscape(t *testing.T) {
 		t.Fatalf("initial browse path=%q, want %q", got, want)
 	}
 
-	allowed := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`\\?\C:\Users\user-1b4f0e98\AionUiPortal\workspace`), nil)
+	allowed := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`\\?\C:\Users\test1\AionUiPortal\workspace`), nil)
 	if err := constrainFilesystemBrowse(allowed, root); err != nil {
 		t.Fatalf("private descendant was rejected: %v", err)
 	}
-	if got := allowed.URL.Query().Get("path"); got != `C:\Users\user-1b4f0e98\AionUiPortal\workspace` {
+	if got := allowed.URL.Query().Get("path"); got != `C:\Users\test1\AionUiPortal\workspace` {
 		t.Fatalf("verbatim path normalized to %q", got)
 	}
 
 	for _, outside := range []string{
-		`C:\Users\user-4194d170`,
-		`C:\Users\user-1b4f0e98\AionUiPortal-other`,
-		`C:\Users\user-1b4f0e98\AionUiPortal\..\Documents`,
+		`C:\Users\Administrator`,
+		`C:\Users\test1\AionUiPortal-other`,
+		`C:\Users\test1\AionUiPortal\..\Documents`,
 		`workspace`,
 	} {
 		request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(outside), nil)
@@ -535,10 +696,10 @@ func TestProxyRejectsFilesystemBrowseEscapeBeforeStartingInstance(t *testing.T) 
 		if sid != testSID1 {
 			return "", fmt.Errorf("unexpected SID %s", sid)
 		}
-		return `C:\Users\user-1b4f0e98`, nil
+		return `C:\Users\test1`, nil
 	}
 	token := createPortalSession(t, data)
-	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`C:\Users\user-4194d170`), nil)
+	request := httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/fs/browse?path="+url.QueryEscape(`C:\Users\Administrator`), nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)

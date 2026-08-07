@@ -32,7 +32,7 @@ func fakeAionServer(t *testing.T, password string) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "user": map[string]any{"id": "system_default_user", "username": "admin"}})
 	})
 	mux.HandleFunc("/api/system/info", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"cache_dir": `C:\Users\user-87eba76e\AionUiPortal\data`, "work_dir": `C:\Users\user-87eba76e\AionUiPortal\data`, "log_dir": `C:\Users\user-87eba76e\AionUiPortal\logs`, "platform": "win32", "arch": "x64"}})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"cache_dir": `C:\Users\worker\AionUiPortal\data`, "work_dir": `C:\Users\worker\AionUiPortal\data`, "log_dir": `C:\Users\worker\AionUiPortal\logs`, "platform": "win32", "arch": "x64"}})
 	})
 	mux.HandleFunc("/api/agents/management", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []any{map[string]any{"id": "aion"}}})
@@ -62,7 +62,7 @@ func TestInternalAuthenticationKeepsCookiesServerSide(t *testing.T) {
 	if material.CSRFToken != "" || material.CookieHeader != "aionui-session=session-value" || strings.Contains(material.CookieHeader, "must-not-escape") {
 		t.Fatalf("unexpected internal material: %+v", material)
 	}
-	if err := client.validateAuthenticatedAPIs(context.Background(), "admin", systemInfo{CacheDir: `C:\Users\user-87eba76e\AionUiPortal\data`, WorkDir: `C:\Users\user-87eba76e\AionUiPortal\data`, LogDir: `C:\Users\user-87eba76e\AionUiPortal\logs`}); err != nil {
+	if err := client.validateAuthenticatedAPIs(context.Background(), "admin", systemInfo{CacheDir: `C:\Users\worker\AionUiPortal\data`, WorkDir: `C:\Users\worker\AionUiPortal\data`, LogDir: `C:\Users\worker\AionUiPortal\logs`}); err != nil {
 		t.Fatal(err)
 	}
 }

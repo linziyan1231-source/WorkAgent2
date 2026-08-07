@@ -6,52 +6,94 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"aionuiportal/internal/ipc"
 	"aionuiportal/internal/portalusage"
 	"aionuiportal/internal/store"
 )
 
-func (s *Server) managedUserUsage(ctx context.Context, user store.User) (portalusage.Summary, error) {
-	finish, err := s.instances.BeginRequest(user.WindowsSID, false)
-	if err != nil {
-		return portalusage.Summary{}, err
+func (s *Server) managedUsersUsage(ctx context.Context, users []store.User) ([]map[string]any, error) {
+	sids := make([]string, len(users))
+	for index, user := range users {
+		sids[index] = user.WindowsSID
 	}
-	defer finish()
-	status, err := s.instances.Status(ctx, user.WindowsSID)
-	if err != nil || !status.Healthy {
-		if err != nil {
-			return portalusage.Summary{}, err
+	summaries, err := s.usage.CurrentMany(ctx, sids)
+	if err != nil {
+		return nil, err
+	}
+	for _, user := range users {
+		cacheKey := strings.ToUpper(user.WindowsSID)
+		summary, ok := summaries[cacheKey]
+		if !ok {
+			continue
 		}
-		return portalusage.Summary{}, errors.New("UserHost is not running")
-	}
-	if !strings.EqualFold(status.WindowsSID, user.WindowsSID) {
-		return portalusage.Summary{}, errors.New("UserHost returned an invalid status identity")
-	}
-	ids, err := s.instances.ModelKeyIDs(ctx, user.WindowsSID)
-	if err != nil {
-		return portalusage.Summary{}, err
-	}
-	summary, err := s.usage.Current(ctx, user.WindowsSID, ids)
-	if err != nil {
-		return portalusage.Summary{}, err
-	}
-	quota, err := s.store.ChatGPTProQuota(ctx, user.ID, s.now())
-	if err != nil {
-		return portalusage.Summary{}, err
-	}
-	for index := range summary.Providers {
-		if summary.Providers[index].Kind == portalusage.KindChatGPT {
-			summary.Providers[index].Pro = &portalusage.CountWindow{Used: quota.Confirmed + quota.Pending, Limit: quota.Limit, ResetAt: quota.ResetAt.Format(time.RFC3339)}
-			break
+		quota, quotaErr := s.store.ChatGPTProQuota(ctx, user.ID, s.now())
+		if quotaErr != nil {
+			return nil, quotaErr
 		}
+		for index := range summary.Providers {
+			if summary.Providers[index].Kind == portalusage.KindChatGPT {
+				summary.Providers[index].Pro = &portalusage.CountWindow{Used: quota.Confirmed + quota.Pending, Limit: quota.Limit, ResetAt: quota.ResetAt.Format(time.RFC3339)}
+				break
+			}
+		}
+		summaries[cacheKey] = summary
 	}
-	storage, err := s.instances.StorageUsage(ctx, user.WindowsSID)
-	if err != nil {
-		return portalusage.Summary{}, err
+
+	storageBySID := make(map[string]portalusage.StorageUsage)
+	var storageMu sync.Mutex
+	var storageWait sync.WaitGroup
+	storageSlots := make(chan struct{}, 4)
+	for _, user := range users {
+		if !user.Enabled {
+			continue
+		}
+		if _, available := summaries[strings.ToUpper(user.WindowsSID)]; !available {
+			continue
+		}
+		storageWait.Add(1)
+		go func(user store.User) {
+			defer storageWait.Done()
+			select {
+			case storageSlots <- struct{}{}:
+				defer func() { <-storageSlots }()
+			case <-ctx.Done():
+				return
+			}
+			finish, beginErr := s.instances.BeginRequest(user.WindowsSID, false)
+			if beginErr != nil {
+				s.logger.Printf("Administrator storage usage unavailable username=%s", user.Username)
+				return
+			}
+			defer finish()
+			storage, storageErr := s.instances.StorageUsage(ctx, user.WindowsSID)
+			if storageErr != nil {
+				s.logger.Printf("Administrator storage usage unavailable username=%s", user.Username)
+				return
+			}
+			storageMu.Lock()
+			storageBySID[strings.ToUpper(user.WindowsSID)] = portalStorageUsage(storage)
+			storageMu.Unlock()
+		}(user)
 	}
-	summary.Storage = &portalusage.StorageUsage{LimitBytes: storage.LimitBytes, UsedBytes: storage.UsedBytes, RemainingBytes: storage.RemainingBytes, MeasuredAt: storage.MeasuredAt}
-	return summary, nil
+	storageWait.Wait()
+
+	items := make([]map[string]any, 0, len(users))
+	for _, user := range users {
+		cacheKey := strings.ToUpper(user.WindowsSID)
+		summary, ok := summaries[cacheKey]
+		if !ok {
+			items = append(items, map[string]any{"username": user.Username, "resource_usage_unavailable": true})
+			continue
+		}
+		if storage, found := storageBySID[cacheKey]; found {
+			summary.Storage = &storage
+		}
+		items = append(items, map[string]any{"username": user.Username, "resource_usage": summary})
+	}
+	return items, nil
 }
 
 func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
@@ -118,9 +160,8 @@ func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.usageFailure("storage_unavailable")
 	} else {
-		summary.Storage = &portalusage.StorageUsage{
-			LimitBytes: storage.LimitBytes, UsedBytes: storage.UsedBytes, RemainingBytes: storage.RemainingBytes, MeasuredAt: storage.MeasuredAt,
-		}
+		value := portalStorageUsage(storage)
+		summary.Storage = &value
 	}
 	if snapshot, marshalErr := json.Marshal(summary); marshalErr != nil {
 		s.usageFailure("snapshot_encode_failed")
@@ -128,6 +169,13 @@ func (s *Server) currentUsage(w http.ResponseWriter, r *http.Request) {
 		s.usageFailure("snapshot_write_failed")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": summary})
+}
+
+func portalStorageUsage(storage ipc.StorageUsage) portalusage.StorageUsage {
+	return portalusage.StorageUsage{
+		Personal: portalusage.StorageBucketUsage{LimitBytes: storage.Personal.LimitBytes, UsedBytes: storage.Personal.UsedBytes, RemainingBytes: storage.Personal.RemainingBytes, MeasuredAt: storage.Personal.MeasuredAt},
+		Shared:   portalusage.StorageBucketUsage{LimitBytes: storage.Shared.LimitBytes, UsedBytes: storage.Shared.UsedBytes, RemainingBytes: storage.Shared.RemainingBytes, MeasuredAt: storage.Shared.MeasuredAt},
+	}
 }
 
 func (s *Server) writeUsageContextError(w http.ResponseWriter, ctx context.Context, message string) {

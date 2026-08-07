@@ -73,6 +73,15 @@ type ModelBootstrapResult struct {
 	Restarted  bool
 }
 
+const taskVerificationStartupLimit = 6 * time.Minute
+
+func remainingTaskVerificationWait(info scheduler.Info, elapsed time.Duration) time.Duration {
+	if !info.IsRunning() || elapsed >= taskVerificationStartupLimit {
+		return 0
+	}
+	return taskVerificationStartupLimit - elapsed
+}
+
 func (m *Manager) ConvergeManagedKimiCatalog(ctx context.Context, managementURL, managementKeyFile string) (cliproxy.CatalogConvergence, error) {
 	return cliproxy.ConvergeManagedKimiCatalog(ctx, cliproxy.ManagementOptions{BaseURL: managementURL, KeyFile: managementKeyFile})
 }
@@ -194,6 +203,108 @@ func (m *Manager) SetChatGPTProWeeklyLimit(ctx context.Context, username string,
 		return fmt.Errorf("ChatGPT Pro limit was updated but its audit event could not be recorded: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) SetKimiDatasourceGrant(ctx context.Context, username string, enabled bool, sources []string, dailyLimit, monthlyLimit int) (store.KimiDatasourceGrant, error) {
+	user, err := m.Store.UserByUsername(ctx, username)
+	if err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	if user.Admin || strings.TrimSpace(user.WindowsSID) == "" {
+		return store.KimiDatasourceGrant{}, errors.New("Kimi datasource access requires a managed employee account")
+	}
+	previousGrant, err := m.Store.KimiDatasourceGrantForUser(ctx, user.ID, time.Now())
+	if err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	if !enabled && len(sources) == 0 {
+		sources, dailyLimit, monthlyLimit = previousGrant.AllowedSources, previousGrant.DailyLimit, previousGrant.MonthlyLimit
+		if len(sources) == 0 {
+			sources = append([]string(nil), store.KimiDatasourceSources...)
+			dailyLimit, monthlyLimit = 100, 1000
+		}
+	}
+	normalized, err := store.NormalizeKimiDatasourceSources(sources)
+	if err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	if err := store.ValidateKimiDatasourceLimits(dailyLimit, monthlyLimit); err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	configPath := m.userConfigPath(user.WindowsSID)
+	userConfig, err := config.LoadUserHost(configPath)
+	if err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	if err := m.validateUserHostLayout(userConfig, user.WindowsSID); err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	previousConfig := userConfig
+	token := ""
+	if enabled {
+		token, err = auth.RandomToken(32)
+		if err != nil {
+			return store.KimiDatasourceGrant{}, err
+		}
+		userConfig.KimiDatasource = &config.KimiDatasourceAccess{Endpoint: m.Config.EffectiveKimiDatasourceBrokerURL(), Token: token}
+	} else {
+		userConfig.KimiDatasource = nil
+	}
+	if err := userConfig.Validate(); err != nil {
+		return store.KimiDatasourceGrant{}, err
+	}
+	wasRunning := false
+	statusCtx, cancelStatus := context.WithTimeout(ctx, 3*time.Second)
+	if status, statusErr := m.Instances.Status(statusCtx, user.WindowsSID); statusErr == nil && status.Healthy {
+		wasRunning = true
+	} else if statusErr != nil && !isPipeUnavailable(statusErr) {
+		cancelStatus()
+		return store.KimiDatasourceGrant{}, fmt.Errorf("inspect UserHost before Kimi datasource update: %w", statusErr)
+	}
+	cancelStatus()
+	if wasRunning {
+		stopCtx, cancelStop := context.WithTimeout(ctx, 30*time.Second)
+		err = m.Instances.Stop(stopCtx, user.WindowsSID)
+		cancelStop()
+		if err != nil && !isPipeUnavailable(err) {
+			return store.KimiDatasourceGrant{}, fmt.Errorf("stop UserHost before Kimi datasource update: %w", err)
+		}
+	}
+	restartAfterFailure := func(cause error) error {
+		if !wasRunning || !user.Enabled {
+			return cause
+		}
+		startCtx, cancelStart := context.WithTimeout(context.Background(), time.Duration(m.Config.InstanceStartupSeconds)*time.Second)
+		_, restartErr := m.Instances.Ensure(startCtx, user.WindowsSID)
+		cancelStart()
+		return errors.Join(cause, restartErr)
+	}
+	if err := writeJSONAtomic(configPath, userConfig); err != nil {
+		return store.KimiDatasourceGrant{}, restartAfterFailure(err)
+	}
+	policy := winutil.UserConfigPolicy(m.Config.PortalServiceSID, user.WindowsSID)
+	if err := winutil.ApplyTreeACL(filepath.Dir(configPath), policy); err != nil {
+		_ = writeJSONAtomic(configPath, previousConfig)
+		return store.KimiDatasourceGrant{}, restartAfterFailure(err)
+	}
+	if err := m.Store.SetKimiDatasourceGrant(ctx, user.ID, enabled, normalized, dailyLimit, monthlyLimit, token, time.Now()); err != nil {
+		_ = writeJSONAtomic(configPath, previousConfig)
+		return store.KimiDatasourceGrant{}, restartAfterFailure(err)
+	}
+	if wasRunning && user.Enabled {
+		startCtx, cancelStart := context.WithTimeout(ctx, time.Duration(m.Config.InstanceStartupSeconds)*time.Second)
+		_, err = m.Instances.Ensure(startCtx, user.WindowsSID)
+		cancelStart()
+		if err != nil {
+			return store.KimiDatasourceGrant{}, fmt.Errorf("Kimi datasource policy was updated but UserHost restart failed: %w", err)
+		}
+	}
+	if err := m.Store.Audit(ctx, "admin.user.kimi_datasource", "success", user.Username, user.WindowsSID, "local-admin", map[string]any{
+		"enabled": enabled, "allowed_sources": normalized, "daily_limit": dailyLimit, "monthly_limit": monthlyLimit,
+	}, time.Now()); err != nil {
+		return store.KimiDatasourceGrant{}, fmt.Errorf("Kimi datasource policy was updated but its audit event could not be recorded: %w", err)
+	}
+	return m.Store.KimiDatasourceGrantForUser(ctx, user.ID, time.Now())
 }
 
 func (m *Manager) ResetPortalPassword(ctx context.Context, username string, password []byte) error {
@@ -569,13 +680,27 @@ func (m *Manager) InstallOrUpdateTask(ctx context.Context, username string, pass
 	if err := scheduler.VerifySpec(info, spec); err != nil {
 		return ipc.Status{}, fmt.Errorf("registered task verification failed: %w", err)
 	}
+	verificationStarted := time.Now()
 	status, err := m.Instances.Ensure(ctx, user.WindowsSID)
 	if err != nil {
 		latest, infoErr := m.Tasks.Info(context.Background(), user.WindowsSID)
 		if infoErr == nil {
-			return ipc.Status{}, fmt.Errorf("task credential verification failed (LastTaskResult=0x%08x): %w", uint32(latest.LastTaskResult), err)
+			if remaining := remainingTaskVerificationWait(latest, time.Since(verificationStarted)); remaining > 0 {
+				status, err = m.Instances.WaitHealthy(ctx, user.WindowsSID, remaining)
+				if err != nil {
+					latest, infoErr = m.Tasks.Info(context.Background(), user.WindowsSID)
+				}
+			}
 		}
-		return ipc.Status{}, err
+		if err != nil {
+			if infoErr == nil {
+				if latest.IsRunning() {
+					return ipc.Status{}, fmt.Errorf("scheduled task is still running (LastTaskResult=0x%08x), but UserHost did not become healthy before the extended startup deadline: %w", uint32(latest.LastTaskResult), err)
+				}
+				return ipc.Status{}, fmt.Errorf("scheduled task UserHost verification failed (LastTaskResult=0x%08x): %w", uint32(latest.LastTaskResult), err)
+			}
+			return ipc.Status{}, err
+		}
 	}
 	if !containsCheck(status.Checks, "whoami-user") || !strings.EqualFold(status.WindowsSID, user.WindowsSID) {
 		return ipc.Status{}, errors.New("UserHost did not verify whoami /user under the scheduled task identity")
@@ -1009,7 +1134,13 @@ func (m *Manager) provisionUserFiles(sid, canonical string) (config.UserHost, er
 	if err != nil {
 		return config.UserHost{}, err
 	}
-	userConfig := config.UserHost{ConfigVersion: 1, WindowsSID: sid, WindowsUsername: canonical, WindowsProfile: profile, DataRoot: dataRoot,
+	configVersion := 1
+	dataRootBase := ""
+	if m.Config.UserDataRoot != "" {
+		configVersion = 2
+		dataRootBase = filepath.Clean(m.Config.UserDataRoot)
+	}
+	userConfig := config.UserHost{ConfigVersion: configVersion, WindowsSID: sid, WindowsUsername: canonical, WindowsProfile: profile, DataRoot: dataRoot, DataRootBase: dataRootBase,
 		ReleasesRoot: m.Config.ReleasesRoot, CurrentReleaseFile: m.Config.CurrentReleaseFile, PortalServiceSID: m.Config.PortalServiceSID,
 		PipeName: config.PipeNameForSID(sid), WebPort: webPort, WebPortTries: 32, MigrationPortStart: migrationPort, MigrationPortTries: 16,
 		StartupSeconds: m.Config.InstanceStartupSeconds, ShutdownSeconds: 30, OutboundProxyURL: m.Config.OutboundProxyURL,
@@ -1087,6 +1218,9 @@ func (m *Manager) profileDataRoot(sid string) (string, string, error) {
 	profilesRoot := filepath.Clean(m.Config.UserProfilesRoot)
 	if !filepath.IsAbs(profile) || !strings.EqualFold(filepath.Dir(profile), profilesRoot) || strings.EqualFold(profile, profilesRoot) {
 		return "", "", fmt.Errorf("Windows profile %s for %s must be a direct child of %s", profile, sid, profilesRoot)
+	}
+	if m.Config.UserDataRoot != "" {
+		return profile, filepath.Join(filepath.Clean(m.Config.UserDataRoot), sid), nil
 	}
 	return profile, filepath.Join(profile, config.UserDataDirectoryName), nil
 }

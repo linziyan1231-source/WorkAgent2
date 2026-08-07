@@ -24,11 +24,11 @@ func TestKimiOAuthCommandIsDisabled(t *testing.T) {
 
 func TestProvisionErrorCodeClassifiesAccountConflicts(t *testing.T) {
 	tests := map[string]string{
-		"Portal username already exists":                                "PORTAL_USERNAME_EXISTS",
-		"an unmanaged Windows account already uses this username":       "WINDOWS_USERNAME_EXISTS",
-		"Windows account is already mapped to Portal user employee-two": "WINDOWS_ACCOUNT_MAPPED",
-		"existing Portal account does not match the Windows account":    "ACCOUNT_CONFLICT",
-		"Set-UserDiskQuota.ps1 failed":                                  "PROVISION_FAILED",
+		"Portal username already exists":                             "PORTAL_USERNAME_EXISTS",
+		"an unmanaged Windows account already uses this username":    "WINDOWS_USERNAME_EXISTS",
+		"Windows account is already mapped to Portal user duan":      "WINDOWS_ACCOUNT_MAPPED",
+		"existing Portal account does not match the Windows account": "ACCOUNT_CONFLICT",
+		"Set-UserDiskQuota.ps1 failed":                               "PROVISION_FAILED",
 	}
 	for message, want := range tests {
 		if got := provisionErrorCode(errors.New(message)); got != want {

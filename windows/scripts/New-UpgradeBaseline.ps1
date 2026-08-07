@@ -17,11 +17,18 @@ $paths = [ordered]@{
     'AionUiPortal.exe' = (Join-Path $InstallRoot 'AionUiPortal.exe')
     'AionUiUserHost.exe' = (Join-Path $InstallRoot 'AionUiUserHost.exe')
     'portal.exe' = (Join-Path $InstallRoot 'portal.exe')
+    'AionKimiDatasourceBroker.exe' = (Join-Path $InstallRoot 'AionKimiDatasourceBroker.exe')
     'AionAgentCli.exe' = $AgentCurrentFile
 }
 $components = [ordered]@{}
 foreach ($entry in $paths.GetEnumerator()) {
-    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) { throw "Installed component is missing: $($entry.Value)" }
+    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
+        if ($entry.Key -ceq 'AionKimiDatasourceBroker.exe') {
+            $components[$entry.Key] = [ordered]@{ path = [IO.Path]::GetFullPath($entry.Value); sha256 = 'absent'; size = 0 }
+            continue
+        }
+        throw "Installed component is missing: $($entry.Value)"
+    }
     $item = Get-Item -LiteralPath $entry.Value -Force
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Installed component is a reparse point: $($entry.Value)" }
     $components[$entry.Key] = [ordered]@{

@@ -27,12 +27,12 @@ const (
 	maxBootstrapFile            = 256 * 1024
 	CodexProviderName           = "ChatGPT"
 	KimiProviderName            = "KIMI"
-	DefaultCodexModel           = "example-balanced"
+	DefaultCodexModel           = "gpt-5.6-sol"
 	DefaultCodexReasoningEffort = "low"
 )
 
 var (
-	managedCodexModels        = []string{"example-reasoning", "example-balanced", "example-fast"}
+	managedCodexModels        = []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
 	managedKimiModels         = []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}
 	previousManagedKimiModels = []string{"kimi-for-coding", "kimi-for-coding-highspeed"}
 )

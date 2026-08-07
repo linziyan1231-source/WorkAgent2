@@ -26,18 +26,20 @@ type Store struct {
 }
 
 type User struct {
-	ID              int64
-	Username        string
-	UsernameNorm    string
-	PasswordHash    string
-	WindowsSID      string
-	WindowsUsername string
-	Enabled         bool
-	Admin           bool
-	AuthVersion     int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	LastLoginAt     *time.Time
+	ID                   int64
+	Username             string
+	UsernameNorm         string
+	DisplayName          string
+	PasswordHash         string
+	WindowsSID           string
+	WindowsUsername      string
+	Enabled              bool
+	Admin                bool
+	CollaborationEnabled bool
+	AuthVersion          int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	LastLoginAt          *time.Time
 }
 
 type Session struct {
@@ -100,11 +102,13 @@ CREATE TABLE IF NOT EXISTS portal_users (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  username TEXT NOT NULL,
  username_norm TEXT NOT NULL UNIQUE,
+	 display_name TEXT NOT NULL DEFAULT '',
  password_hash TEXT NOT NULL,
  windows_sid TEXT NOT NULL UNIQUE,
  windows_username TEXT NOT NULL,
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1)),
+	 collaboration_enabled INTEGER NOT NULL DEFAULT 0 CHECK(collaboration_enabled IN (0,1)),
  auth_version INTEGER NOT NULL DEFAULT 1,
  created_at INTEGER NOT NULL,
  updated_at INTEGER NOT NULL,
@@ -177,9 +181,156 @@ CREATE TABLE IF NOT EXISTS chatgpt_pro_events (
  acknowledged_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS chatgpt_pro_events_pending ON chatgpt_pro_events(user_id,acknowledged_at,id);
-PRAGMA user_version=3;`
+CREATE TABLE IF NOT EXISTS kimi_datasource_grants (
+ user_id INTEGER PRIMARY KEY REFERENCES portal_users(id) ON DELETE CASCADE,
+ enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+ allowed_sources_json TEXT NOT NULL DEFAULT '[]',
+ daily_limit INTEGER NOT NULL CHECK(daily_limit BETWEEN 1 AND 10000),
+ monthly_limit INTEGER NOT NULL CHECK(monthly_limit BETWEEN 1 AND 100000),
+ token_hash BLOB UNIQUE CHECK(token_hash IS NULL OR length(token_hash)=32),
+ updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kimi_datasource_usage (
+ user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ period_type TEXT NOT NULL CHECK(period_type IN ('day','month')),
+ period_key TEXT NOT NULL,
+ used INTEGER NOT NULL DEFAULT 0 CHECK(used >= 0),
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,period_type,period_key)
+);
+CREATE INDEX IF NOT EXISTS kimi_datasource_usage_period ON kimi_datasource_usage(period_type,period_key);
+CREATE TABLE IF NOT EXISTS skill_market_entries (
+ id TEXT PRIMARY KEY,
+ publisher_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ skill_name TEXT NOT NULL,
+ skill_name_norm TEXT NOT NULL,
+ description TEXT NOT NULL,
+ archive_name TEXT NOT NULL UNIQUE,
+ archive_sha256 TEXT NOT NULL CHECK(length(archive_sha256)=64),
+ archive_bytes INTEGER NOT NULL CHECK(archive_bytes > 0),
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL,
+ UNIQUE(publisher_user_id,skill_name_norm)
+);
+CREATE INDEX IF NOT EXISTS skill_market_updated ON skill_market_entries(updated_at DESC,id);
+CREATE TABLE IF NOT EXISTS portal_migration_audit (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ migration TEXT NOT NULL,
+ item TEXT NOT NULL,
+ row_count INTEGER NOT NULL CHECK(row_count >= 0),
+ recorded_at INTEGER NOT NULL,
+ UNIQUE(migration,item)
+);
+CREATE TABLE IF NOT EXISTS shared_projects (
+ id TEXT PRIMARY KEY,
+ owner_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE RESTRICT,
+ name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 128),
+ source_kind TEXT NOT NULL CHECK(source_kind IN ('new','copy','migrate')),
+ state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('provisioning','active','transfer_pending','failed')),
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shared_projects_owner ON shared_projects(owner_user_id,updated_at DESC,id);
+CREATE TABLE IF NOT EXISTS shared_project_members (
+ project_id TEXT NOT NULL REFERENCES shared_projects(id) ON DELETE CASCADE,
+	user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+	role TEXT NOT NULL CHECK(role IN ('owner','member')),
+	state TEXT NOT NULL DEFAULT 'accepted' CHECK(state IN ('pending_acl','accepted','removing')),
+	joined_at INTEGER NOT NULL,
+ PRIMARY KEY(project_id,user_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shared_project_one_owner ON shared_project_members(project_id) WHERE role='owner' AND state='accepted';
+CREATE INDEX IF NOT EXISTS shared_project_members_user ON shared_project_members(user_id,project_id);
+CREATE TABLE IF NOT EXISTS shared_project_invites (
+ id TEXT PRIMARY KEY,
+ project_id TEXT NOT NULL REFERENCES shared_projects(id) ON DELETE CASCADE,
+ inviter_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE RESTRICT,
+ target_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ status TEXT NOT NULL CHECK(status IN ('pending','accepted','declined','revoked','expired')),
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL,
+ acted_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS shared_project_invites_target ON shared_project_invites(target_user_id,status,expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS shared_project_one_pending_invite ON shared_project_invites(project_id,target_user_id) WHERE status='pending';
+CREATE TABLE IF NOT EXISTS shared_project_invite_links (
+ token TEXT PRIMARY KEY,
+ project_id TEXT NOT NULL REFERENCES shared_projects(id) ON DELETE CASCADE,
+ inviter_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE RESTRICT,
+ status TEXT NOT NULL CHECK(status IN ('active','revoked','expired')),
+ created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shared_project_one_active_invite_link ON shared_project_invite_links(project_id) WHERE status='active';
+CREATE TABLE IF NOT EXISTS shared_conversations (
+ id TEXT PRIMARY KEY,
+ project_id TEXT NOT NULL REFERENCES shared_projects(id) ON DELETE CASCADE,
+ name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 128),
+ assistant_id TEXT NOT NULL,
+ assistant_backend TEXT NOT NULL CHECK(assistant_backend IN ('codex','kimi')),
+ model_id TEXT NOT NULL,
+ thinking_effort TEXT NOT NULL DEFAULT 'low',
+ runtime_conversation_id TEXT,
+ runtime_owner_user_id INTEGER REFERENCES portal_users(id) ON DELETE RESTRICT,
+ state TEXT NOT NULL DEFAULT 'idle' CHECK(state IN ('idle','running','recovering','frozen')),
+ last_ai_message_seq INTEGER NOT NULL DEFAULT 0 CHECK(last_ai_message_seq >= 0),
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shared_conversations_project ON shared_conversations(project_id,updated_at DESC,id);
+CREATE TABLE IF NOT EXISTS shared_messages (
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ id TEXT NOT NULL UNIQUE,
+ conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+ author_user_id INTEGER REFERENCES portal_users(id) ON DELETE RESTRICT,
+ kind TEXT NOT NULL CHECK(kind IN ('user','assistant','system')),
+ body TEXT NOT NULL,
+ mentions_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(mentions_json)),
+ attachments_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(attachments_json)),
+ created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shared_messages_conversation ON shared_messages(conversation_id,seq);
+CREATE TABLE IF NOT EXISTS shared_hidden_items (
+ user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ item_kind TEXT NOT NULL CHECK(item_kind IN ('project','conversation')),
+ item_id TEXT NOT NULL,
+ hidden_at INTEGER NOT NULL,
+ PRIMARY KEY(user_id,item_kind,item_id)
+);
+CREATE TABLE IF NOT EXISTS shared_conversation_user_state (
+ user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+ conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+ pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)),
+ pinned_at INTEGER,
+ PRIMARY KEY(user_id,conversation_id)
+);
+CREATE TABLE IF NOT EXISTS shared_ai_runs (
+ id TEXT PRIMARY KEY,
+ conversation_id TEXT NOT NULL REFERENCES shared_conversations(id) ON DELETE CASCADE,
+ trigger_message_id TEXT NOT NULL REFERENCES shared_messages(id) ON DELETE RESTRICT,
+ provider TEXT NOT NULL CHECK(provider IN ('codex','kimi')),
+ state TEXT NOT NULL CHECK(state IN ('reserved','running','succeeded','failed','stopped','recovered')),
+ owner_user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE RESTRICT,
+ context_from_seq INTEGER NOT NULL CHECK(context_from_seq >= 0),
+ context_through_seq INTEGER NOT NULL CHECK(context_through_seq >= context_from_seq),
+ created_at INTEGER NOT NULL,
+ finished_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shared_ai_one_active ON shared_ai_runs(conversation_id) WHERE state IN ('reserved','running');
+CREATE TABLE IF NOT EXISTS shared_ai_run_payers (
+ run_id TEXT NOT NULL REFERENCES shared_ai_runs(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE RESTRICT,
+ key_id TEXT NOT NULL,
+ share_numerator INTEGER NOT NULL DEFAULT 1 CHECK(share_numerator=1),
+ share_denominator INTEGER NOT NULL CHECK(share_denominator >= 1),
+ PRIMARY KEY(run_id,user_id)
+);
+PRAGMA user_version=8;`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate portal database: %w", err)
+	}
+	if err := s.removeLegacyCollaborationTables(ctx, time.Now().UTC()); err != nil {
+		return err
 	}
 	var hasFlowID int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('oauth_states') WHERE name='flow_id'`).Scan(&hasFlowID); err != nil {
@@ -193,8 +344,76 @@ PRAGMA user_version=3;`
 			return fmt.Errorf("record Portal database migration: %w", err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA user_version=3`); err != nil {
+	for _, column := range []struct {
+		name string
+		sql  string
+	}{
+		{"display_name", `ALTER TABLE portal_users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`},
+		{"collaboration_enabled", `ALTER TABLE portal_users ADD COLUMN collaboration_enabled INTEGER NOT NULL DEFAULT 0 CHECK(collaboration_enabled IN (0,1))`},
+	} {
+		var present int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('portal_users') WHERE name=?`, column.name).Scan(&present); err != nil {
+			return fmt.Errorf("inspect Portal user schema for %s: %w", column.name, err)
+		}
+		if present == 0 {
+			if _, err := s.db.ExecContext(ctx, column.sql); err != nil {
+				return fmt.Errorf("add Portal user column %s: %w", column.name, err)
+			}
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE portal_users SET display_name=username WHERE trim(display_name)=''`); err != nil {
+		return fmt.Errorf("backfill Portal display names: %w", err)
+	}
+	var hasThinkingEffort int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('shared_conversations') WHERE name='thinking_effort'`).Scan(&hasThinkingEffort); err != nil {
+		return fmt.Errorf("inspect shared conversation schema: %w", err)
+	}
+	if hasThinkingEffort == 0 {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE shared_conversations ADD COLUMN thinking_effort TEXT NOT NULL DEFAULT 'low'`); err != nil {
+			return fmt.Errorf("add shared conversation thinking effort: %w", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA user_version=8`); err != nil {
 		return fmt.Errorf("record Portal database migration: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) removeLegacyCollaborationTables(ctx context.Context, now time.Time) error {
+	tables := []string{
+		"collaboration_session_payers",
+		"collaboration_sessions",
+		"collaboration_messages",
+		"collaboration_invites",
+		"collaboration_members",
+		"collaboration_resources",
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin legacy collaboration cleanup: %w", err)
+	}
+	defer tx.Rollback()
+	for _, table := range tables {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
+			return fmt.Errorf("inspect legacy table %s: %w", table, err)
+		}
+		if exists == 0 {
+			continue
+		}
+		var count int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			return fmt.Errorf("count legacy table %s: %w", table, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO portal_migration_audit(migration,item,row_count,recorded_at) VALUES('collaboration-redesign-v6',?,?,?)`, table, count, now.Unix()); err != nil {
+			return fmt.Errorf("audit legacy table %s: %w", table, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DROP TABLE `+table); err != nil {
+			return fmt.Errorf("drop legacy table %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit legacy collaboration cleanup: %w", err)
 	}
 	return nil
 }
@@ -209,8 +428,8 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, windowsS
 	}
 	stamp := now.Unix()
 	result, err := s.db.ExecContext(ctx, `INSERT INTO portal_users
- (username,username_norm,password_hash,windows_sid,windows_username,enabled,is_admin,auth_version,created_at,updated_at)
- VALUES(?,?,?,?,?,1,?,1,?,?)`, username, norm, passwordHash, windowsSID, windowsUsername, boolInt(admin), stamp, stamp)
+ (username,username_norm,display_name,password_hash,windows_sid,windows_username,enabled,is_admin,collaboration_enabled,auth_version,created_at,updated_at)
+ VALUES(?,?,?,?,?,?,1,?,0,1,?,?)`, username, norm, username, passwordHash, windowsSID, windowsUsername, boolInt(admin), stamp, stamp)
 	if err != nil {
 		return User{}, fmt.Errorf("create portal user: %w", err)
 	}
@@ -237,8 +456,8 @@ func (s *Store) CreateAdministrator(ctx context.Context, username, passwordHash 
 	identity := "portal-admin:" + norm
 	stamp := now.Unix()
 	result, err := s.db.ExecContext(ctx, `INSERT INTO portal_users
- (username,username_norm,password_hash,windows_sid,windows_username,enabled,is_admin,auth_version,created_at,updated_at)
- VALUES(?,?,?,?,?,1,1,1,?,?)`, username, norm, passwordHash, identity, identity, stamp, stamp)
+ (username,username_norm,display_name,password_hash,windows_sid,windows_username,enabled,is_admin,collaboration_enabled,auth_version,created_at,updated_at)
+ VALUES(?,?,?,?,?,?,1,1,0,1,?,?)`, username, norm, username, passwordHash, identity, identity, stamp, stamp)
 	if err != nil {
 		return User{}, fmt.Errorf("create Portal administrator: %w", err)
 	}
@@ -438,7 +657,7 @@ func (s *Store) CreateSession(ctx context.Context, token string, user User, ttl 
 
 func (s *Store) Session(ctx context.Context, token string, idle time.Duration, now time.Time) (Session, error) {
 	const query = `SELECT s.token_hash,s.user_id,s.auth_version,s.created_at,s.expires_at,s.last_seen_at,s.remote_ip,s.user_agent_hash,
- u.id,u.username,u.username_norm,u.password_hash,u.windows_sid,u.windows_username,u.enabled,u.is_admin,u.auth_version,u.created_at,u.updated_at,u.last_login_at
+ u.id,u.username,u.username_norm,u.display_name,u.password_hash,u.windows_sid,u.windows_username,u.enabled,u.is_admin,u.collaboration_enabled,u.auth_version,u.created_at,u.updated_at,u.last_login_at
  FROM portal_sessions s JOIN portal_users u ON u.id=s.user_id
  WHERE s.token_hash=? AND s.expires_at>? AND s.last_seen_at>? AND u.enabled=1 AND s.auth_version=u.auth_version`
 	row := s.db.QueryRowContext(ctx, query, TokenHash(token), now.Unix(), now.Add(-idle).Unix())
@@ -446,10 +665,10 @@ func (s *Store) Session(ctx context.Context, token string, idle time.Duration, n
 	var created, expires, lastSeen int64
 	var userCreated, userUpdated int64
 	var userLast sql.NullInt64
-	var enabled, admin int
+	var enabled, admin, collaborationEnabled int
 	err := row.Scan(&out.TokenHash, &out.UserID, &out.AuthVersion, &created, &expires, &lastSeen, &out.RemoteIP, &out.UserAgentHash,
-		&out.User.ID, &out.User.Username, &out.User.UsernameNorm, &out.User.PasswordHash, &out.User.WindowsSID, &out.User.WindowsUsername,
-		&enabled, &admin, &out.User.AuthVersion, &userCreated, &userUpdated, &userLast)
+		&out.User.ID, &out.User.Username, &out.User.UsernameNorm, &out.User.DisplayName, &out.User.PasswordHash, &out.User.WindowsSID, &out.User.WindowsUsername,
+		&enabled, &admin, &collaborationEnabled, &out.User.AuthVersion, &userCreated, &userUpdated, &userLast)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
 	}
@@ -458,6 +677,7 @@ func (s *Store) Session(ctx context.Context, token string, idle time.Duration, n
 	}
 	out.CreatedAt, out.ExpiresAt, out.LastSeenAt = time.Unix(created, 0), time.Unix(expires, 0), time.Unix(lastSeen, 0)
 	out.User.Enabled, out.User.Admin = enabled == 1, admin == 1
+	out.User.CollaborationEnabled = collaborationEnabled == 1
 	out.User.CreatedAt, out.User.UpdatedAt = time.Unix(userCreated, 0), time.Unix(userUpdated, 0)
 	if userLast.Valid {
 		t := time.Unix(userLast.Int64, 0)
@@ -567,16 +787,16 @@ func (s *Store) Audit(ctx context.Context, action, outcome, username, sid, remot
 	return f.Sync()
 }
 
-const userSelect = `SELECT id,username,username_norm,password_hash,windows_sid,windows_username,enabled,is_admin,auth_version,created_at,updated_at,last_login_at FROM portal_users`
+const userSelect = `SELECT id,username,username_norm,display_name,password_hash,windows_sid,windows_username,enabled,is_admin,collaboration_enabled,auth_version,created_at,updated_at,last_login_at FROM portal_users`
 
 type scanner interface{ Scan(...any) error }
 
 func scanUser(row scanner) (User, error) {
 	var u User
-	var enabled, admin int
+	var enabled, admin, collaborationEnabled int
 	var created, updated int64
 	var last sql.NullInt64
-	err := row.Scan(&u.ID, &u.Username, &u.UsernameNorm, &u.PasswordHash, &u.WindowsSID, &u.WindowsUsername, &enabled, &admin, &u.AuthVersion, &created, &updated, &last)
+	err := row.Scan(&u.ID, &u.Username, &u.UsernameNorm, &u.DisplayName, &u.PasswordHash, &u.WindowsSID, &u.WindowsUsername, &enabled, &admin, &collaborationEnabled, &u.AuthVersion, &created, &updated, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -584,6 +804,7 @@ func scanUser(row scanner) (User, error) {
 		return User{}, err
 	}
 	u.Enabled, u.Admin = enabled == 1, admin == 1
+	u.CollaborationEnabled = collaborationEnabled == 1
 	u.CreatedAt, u.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 	if last.Valid {
 		t := time.Unix(last.Int64, 0)

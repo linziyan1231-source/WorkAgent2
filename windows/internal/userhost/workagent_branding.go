@@ -420,11 +420,11 @@ func brandSkillFileText(value string) string {
 		"ps aux | grep AionUi",
 	}
 	for index, literal := range protected {
-		value = strings.ReplaceAll(value, literal, fmt.Sprintf("__WORKAGENT_PROTECTED_%d__", index))
+		value = strings.ReplaceAll(value, literal, fmt.Sprintf("__PUXIN_PROTECTED_%d__", index))
 	}
 	value = brandDisplayText(value)
 	for index, literal := range protected {
-		value = strings.ReplaceAll(value, fmt.Sprintf("__WORKAGENT_PROTECTED_%d__", index), literal)
+		value = strings.ReplaceAll(value, fmt.Sprintf("__PUXIN_PROTECTED_%d__", index), literal)
 	}
 	return value
 }

@@ -142,6 +142,10 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 	if err := ensureNormalKimiDirectory(kimiDirectory); err != nil {
 		return "", err
 	}
+	return h.configureKimiAPIKeyAt(ctx, env, verified, kimiConfigPath(h.dirs.Profile, verified.Manifest), baseURL, apiKey)
+}
+
+func (h *Host) configureKimiAPIKeyAt(ctx context.Context, env []string, verified agentcli.Verified, configPath, baseURL, apiKey string) (string, error) {
 	input := map[string]string{"base_url": baseURL}
 	if apiKey != "" {
 		input["api_key"] = apiKey
@@ -155,7 +159,6 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 	configureCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	python := filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath))
-	configPath := kimiConfigPath(h.dirs.Profile, verified.Manifest)
 	cmd := exec.CommandContext(configureCtx, python, "-B", "-c", kimiAPIKeyConfigureScript, configPath)
 	cmd.Dir = h.dirs.Workspace
 	cmd.Env = append(append([]string(nil), env...), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
@@ -181,7 +184,7 @@ func (h *Host) configureKimiAPIKey(ctx context.Context, env []string, baseURL, a
 		}
 		return "", errors.New("Kimi API-key configuration failed")
 	}
-	if _, err := agentcli.VerifyCurrent(root); err != nil {
+	if _, err := agentcli.VerifyCurrent(agentcli.RootFromAionReleases(h.cfg.ReleasesRoot)); err != nil {
 		return "", fmt.Errorf("verify shared agent CLI release after Kimi API-key configuration: %w", err)
 	}
 	if err := h.validateKimiCodeConfig(ctx, env, verified, configPath); err != nil {

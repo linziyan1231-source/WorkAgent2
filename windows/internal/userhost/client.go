@@ -169,6 +169,10 @@ func (a *aionClient) getJSON(ctx context.Context, path string, target any) error
 }
 
 func (a *aionClient) sendJSON(ctx context.Context, method, path string, source, target any) error {
+	return a.sendJSONWithHeader(ctx, method, path, source, target, "", "")
+}
+
+func (a *aionClient) sendJSONWithHeader(ctx context.Context, method, path string, source, target any, headerName, headerValue string) error {
 	body, err := json.Marshal(source)
 	if err != nil {
 		return err
@@ -180,6 +184,9 @@ func (a *aionClient) sendJSON(ctx context.Context, method, path string, source, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", a.base.String())
+	if headerName != "" {
+		req.Header.Set(headerName, headerValue)
+	}
 	if csrf := a.cookie("aionui-csrf-token"); csrf != "" {
 		req.Header.Set("x-csrf-token", csrf)
 	}
@@ -210,6 +217,20 @@ func (a *aionClient) sendJSON(ctx context.Context, method, path string, source, 
 		return fmt.Errorf("decode %s %s: trailing JSON value", method, path)
 	}
 	return nil
+}
+
+func (a *aionClient) sendJSONData(ctx context.Context, method, path string, source any) (json.RawMessage, error) {
+	var response struct {
+		Success bool            `json:"success"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := a.sendJSON(ctx, method, path, source, &response); err != nil {
+		return nil, err
+	}
+	if !response.Success || !json.Valid(response.Data) {
+		return nil, errors.New("AionCore returned invalid file data")
+	}
+	return response.Data, nil
 }
 
 func (a *aionClient) cookie(name string) string {

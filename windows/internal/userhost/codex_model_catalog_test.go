@@ -41,9 +41,9 @@ func TestNewUserPendingBootstrapRequiresExactCodexCatalogBeforeCompletion(t *tes
 		}
 	}
 	bundle := modelbootstrap.Bundle{State: modelbootstrap.State{
-		FormatVersion: 1, BaseURL: "http://203.0.113.52:8317/v1",
+		FormatVersion: 1, BaseURL: "http://43.134.118.158:8317/v1",
 		CodexKeyID: "new-user-chatgpt", KimiKeyID: "new-user-kimi",
-		CodexDefaultModel: "example-reasoning", CodexModels: modelbootstrap.ManagedCodexModels(), KimiModels: modelbootstrap.ManagedKimiModels(),
+		CodexDefaultModel: "gpt-5.6-luna", CodexModels: modelbootstrap.ManagedCodexModels(), KimiModels: modelbootstrap.ManagedKimiModels(),
 	}, CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
 	if err := modelbootstrap.Stage(root, bundle, false); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestNewUserPendingBootstrapRequiresExactCodexCatalogBeforeCompletion(t *tes
 			t.Fatal(err)
 		}
 	}
-	bundle.State.CodexModels = []string{"example-reasoning", "gpt-5.4"}
+	bundle.State.CodexModels = []string{"gpt-5.6-luna", "gpt-5.4"}
 	if err := modelbootstrap.Stage(otherRoot, bundle, false); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestValidateManagedCodexCatalogRejectsExtraOrIncompleteModels(t *testing.T)
 func TestWriteManagedCodexCatalogSettingPreservesOtherTopLevelAndTableValues(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "config.toml")
-	existing := `model = "example-reasoning"
+	existing := `model = "gpt-5.6-luna"
 model_catalog_json = "C:\\old.json"
 approval_policy = "on-request"
 
@@ -213,7 +213,7 @@ model_catalog_json = "table-value-must-survive"
 		t.Fatal(err)
 	}
 	got := string(content)
-	if strings.Count(got, "# Managed Codex model catalog:") != 1 || strings.Count(got, "model_catalog_json =") != 2 || !strings.Contains(got, "release=2.1.0-beta.editfork.19") || !strings.Contains(got, "managed-model-catalog-0.144.4.json") || !strings.Contains(got, `model = "example-reasoning"`) || !strings.Contains(got, `approval_policy = "on-request"`) || !strings.Contains(got, `model_catalog_json = "table-value-must-survive"`) || strings.Contains(got, "old.json") {
+	if strings.Count(got, "# Managed Codex model catalog:") != 1 || strings.Count(got, "model_catalog_json =") != 2 || !strings.Contains(got, "release=2.1.0-beta.editfork.19") || !strings.Contains(got, "managed-model-catalog-0.144.4.json") || !strings.Contains(got, `model = "gpt-5.6-luna"`) || !strings.Contains(got, `approval_policy = "on-request"`) || !strings.Contains(got, `model_catalog_json = "table-value-must-survive"`) || strings.Contains(got, "old.json") {
 		t.Fatalf("unexpected rewritten Codex config:\n%s", got)
 	}
 	before, err := os.Stat(path)
@@ -254,9 +254,9 @@ model_catalog_json = "table-value-must-survive"
 
 func realShapedManagedCodexCatalog() map[string]any {
 	return map[string]any{"models": []map[string]any{
-		realShapedManagedCodexModel("example-balanced", 1),
-		realShapedManagedCodexModel("example-fast", 2),
-		realShapedManagedCodexModel("example-reasoning", 3),
+		realShapedManagedCodexModel("gpt-5.6-sol", 1),
+		realShapedManagedCodexModel("gpt-5.6-terra", 2),
+		realShapedManagedCodexModel("gpt-5.6-luna", 3),
 	}}
 }
 

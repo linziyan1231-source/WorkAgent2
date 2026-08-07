@@ -33,7 +33,14 @@ func createProjectState(workspaceRoot, sid, name string) (ipc.ProjectCreateResul
 		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", fmt.Errorf("create project directory: %w", err)
 	}
 	if err := winutil.VerifyDescendantACL(target, policy); err != nil {
-		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", errors.Join(fmt.Errorf("verify inherited project ACL: %w", err), os.Remove(target))
+		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", errors.Join(fmt.Errorf("verify inherited project ACL: %w", err), os.RemoveAll(target))
 	}
-	return ipc.ProjectCreateResult{Path: target}, "", nil
+	marker, err := projectfs.EnsureMarker(target)
+	if err != nil {
+		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", errors.Join(fmt.Errorf("create stable project marker: %w", err), os.RemoveAll(target))
+	}
+	if err := winutil.VerifyDescendantACL(target, policy); err != nil {
+		return ipc.ProjectCreateResult{}, "PROJECT_CREATE_FAILED", errors.Join(fmt.Errorf("verify project marker ACL: %w", err), os.RemoveAll(target))
+	}
+	return ipc.ProjectCreateResult{Path: target, ProjectID: marker.ProjectID}, "", nil
 }

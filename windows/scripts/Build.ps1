@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9._-]{2,79}$')][string]$ReleaseId,
     [Parameter(Mandatory)][ValidateSet('web-only', 'runtime-only', 'backend-only', 'combined')][string]$ReleaseScope,
     [string[]]$IncludedComponents,
-    [string]$AionUiSource = (Join-Path $PSScriptRoot '..\..\..\AionUi'),
+    [string]$AionUiSource = (Join-Path $PSScriptRoot '..\..\AionUi'),
     [string]$GoExe = 'go',
     [string]$UpgradeBaselinePath,
     [switch]$FreshInstall,
@@ -24,7 +24,7 @@ if ($null -eq $IncludedComponents -or $IncludedComponents.Count -eq 0) {
     $IncludedComponents = switch ($ReleaseScope) {
         'web-only' { @('web') }
         'runtime-only' { @('AionAgentCli.exe') }
-        'combined' { @('web', 'AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe') }
+        'combined' { @('web', 'AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionKimiDatasourceBroker.exe') }
         default { throw 'backend-only builds require an explicit IncludedComponents list.' }
     }
 }
@@ -166,6 +166,7 @@ if ($binaryComponents.Count -ne 0) {
         'AionUiUserHost.exe' = './cmd/aionui-userhost'
         'portal.exe' = './cmd/portal'
         'AionAgentCli.exe' = './cmd/aion-agent-cli'
+        'AionKimiDatasourceBroker.exe' = './cmd/kimi-datasource-broker'
     }
     $env:GOTOOLCHAIN = 'local'
     $env:CGO_ENABLED = '0'
@@ -199,6 +200,10 @@ if (-not $FreshInstall) {
         $entry = $baseline.components.PSObject.Properties[$component].Value
         if ($null -eq $entry) { throw "Production baseline is missing component: $component" }
         $hash = ([string]$entry.sha256).ToLowerInvariant()
+        if ($hash -ceq 'absent' -and $component -ceq 'AionKimiDatasourceBroker.exe') {
+            $expected[$component] = $hash
+            continue
+        }
         Assert-Sha256String -Value $hash -Description "$component production baseline"
         $expected[$component] = $hash
     }

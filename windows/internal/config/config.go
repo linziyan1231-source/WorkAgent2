@@ -22,64 +22,67 @@ const (
 )
 
 type Portal struct {
-	Mode                   string   `json:"mode"`
-	ListenAddress          string   `json:"listen_address"`
-	PublicBaseURL          string   `json:"public_base_url"`
-	BrowserOrigins         []string `json:"additional_browser_origins,omitempty"`
-	TLSCertificateFile     string   `json:"tls_certificate_file"`
-	TLSPrivateKeyFile      string   `json:"tls_private_key_file"`
-	DatabasePath           string   `json:"database_path"`
-	AuditLogPath           string   `json:"audit_log_path"`
-	PortalLogPath          string   `json:"portal_log_path"`
-	ReleasesRoot           string   `json:"releases_root"`
-	CurrentReleaseFile     string   `json:"current_release_file"`
-	UserConfigRoot         string   `json:"user_config_root"`
-	UserProfilesRoot       string   `json:"user_profiles_root"`
-	UserHostExecutable     string   `json:"user_host_executable"`
-	PortalServiceSID       string   `json:"portal_service_sid"`
-	SessionTTLSeconds      int      `json:"session_ttl_seconds"`
-	SessionIdleSeconds     int      `json:"session_idle_seconds"`
-	InstanceStartupSeconds int      `json:"instance_startup_seconds"`
-	IdleReapSeconds        int      `json:"idle_reap_seconds"`
-	MaxRunningInstances    int      `json:"max_running_instances"`
-	LoginWindowSeconds     int      `json:"login_window_seconds"`
-	LoginBlockSeconds      int      `json:"login_block_seconds"`
-	LoginAccountFailures   int      `json:"login_account_failures"`
-	LoginIPFailures        int      `json:"login_ip_failures"`
-	AdminMasterHashFile    string   `json:"admin_master_password_hash_file,omitempty"`
-	UsageManagementURL     string   `json:"usage_management_url"`
-	UsageManagementKeyFile string   `json:"usage_management_key_file"`
-	UsageQueryTimeoutSecs  int      `json:"usage_query_timeout_seconds"`
-	UsageCacheSeconds      int      `json:"usage_cache_seconds"`
-	ChatForwardURL         string   `json:"chatforward_url"`
-	ChatForwardSecretFile  string   `json:"chatforward_secret_file"`
-	ChatGPTProModels       []string `json:"chatgpt_pro_models"`
-	NotificationSourceURL  string   `json:"notification_source_url,omitempty"`
-	OutboundProxyURL       string   `json:"outbound_proxy_url,omitempty"`
-	SupportedAionCore      []string `json:"supported_aioncore_versions"`
+	Mode                    string   `json:"mode"`
+	ListenAddress           string   `json:"listen_address"`
+	PublicBaseURL           string   `json:"public_base_url"`
+	BrowserOrigins          []string `json:"additional_browser_origins,omitempty"`
+	TLSCertificateFile      string   `json:"tls_certificate_file"`
+	TLSPrivateKeyFile       string   `json:"tls_private_key_file"`
+	DatabasePath            string   `json:"database_path"`
+	AuditLogPath            string   `json:"audit_log_path"`
+	PortalLogPath           string   `json:"portal_log_path"`
+	ReleasesRoot            string   `json:"releases_root"`
+	CurrentReleaseFile      string   `json:"current_release_file"`
+	UserConfigRoot          string   `json:"user_config_root"`
+	UserProfilesRoot        string   `json:"user_profiles_root"`
+	UserDataRoot            string   `json:"user_data_root,omitempty"`
+	UserHostExecutable      string   `json:"user_host_executable"`
+	PortalServiceSID        string   `json:"portal_service_sid"`
+	SessionTTLSeconds       int      `json:"session_ttl_seconds"`
+	SessionIdleSeconds      int      `json:"session_idle_seconds"`
+	InstanceStartupSeconds  int      `json:"instance_startup_seconds"`
+	IdleReapSeconds         int      `json:"idle_reap_seconds"`
+	MaxRunningInstances     int      `json:"max_running_instances"`
+	LoginWindowSeconds      int      `json:"login_window_seconds"`
+	LoginBlockSeconds       int      `json:"login_block_seconds"`
+	LoginAccountFailures    int      `json:"login_account_failures"`
+	LoginIPFailures         int      `json:"login_ip_failures"`
+	AdminMasterHashFile     string   `json:"admin_master_password_hash_file,omitempty"`
+	UsageManagementURL      string   `json:"usage_management_url"`
+	UsageManagementKeyFile  string   `json:"usage_management_key_file"`
+	UsageQueryTimeoutSecs   int      `json:"usage_query_timeout_seconds"`
+	UsageCacheSeconds       int      `json:"usage_cache_seconds"`
+	ChatForwardURL          string   `json:"chatforward_url"`
+	ChatForwardSecretFile   string   `json:"chatforward_secret_file"`
+	ChatGPTProModels        []string `json:"chatgpt_pro_models"`
+	NotificationSourceURL   string   `json:"notification_source_url,omitempty"`
+	OutboundProxyURL        string   `json:"outbound_proxy_url,omitempty"`
+	KimiDatasourceBrokerURL string   `json:"kimi_datasource_broker_url,omitempty"`
+	SupportedAionCore       []string `json:"supported_aioncore_versions"`
 }
 
 func DefaultPortal() Portal {
 	return Portal{
-		Mode:                   "production",
-		ListenAddress:          ProductionListenAddress,
-		UserProfilesRoot:       DefaultUserProfilesRoot,
-		SessionTTLSeconds:      12 * 60 * 60,
-		SessionIdleSeconds:     60 * 60,
-		InstanceStartupSeconds: 90,
-		IdleReapSeconds:        30 * 60,
-		MaxRunningInstances:    20,
-		LoginWindowSeconds:     15 * 60,
-		LoginBlockSeconds:      15 * 60,
-		LoginAccountFailures:   5,
-		LoginIPFailures:        20,
-		UsageQueryTimeoutSecs:  25,
-		UsageCacheSeconds:      30,
-		ChatForwardURL:         "http://127.0.0.1:3210",
-		ChatForwardSecretFile:  filepath.Join(DefaultPortalDataRoot, "chatforward.key"),
-		ChatGPTProModels:       []string{"gpt-5-4-pro", "gpt-5-5-pro", "gpt-5-6-pro"},
-		NotificationSourceURL:  "http://203.0.113.79:25888/notification",
-		SupportedAionCore:      []string{"v0.1.42"},
+		Mode:                    "production",
+		ListenAddress:           ProductionListenAddress,
+		UserProfilesRoot:        DefaultUserProfilesRoot,
+		SessionTTLSeconds:       12 * 60 * 60,
+		SessionIdleSeconds:      60 * 60,
+		InstanceStartupSeconds:  90,
+		IdleReapSeconds:         30 * 60,
+		MaxRunningInstances:     20,
+		LoginWindowSeconds:      15 * 60,
+		LoginBlockSeconds:       15 * 60,
+		LoginAccountFailures:    5,
+		LoginIPFailures:         20,
+		UsageQueryTimeoutSecs:   25,
+		UsageCacheSeconds:       30,
+		ChatForwardURL:          "http://127.0.0.1:3210",
+		ChatForwardSecretFile:   filepath.Join(DefaultPortalDataRoot, "chatforward.key"),
+		ChatGPTProModels:        []string{"gpt-5-4-pro", "gpt-5-5-pro", "gpt-5-6-pro"},
+		NotificationSourceURL:   "http://203.0.113.79:25888/notification",
+		KimiDatasourceBrokerURL: "http://127.0.0.1:3211/mcp",
+		SupportedAionCore:       []string{"v0.1.42"},
 	}
 }
 
@@ -164,6 +167,11 @@ func (c Portal) Validate() error {
 			return fmt.Errorf("%s must be an absolute path", name)
 		}
 	}
+	if c.UserDataRoot != "" {
+		if !filepath.IsAbs(c.UserDataRoot) || filepath.Dir(filepath.Clean(c.UserDataRoot)) == filepath.Clean(c.UserDataRoot) {
+			return errors.New("user_data_root must be an absolute non-volume-root path when configured")
+		}
+	}
 	if err := validateReleaseLayout(c.ReleasesRoot, c.CurrentReleaseFile); err != nil {
 		return err
 	}
@@ -219,6 +227,9 @@ func (c Portal) Validate() error {
 		return err
 	}
 	if err := validateOutboundProxyURL(c.OutboundProxyURL); err != nil {
+		return err
+	}
+	if err := validateKimiDatasourceBrokerURL(c.KimiDatasourceBrokerURL); err != nil {
 		return err
 	}
 	if len(c.SupportedAionCore) == 0 {
@@ -291,24 +302,26 @@ type ResourceLimits struct {
 }
 
 type UserHost struct {
-	ConfigVersion      int            `json:"config_version"`
-	WindowsSID         string         `json:"windows_sid"`
-	WindowsUsername    string         `json:"windows_username"`
-	WindowsProfile     string         `json:"windows_profile"`
-	DataRoot           string         `json:"data_root"`
-	ReleasesRoot       string         `json:"releases_root"`
-	CurrentReleaseFile string         `json:"current_release_file"`
-	PortalServiceSID   string         `json:"portal_service_sid"`
-	PipeName           string         `json:"pipe_name"`
-	WebPort            int            `json:"web_port"`
-	WebPortTries       int            `json:"web_port_tries"`
-	MigrationPortStart int            `json:"migration_port_start"`
-	MigrationPortTries int            `json:"migration_port_tries"`
-	StartupSeconds     int            `json:"startup_seconds"`
-	ShutdownSeconds    int            `json:"shutdown_seconds"`
-	OutboundProxyURL   string         `json:"outbound_proxy_url,omitempty"`
-	SupportedAionCore  []string       `json:"supported_aioncore_versions"`
-	Limits             ResourceLimits `json:"limits"`
+	ConfigVersion      int                   `json:"config_version"`
+	WindowsSID         string                `json:"windows_sid"`
+	WindowsUsername    string                `json:"windows_username"`
+	WindowsProfile     string                `json:"windows_profile"`
+	DataRoot           string                `json:"data_root"`
+	DataRootBase       string                `json:"data_root_base,omitempty"`
+	ReleasesRoot       string                `json:"releases_root"`
+	CurrentReleaseFile string                `json:"current_release_file"`
+	PortalServiceSID   string                `json:"portal_service_sid"`
+	PipeName           string                `json:"pipe_name"`
+	WebPort            int                   `json:"web_port"`
+	WebPortTries       int                   `json:"web_port_tries"`
+	MigrationPortStart int                   `json:"migration_port_start"`
+	MigrationPortTries int                   `json:"migration_port_tries"`
+	StartupSeconds     int                   `json:"startup_seconds"`
+	ShutdownSeconds    int                   `json:"shutdown_seconds"`
+	OutboundProxyURL   string                `json:"outbound_proxy_url,omitempty"`
+	KimiDatasource     *KimiDatasourceAccess `json:"kimi_datasource,omitempty"`
+	SupportedAionCore  []string              `json:"supported_aioncore_versions"`
+	Limits             ResourceLimits        `json:"limits"`
 }
 
 func LoadUserHost(path string) (UserHost, error) {
@@ -335,7 +348,7 @@ func LoadUserHost(path string) (UserHost, error) {
 }
 
 func (c UserHost) Validate() error {
-	if c.ConfigVersion != 1 {
+	if c.ConfigVersion != 1 && c.ConfigVersion != 2 {
 		return fmt.Errorf("unsupported user host config_version %d", c.ConfigVersion)
 	}
 	if !validSID(c.WindowsSID) || strings.TrimSpace(c.WindowsUsername) == "" {
@@ -348,8 +361,18 @@ func (c UserHost) Validate() error {
 			return fmt.Errorf("%s must be absolute", name)
 		}
 	}
-	if !strings.EqualFold(filepath.Clean(c.DataRoot), filepath.Join(filepath.Clean(c.WindowsProfile), UserDataDirectoryName)) {
-		return fmt.Errorf("data_root must be %s directly below windows_profile", UserDataDirectoryName)
+	if c.ConfigVersion == 1 {
+		if c.DataRootBase != "" || !strings.EqualFold(filepath.Clean(c.DataRoot), filepath.Join(filepath.Clean(c.WindowsProfile), UserDataDirectoryName)) {
+			return fmt.Errorf("version 1 data_root must be %s directly below windows_profile", UserDataDirectoryName)
+		}
+	} else {
+		if !filepath.IsAbs(c.DataRootBase) || filepath.Dir(filepath.Clean(c.DataRootBase)) == filepath.Clean(c.DataRootBase) {
+			return errors.New("version 2 data_root_base must be an absolute non-volume-root path")
+		}
+		expected := filepath.Join(filepath.Clean(c.DataRootBase), c.WindowsSID)
+		if !strings.EqualFold(filepath.Clean(c.DataRoot), expected) {
+			return fmt.Errorf("version 2 data_root must be the Windows SID directly below data_root_base")
+		}
 	}
 	if err := validateReleaseLayout(c.ReleasesRoot, c.CurrentReleaseFile); err != nil {
 		return err
@@ -369,6 +392,11 @@ func (c UserHost) Validate() error {
 	if err := validateOutboundProxyURL(c.OutboundProxyURL); err != nil {
 		return err
 	}
+	if c.KimiDatasource != nil {
+		if err := c.KimiDatasource.Validate(); err != nil {
+			return err
+		}
+	}
 	if len(c.SupportedAionCore) == 0 {
 		return errors.New("supported_aioncore_versions must not be empty")
 	}
@@ -376,6 +404,42 @@ func (c UserHost) Validate() error {
 		return errors.New("invalid resource limits")
 	}
 	return nil
+}
+
+const DefaultKimiDatasourceBrokerURL = "http://127.0.0.1:3211/mcp"
+
+type KimiDatasourceAccess struct {
+	Endpoint string `json:"endpoint"`
+	Token    string `json:"token"`
+}
+
+func (a KimiDatasourceAccess) Validate() error {
+	if err := validateKimiDatasourceBrokerURL(a.Endpoint); err != nil {
+		return err
+	}
+	if len(a.Token) < 32 || len(a.Token) > 512 || strings.ContainsAny(a.Token, " \t\r\n") {
+		return errors.New("Kimi datasource access token must contain 32 to 512 non-whitespace characters")
+	}
+	return nil
+}
+
+func validateKimiDatasourceBrokerURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	endpoint, err := url.Parse(value)
+	if err != nil || endpoint.Scheme != "http" || endpoint.Hostname() != "127.0.0.1" || endpoint.Port() == "" || endpoint.User != nil ||
+		endpoint.Opaque != "" || endpoint.Path != "/mcp" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return errors.New("kimi_datasource_broker_url must be an exact 127.0.0.1 HTTP /mcp URL")
+	}
+	return nil
+}
+
+func (c Portal) EffectiveKimiDatasourceBrokerURL() string {
+	if c.KimiDatasourceBrokerURL == "" {
+		return DefaultKimiDatasourceBrokerURL
+	}
+	return c.KimiDatasourceBrokerURL
 }
 
 func validateOutboundProxyURL(value string) error {

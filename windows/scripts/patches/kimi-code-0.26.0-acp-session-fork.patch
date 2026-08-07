@@ -1,0 +1,123 @@
+diff --git a/packages/acp-adapter/src/server.ts b/packages/acp-adapter/src/server.ts
+--- a/packages/acp-adapter/src/server.ts
++++ b/packages/acp-adapter/src/server.ts
+@@ -20,6 +20,8 @@ import {
+   type AvailableCommand,
+   type CancelNotification,
+   type ClientCapabilities,
++  type ForkSessionRequest,
++  type ForkSessionResponse,
+   type Implementation,
+   type InitializeRequest,
+   type InitializeResponse,
+@@ -234,6 +236,7 @@ export class AcpServer implements Agent {
+       },
+       sessionCapabilities: {
+         list: {},
++        fork: {},
+         resume: {},
+       },
+     };
+@@ -407,6 +410,42 @@ export class AcpServer implements Agent {
+     return { configOptions };
+   }
+ 
++  async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
++    if (!(await harnessIsAuthed(this.harness))) {
++      throw RequestError.authRequired();
++    }
++
++    const aionui = params._meta?.['aionui'];
++    const turnIndex =
++      typeof aionui === 'object' && aionui !== null && 'turnIndex' in aionui
++        ? (aionui as { turnIndex?: unknown }).turnIndex
++        : undefined;
++    if (!Number.isInteger(turnIndex) || (turnIndex as number) < 0) {
++      throw RequestError.invalidParams(
++        { _meta: params._meta },
++        'AionUI session/fork requires a non-negative _meta.aionui.turnIndex',
++      );
++    }
++
++    try {
++      const session = await this.harness.forkSession({
++        id: params.sessionId,
++        turnIndex: turnIndex as number,
++        metadata: { source: 'aionui' },
++      });
++      return { sessionId: session.id };
++    } catch (err) {
++      const code = (err as { code?: string } | undefined)?.code;
++      if (code === 'session.not_found') {
++        throw RequestError.invalidParams(
++          { sessionId: params.sessionId },
++          `Unknown sessionId: ${params.sessionId}`,
++        );
++      }
++      throw err;
++    }
++  }
++
+   /**
+    * Shared setup for `session/load` and `session/resume`: gates auth,
+    * checks the connection, resolves MCP servers, asks the harness to
+diff --git a/packages/acp-adapter/test/server.test.ts b/packages/acp-adapter/test/server.test.ts
+--- a/packages/acp-adapter/test/server.test.ts
++++ b/packages/acp-adapter/test/server.test.ts
+@@ -14,7 +14,7 @@ import {
+   type WriteTextFileRequest,
+   type WriteTextFileResponse,
+ } from '@agentclientprotocol/sdk';
+-import type { KimiHarness } from '@moonshot-ai/kimi-code-sdk';
++import type { KimiHarness, Session } from '@moonshot-ai/kimi-code-sdk';
+ 
+ import { AcpServer } from '../src/server';
+ import { TERMINAL_AUTH_METHOD } from '../src';
+@@ -80,9 +80,47 @@ describe('AcpServer + AgentSideConnection', () => {
+     expect(response.agentCapabilities?.mcpCapabilities?.http).toBe(true);
+     expect(response.agentCapabilities?.mcpCapabilities?.sse).toBe(true);
+     expect(response.agentCapabilities?.sessionCapabilities?.list).toEqual({});
++    expect(response.agentCapabilities?.sessionCapabilities?.fork).toEqual({});
+     expect(response.agentCapabilities?.sessionCapabilities?.resume).toEqual({});
+   });
+ 
++  it('forks a session at the AionUI turn checkpoint', async () => {
++    const captured: Array<{ id: string; turnIndex?: number }> = [];
++    const harness = {
++      auth: { status: async () => ({ providers: [{ hasToken: true }] }) },
++      forkSession: async (input: { id: string; turnIndex?: number }) => {
++        captured.push(input);
++        return { id: 'forked-session' } as Session;
++      },
++    } as unknown as KimiHarness;
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++
++    const response = await client.unstable_forkSession({
++      sessionId: 'source-session',
++      cwd: '/repo',
++      mcpServers: [],
++      _meta: { aionui: { turnIndex: 2 } },
++    });
++
++    expect(response.sessionId).toBe('forked-session');
++    expect(captured).toEqual([{ id: 'source-session', turnIndex: 2, metadata: { source: 'aionui' } }]);
++  });
++
++  it('rejects a fork without a valid AionUI turn checkpoint', async () => {
++    const harness = {
++      auth: { status: async () => ({ providers: [{ hasToken: true }] }) },
++    } as unknown as KimiHarness;
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++
++    await expect(
++      client.unstable_forkSession({ sessionId: 'source-session', cwd: '/repo', mcpServers: [] }),
++    ).rejects.toMatchObject({ code: -32602 });
++  });
++
+   it('initialize advertises terminal-auth with id, type, args, name', async () => {
+     const harness = {} as KimiHarness;
+     const { agentStream, clientStream } = makeInMemoryStreamPair();

@@ -2,6 +2,9 @@ package admin
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"unicode"
 )
@@ -27,5 +30,27 @@ func TestGenerateWindowsPasswordIsRandomAndMeetsRequiredClasses(t *testing.T) {
 	}
 	if !upper || !lower || !digit || !symbol {
 		t.Fatalf("generated password lacks a required character class")
+	}
+}
+
+func TestDiskQuotaScriptSupportsWindowsPowerShell(t *testing.T) {
+	scriptPath := filepath.Join("..", "..", "scripts", "Set-UserDiskQuota.ps1")
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "[IO.Path]::IsPathFullyQualified") {
+		t.Fatal("Set-UserDiskQuota.ps1 uses IsPathFullyQualified, which is unavailable in Windows PowerShell 5.1")
+	}
+}
+
+func TestDefaultEmployeeModelQuotas(t *testing.T) {
+	if DefaultEmployeeCodexDailyUSD != 40 || DefaultEmployeeCodexWeeklyUSD != 80 ||
+		DefaultEmployeeKimiDailyUSD != 10 || DefaultEmployeeKimiWeeklyUSD != 20 {
+		t.Fatal("new employee model quotas must use the doubled defaults")
+	}
+	if DefaultEmployeeCodexWeeklyUSD != DefaultEmployeeCodexDailyUSD*2 ||
+		DefaultEmployeeKimiWeeklyUSD != DefaultEmployeeKimiDailyUSD*2 {
+		t.Fatal("weekly model quota defaults must remain twice the daily defaults")
 	}
 }

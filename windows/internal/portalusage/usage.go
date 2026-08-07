@@ -42,6 +42,11 @@ type CountWindow struct {
 }
 
 type StorageUsage struct {
+	Personal StorageBucketUsage `json:"personal"`
+	Shared   StorageBucketUsage `json:"shared"`
+}
+
+type StorageBucketUsage struct {
 	LimitBytes     uint64 `json:"limit_bytes"`
 	UsedBytes      uint64 `json:"used_bytes"`
 	RemainingBytes uint64 `json:"remaining_bytes"`
@@ -73,6 +78,10 @@ type RawSnapshot struct {
 
 type Remote interface {
 	Query(context.Context, modelbootstrap.KeyIDs) (RawSnapshot, error)
+}
+
+type batchRemote interface {
+	QueryMany(context.Context, map[string]modelbootstrap.KeyIDs) (map[string]RawSnapshot, error)
 }
 
 type cacheEntry struct {
@@ -123,6 +132,80 @@ func (s *Service) Current(ctx context.Context, windowsSID string, ids modelboots
 	s.cache[cacheKey] = cacheEntry{expires: s.now().Add(s.ttl), value: cloneSummary(value)}
 	s.mu.Unlock()
 	return value, nil
+}
+
+func (s *Service) CurrentMany(ctx context.Context, windowsSIDs []string) (map[string]Summary, error) {
+	results := make(map[string]Summary, len(windowsSIDs))
+	pending := make(map[string]modelbootstrap.KeyIDs, len(windowsSIDs))
+	now := s.now()
+	s.mu.Lock()
+	for _, windowsSID := range windowsSIDs {
+		cacheKey := strings.ToUpper(windowsSID)
+		if cacheKey == "" {
+			s.mu.Unlock()
+			return nil, errors.New("Windows SID is required for quota lookup")
+		}
+		if _, duplicate := results[cacheKey]; duplicate {
+			continue
+		}
+		if entry, found := s.cache[cacheKey]; found && now.Before(entry.expires) {
+			results[cacheKey] = cloneSummary(entry.value)
+			continue
+		}
+		ids := modelbootstrap.KeyIDsForSID(windowsSID)
+		if err := ids.ValidateForSID(windowsSID); err != nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("derive current-user model mapping: %w", err)
+		}
+		pending[cacheKey] = ids
+	}
+	s.mu.Unlock()
+	if len(pending) == 0 {
+		return results, nil
+	}
+
+	remote, ok := s.remote.(batchRemote)
+	if !ok {
+		for cacheKey, ids := range pending {
+			raw, err := s.remote.Query(ctx, ids)
+			if err != nil {
+				return nil, fmt.Errorf("query remote usage: %w", err)
+			}
+			value, err := normalize(raw)
+			if err != nil {
+				return nil, fmt.Errorf("validate remote usage: %w", err)
+			}
+			results[cacheKey] = value
+		}
+	} else {
+		rawBySID, err := remote.QueryMany(ctx, pending)
+		if err != nil {
+			return nil, fmt.Errorf("query remote usage: %w", err)
+		}
+		for cacheKey := range pending {
+			raw, found := rawBySID[cacheKey]
+			if !found {
+				continue
+			}
+			value, err := normalize(raw)
+			if err != nil {
+				return nil, fmt.Errorf("validate remote usage: %w", err)
+			}
+			results[cacheKey] = value
+		}
+	}
+
+	s.mu.Lock()
+	for cacheKey := range pending {
+		value, found := results[cacheKey]
+		if !found {
+			continue
+		}
+		s.cache[cacheKey] = cacheEntry{expires: s.now().Add(s.ttl), value: cloneSummary(value)}
+		results[cacheKey] = cloneSummary(value)
+	}
+	s.mu.Unlock()
+	return results, nil
 }
 
 func normalize(raw RawSnapshot) (Summary, error) {

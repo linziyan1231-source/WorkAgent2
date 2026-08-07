@@ -15,15 +15,14 @@ import (
 )
 
 const (
-	codexAssistantDefaultsMarkerName = "codex-assistant-defaults-v1.applied"
+	codexAssistantDefaultsMarkerName    = "codex-assistant-defaults-v1.applied"
 	codexAssistantDefaultsMarkerContent = "model=" + modelbootstrap.DefaultCodexModel +
 		"\nreasoning=" + modelbootstrap.DefaultCodexReasoningEffort +
 		"\npermission=agent-full-access\n"
 )
 
 func applyCodexAssistantDefaults(ctx context.Context, dbPath, markerPath string, now time.Time) (bool, error) {
-	applied, err := markerHasContent(markerPath, codexAssistantDefaultsMarkerContent)
-	if err != nil || applied {
+	if _, err := markerHasContent(markerPath, codexAssistantDefaultsMarkerContent); err != nil {
 		return false, err
 	}
 	info, err := os.Lstat(dbPath)
@@ -47,7 +46,7 @@ func applyCodexAssistantDefaults(ctx context.Context, dbPath, markerPath string,
 	defer tx.Rollback()
 
 	for table, required := range map[string][]string{
-		"agent_metadata": {"id", "backend", "agent_source"},
+		"agent_metadata":        {"id", "backend", "agent_source"},
 		"assistant_definitions": {"id", "source", "source_ref", "agent_id", "default_model_mode", "default_model_value", "default_permission_mode", "default_permission_value", "updated_at", "deleted_at"},
 	} {
 		columns, err := tableColumns(ctx, tx, table)
@@ -75,7 +74,10 @@ JOIN agent_metadata a ON a.id=d.agent_id WHERE `+targetPredicate).Scan(&targetCo
 SET default_model_mode='fixed',default_model_value=?,
     default_permission_mode='fixed',default_permission_value='agent-full-access',updated_at=?
 WHERE source='generated' AND deleted_at IS NULL AND source_ref=agent_id
-  AND agent_id IN (SELECT id FROM agent_metadata WHERE agent_source='builtin' AND backend='codex')`, modelbootstrap.DefaultCodexModel, now.UnixMilli())
+  AND agent_id IN (SELECT id FROM agent_metadata WHERE agent_source='builtin' AND backend='codex')
+  AND NOT (default_model_mode='fixed' AND default_model_value=?
+           AND default_permission_mode='fixed' AND default_permission_value='agent-full-access')`,
+		modelbootstrap.DefaultCodexModel, now.UnixMilli(), modelbootstrap.DefaultCodexModel)
 	if err != nil {
 		return false, fmt.Errorf("set managed Codex assistant defaults: %w", err)
 	}
@@ -99,5 +101,5 @@ JOIN agent_metadata a ON a.id=d.agent_id WHERE `+targetPredicate+`
 	if err := writePrivateFileAtomic(markerPath, []byte(codexAssistantDefaultsMarkerContent)); err != nil {
 		return false, fmt.Errorf("write managed Codex assistant defaults marker: %w", err)
 	}
-	return true, nil
+	return changed == 1, nil
 }

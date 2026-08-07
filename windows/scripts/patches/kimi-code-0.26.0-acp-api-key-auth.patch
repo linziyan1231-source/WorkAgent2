@@ -1,0 +1,125 @@
+diff --git a/packages/acp-adapter/src/server.ts b/packages/acp-adapter/src/server.ts
+index d0286d1..cdd1ca9 100644
+--- a/packages/acp-adapter/src/server.ts
++++ b/packages/acp-adapter/src/server.ts
+@@ -107,12 +107,15 @@ function toResolvedSlashCommands(
+ /**
+  * Inline auth gate — moved out of `KimiAuthFacade.hasUsableToken()` so
+  * the SDK doesn't have to carry an ACP-specific convenience method.
+- * Mirrors the original semantics exactly: any provider with `hasToken`
+- * set counts as authed.
++ * A provider is usable when OAuth has a persisted token or the runtime
++ * config supplies a non-empty API key. Both are supported login methods.
+  */
+ async function harnessIsAuthed(harness: KimiHarness): Promise<boolean> {
+   const status = await harness.auth.status();
+-  return status.providers.some((entry) => entry.hasToken === true);
++  if (status.providers.some((entry) => entry.hasToken === true)) return true;
++
++  const config = await harness.getConfig({ reload: true });
++  return Object.values(config.providers).some((provider) => (provider.apiKey?.trim().length ?? 0) > 0);
+ }
+ 
+ function thinkingEnabledFromEffort(effort: unknown): boolean | undefined {
+diff --git a/packages/acp-adapter/test/auth-gate.test.ts b/packages/acp-adapter/test/auth-gate.test.ts
+index f1180bb..0fb4922 100644
+--- a/packages/acp-adapter/test/auth-gate.test.ts
++++ b/packages/acp-adapter/test/auth-gate.test.ts
+@@ -14,7 +14,7 @@ import {
+   type WriteTextFileRequest,
+   type WriteTextFileResponse,
+ } from '@agentclientprotocol/sdk';
+-import type { KimiHarness } from '@moonshot-ai/kimi-code-sdk';
++import type { KimiHarness, Session } from '@moonshot-ai/kimi-code-sdk';
+ 
+ import { AcpServer } from '../src/server';
+ import { AUTHED_STATUS, UNAUTHED_STATUS } from './_helpers/harness-stubs';
+@@ -45,11 +45,21 @@ function makeInMemoryStreamPair(): {
+   return { agentStream, clientStream };
+ }
+ 
+-function makeHarnessWithToken(hasToken: boolean): KimiHarness {
++function makeHarnessWithToken(hasToken: boolean, apiKey = ''): KimiHarness {
+   return {
+     auth: {
+       status: async () => (hasToken ? AUTHED_STATUS : UNAUTHED_STATUS),
+     },
++    getConfig: async () => ({
++      providers: {
++        kimi: {
++          type: 'kimi',
++          baseUrl: 'https://api.example.test/v1',
++          apiKey,
++        },
++      },
++      models: {},
++    }),
+   } as unknown as KimiHarness;
+ }
+ 
+@@ -77,6 +87,7 @@ describe('AcpServer auth gate', () => {
+       auth: {
+         status: async () => UNAUTHED_STATUS,
+       },
++      getConfig: async () => ({ providers: {}, models: {} }),
+       createSession: async (_opts: unknown) => {
+         createCalled = true;
+         return { id: 'should-not-be-reached' };
+@@ -92,6 +103,27 @@ describe('AcpServer auth gate', () => {
+     ).rejects.toMatchObject({ code: -32000 });
+     expect(createCalled).toBe(false);
+   });
++
++  it('allows session/new with a configured API key and no OAuth token', async () => {
++    const fakeSession = {
++      id: 'api-key-session',
++      prompt: async () => undefined,
++      cancel: async () => undefined,
++      onEvent: () => () => undefined,
++    } as unknown as Session;
++    const harness = {
++      ...makeHarnessWithToken(false, 'YOUR_API_KEY'),
++      createSession: async () => fakeSession,
++    } as unknown as KimiHarness;
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++
++    await expect(client.newSession({ cwd: '/tmp/x', mcpServers: [] })).resolves.toMatchObject({
++      sessionId: 'api-key-session',
++    });
++  });
+ });
+ 
+ describe('AcpServer.authenticate', () => {
+@@ -120,6 +152,29 @@ describe('AcpServer.authenticate', () => {
+     expect(result ?? {}).toEqual({});
+   });
+ 
++  it('returns void on a configured API key without an OAuth token', async () => {
++    const harness = makeHarnessWithToken(false, 'YOUR_API_KEY');
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++
++    const result = await client.authenticate({ methodId: 'login' });
++    expect(result ?? {}).toEqual({});
++  });
++
++  it('rejects a whitespace-only API key without an OAuth token', async () => {
++    const harness = makeHarnessWithToken(false, '   ');
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++
++    await expect(client.authenticate({ methodId: 'login' })).rejects.toMatchObject({
++      code: -32000,
++    });
++  });
++
+   it('throws authRequired (-32000) when harness has no token', async () => {
+     const harness = makeHarnessWithToken(false);
+     const { agentStream, clientStream } = makeInMemoryStreamPair();

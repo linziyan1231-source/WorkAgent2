@@ -30,20 +30,48 @@ type ACLPermission int
 
 const (
 	ACLFullControl ACLPermission = iota + 1
+	ACLModify
 	ACLReadExecute
+	ACLTraverse
 )
 
 type ACLPolicy struct {
 	OwnerSID                             string
 	AllowedOwnerSIDs                     []string
 	DescendantsMayInherit                bool
+	allowContainedReparsePoints          bool
 	Principals                           map[string]ACLPermission
 	allowOwnerRightsForDescendants       bool
 	allowHeadlessChromeCacheCapabilities bool
 }
 
+func SharedOwnerRootPolicy(ownerSID string, memberSIDs []string) ACLPolicy {
+	principals := map[string]ACLPermission{SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, ownerSID: ACLFullControl}
+	for _, sid := range memberSIDs {
+		if !strings.EqualFold(sid, ownerSID) {
+			principals[sid] = ACLTraverse
+		}
+	}
+	return ACLPolicy{OwnerSID: ownerSID, AllowedOwnerSIDs: []string{SystemSID, AdministratorsSID}, Principals: principals}
+}
+
+func SharedProjectPolicy(ownerSID string, memberSIDs []string) ACLPolicy {
+	// OWNER RIGHTS replaces Windows' implicit owner WRITE_DAC grant. Files
+	// created by a member may be owned by that member, but ownership must not
+	// let the member rewrite the protected collaboration ACL.
+	principals := map[string]ACLPermission{SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, ownerSID: ACLFullControl, OwnerRightsSID: ACLModify}
+	allowedOwners := []string{SystemSID, AdministratorsSID}
+	for _, sid := range memberSIDs {
+		principals[sid] = ACLModify
+		if !strings.EqualFold(sid, ownerSID) {
+			allowedOwners = append(allowedOwners, sid)
+		}
+	}
+	return ACLPolicy{OwnerSID: ownerSID, AllowedOwnerSIDs: allowedOwners, DescendantsMayInherit: true, Principals: principals}
+}
+
 func PrivateTreePolicy(userSID string) ACLPolicy {
-	return ACLPolicy{OwnerSID: AdministratorsSID, AllowedOwnerSIDs: []string{userSID, SystemSID}, DescendantsMayInherit: true, allowOwnerRightsForDescendants: true, allowHeadlessChromeCacheCapabilities: true, Principals: map[string]ACLPermission{
+	return ACLPolicy{OwnerSID: AdministratorsSID, AllowedOwnerSIDs: []string{userSID, SystemSID}, DescendantsMayInherit: true, allowContainedReparsePoints: true, allowOwnerRightsForDescendants: true, allowHeadlessChromeCacheCapabilities: true, Principals: map[string]ACLPermission{
 		SystemSID: ACLFullControl, AdministratorsSID: ACLFullControl, userSID: ACLFullControl,
 	}}
 }
@@ -136,7 +164,7 @@ func ApplyTreeACL(root string, policy ACLPolicy) error {
 		if reparse, err := isReparsePoint(path); err != nil {
 			return err
 		} else if reparse {
-			if !policy.DescendantsMayInherit || strings.EqualFold(filepath.Clean(path), cleanRoot) {
+			if !policy.allowContainedReparsePoints || strings.EqualFold(filepath.Clean(path), cleanRoot) {
 				return fmt.Errorf("refuse to apply ACL through reparse point: %s", path)
 			}
 			if err := validateContainedReparsePoint(cleanRoot, path); err != nil {
@@ -166,7 +194,7 @@ func VerifyTreeACL(root string, policy ACLPolicy) error {
 		if reparse, err := isReparsePoint(path); err != nil {
 			return err
 		} else if reparse {
-			if !policy.DescendantsMayInherit || strings.EqualFold(filepath.Clean(path), cleanRoot) {
+			if !policy.allowContainedReparsePoints || strings.EqualFold(filepath.Clean(path), cleanRoot) {
 				return fmt.Errorf("ACL tree contains reparse point: %s", path)
 			}
 			if err := validateContainedReparsePoint(cleanRoot, path); err != nil {
@@ -206,8 +234,12 @@ func applyPathACL(path string, directory bool, policy ACLPolicy) error {
 	sddl := "O:" + policy.OwnerSID + "G:" + SystemSID + "D:P"
 	for _, sid := range sortedPolicySIDs(policy) {
 		rights := "FA"
-		if policy.Principals[sid] == ACLReadExecute {
+		if policy.Principals[sid] == ACLModify {
+			rights = "GRGWGXSD"
+		} else if policy.Principals[sid] == ACLReadExecute {
 			rights = "GRGX"
+		} else if policy.Principals[sid] == ACLTraverse {
+			rights = "GX"
 		}
 		flags := ""
 		if directory {
@@ -291,6 +323,9 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool, treeRoo
 		if permission == ACLReadExecute && ace.Mask&fileWriteBits != 0 {
 			return fmt.Errorf("read-only principal %s has write or ACL-management rights 0x%08x", principalSID, uint32(ace.Mask))
 		}
+		if permission == ACLTraverse && ace.Mask&(fileWriteBits|windows.FILE_LIST_DIRECTORY|windows.GENERIC_READ) != 0 {
+			return fmt.Errorf("traverse-only principal %s can enumerate or write (mask 0x%08x)", principalSID, uint32(ace.Mask))
+		}
 	}
 	for sid, permission := range policy.Principals {
 		mask := granted[sid]
@@ -299,11 +334,24 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool, treeRoo
 			if mask&windows.GENERIC_ALL == 0 && mask&fileAllAccess != fileAllAccess {
 				return fmt.Errorf("principal %s lacks full control (mask 0x%08x)", sid, uint32(mask))
 			}
+		case ACLModify:
+			if mask&(windows.GENERIC_ALL|windows.WRITE_DAC|windows.WRITE_OWNER) != 0 {
+				return fmt.Errorf("principal %s has ACL ownership rights (mask 0x%08x)", sid, uint32(mask))
+			}
+			hasGeneric := mask&windows.GENERIC_READ != 0 && mask&windows.GENERIC_WRITE != 0 && mask&windows.GENERIC_EXECUTE != 0
+			hasSpecific := mask&windows.FILE_GENERIC_READ == windows.FILE_GENERIC_READ && mask&windows.FILE_GENERIC_WRITE == windows.FILE_GENERIC_WRITE && mask&windows.FILE_GENERIC_EXECUTE == windows.FILE_GENERIC_EXECUTE
+			if (!hasGeneric && !hasSpecific) || mask&windows.DELETE == 0 {
+				return fmt.Errorf("principal %s lacks modify rights (mask 0x%08x)", sid, uint32(mask))
+			}
 		case ACLReadExecute:
 			hasGeneric := mask&windows.GENERIC_READ != 0 && mask&windows.GENERIC_EXECUTE != 0
 			hasSpecific := mask&windows.FILE_GENERIC_READ == windows.FILE_GENERIC_READ && mask&windows.FILE_GENERIC_EXECUTE == windows.FILE_GENERIC_EXECUTE
 			if !hasGeneric && !hasSpecific {
 				return fmt.Errorf("principal %s lacks read/execute rights (mask 0x%08x)", sid, uint32(mask))
+			}
+		case ACLTraverse:
+			if mask&windows.GENERIC_EXECUTE == 0 && mask&windows.FILE_TRAVERSE == 0 {
+				return fmt.Errorf("principal %s lacks traverse rights (mask 0x%08x)", sid, uint32(mask))
 			}
 		}
 	}
@@ -342,7 +390,7 @@ func validateACLPolicy(policy ACLPolicy) error {
 		return errors.New("ACL owner must also be an allowed principal")
 	}
 	for sid, permission := range policy.Principals {
-		if !validSIDText(sid) || (permission != ACLFullControl && permission != ACLReadExecute) {
+		if !validSIDText(sid) || (permission != ACLFullControl && permission != ACLModify && permission != ACLReadExecute && permission != ACLTraverse) {
 			return errors.New("ACL policy contains an invalid principal or permission")
 		}
 	}

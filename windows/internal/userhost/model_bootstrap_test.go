@@ -39,7 +39,7 @@ web_search = true
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeInitialCodexConfig(path, "http://203.0.113.52:8317/v1", "example-reasoning"); err != nil {
+	if err := writeInitialCodexConfig(path, "http://43.134.118.158:8317/v1", "gpt-5.6-luna"); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(path)
@@ -47,7 +47,7 @@ web_search = true
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{`openai_base_url = "http://203.0.113.52:8317/v1"`, `model = "example-reasoning"`, `model_reasoning_effort = "low"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `developer_instructions = "默认使用简体中文回复。"`, `model = "table-value-must-survive"`} {
+	for _, required := range []string{`openai_base_url = "http://43.134.118.158:8317/v1"`, `model = "gpt-5.6-luna"`, `model_reasoning_effort = "low"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `developer_instructions = "默认使用简体中文回复。"`, `model = "table-value-must-survive"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("managed config is missing %q:\n%s", required, got)
 		}
@@ -100,7 +100,7 @@ api_key = "custom-secret"
 			t.Fatal(err)
 		}
 	}
-	payload := []byte(`{"api_key":"cpa_abcdefghijklmnopqrstuvwxyz012345","base_url":"http://203.0.113.52:8317/v1"}`)
+	payload := []byte(`{"api_key":"cpa_abcdefghijklmnopqrstuvwxyz012345","base_url":"http://43.134.118.158:8317/v1"}`)
 	python := filepath.Join(verified.Path, filepath.FromSlash(agentcli.KimiRelativePath))
 	command := exec.Command(python, "-B", "-c", kimiAPIKeyConfigureScript, configPath)
 	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "PYTHONUTF8=1")
@@ -113,7 +113,7 @@ api_key = "custom-secret"
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{"# preserve this comment", `default_model = "kimi-code/kimi-k3"`, `theme = "light"`, `default_thinking = true`, `default_yolo = true`, `support_efforts = ["low", "high", "max"]`, `default_effort = "high"`, `display_name = "Kimi K2.7 Code"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi K2.7 Code HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `default_effort = "low"`, `[thinking]`, `enabled = true`, `[providers.custom]`, `base_url = "http://203.0.113.52:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+	for _, required := range []string{"# preserve this comment", `default_model = "kimi-code/kimi-k3"`, `theme = "light"`, `default_thinking = true`, `default_yolo = true`, `support_efforts = ["low", "high", "max"]`, `default_effort = "high"`, `display_name = "Kimi K2.7 Code"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi K2.7 Code HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `default_effort = "low"`, `[thinking]`, `enabled = true`, `[providers.custom]`, `base_url = "http://43.134.118.158:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
 		}
@@ -148,8 +148,8 @@ api_key = "custom-secret"
 
 func TestManagedProviderUpsertPreservesUnrelatedAndVerifiesExactSecrets(t *testing.T) {
 	desired := []aionProvider{
-		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"example-reasoning", "example-balanced", "example-fast"}, Enabled: true},
-		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "KIMI", BaseURL: "http://203.0.113.52:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}, Enabled: true},
+		{ID: "managed-cliproxy-chatgpt", Platform: "custom", Name: "ChatGPT", BaseURL: "http://43.134.118.158:8317/v1", APIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Models: []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}, Enabled: true},
+		{ID: "managed-cliproxy-kimi", Platform: "custom", Name: "KIMI", BaseURL: "http://43.134.118.158:8317/v1", APIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Models: []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}, Enabled: true},
 	}
 	providers := []aionProvider{{ID: "custom-user-provider", Platform: "custom", Name: "Keep me", BaseURL: "https://example.test/v1", APIKey: "user-secret", Models: []string{"model"}, Enabled: true},
 		{ID: desired[0].ID, Platform: "custom", Name: "stale", BaseURL: "https://stale.test/v1", APIKey: "stale", Models: []string{"stale"}, Enabled: false}}
@@ -200,8 +200,8 @@ func TestPendingModelRebasePreservesProviderKeysAndCompletesMarker(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	state := modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: "http://203.0.113.52:8317/v1",
-		CodexKeyID: "aionui-0123456789abcdef-chatgpt", KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning",
+	state := modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: "http://43.134.118.158:8317/v1",
+		CodexKeyID: "aionui-0123456789abcdef-chatgpt", KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "gpt-5.6-luna",
 		CodexModels: modelbootstrap.ManagedCodexModels(), KimiModels: modelbootstrap.ManagedKimiModels()}
 	bundle := modelbootstrap.Bundle{State: state, CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
 	if err := modelbootstrap.Stage(root, bundle, false); err != nil {

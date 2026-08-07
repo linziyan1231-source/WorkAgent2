@@ -23,6 +23,13 @@ type EmployeeProvisioner struct {
 	ScriptsDirectory string
 }
 
+const (
+	DefaultEmployeeCodexDailyUSD  = 40
+	DefaultEmployeeCodexWeeklyUSD = 80
+	DefaultEmployeeKimiDailyUSD   = 10
+	DefaultEmployeeKimiWeeklyUSD  = 20
+)
+
 func (p EmployeeProvisioner) Add(ctx context.Context, username string, portalPassword []byte) (store.User, error) {
 	return p.AddWithProgress(ctx, username, portalPassword, nil)
 }
@@ -128,10 +135,10 @@ func (p EmployeeProvisioner) AddWithProgress(ctx context.Context, username strin
 		CodexDefaultModel: modelbootstrap.DefaultCodexModel,
 		CodexModels:       modelbootstrap.ManagedCodexModels(),
 		KimiModels:        modelbootstrap.ManagedKimiModels(),
-		CodexDailyUSD:     20,
-		CodexWeeklyUSD:    40,
-		KimiDailyUSD:      5,
-		KimiWeeklyUSD:     10,
+		CodexDailyUSD:     DefaultEmployeeCodexDailyUSD,
+		CodexWeeklyUSD:    DefaultEmployeeCodexWeeklyUSD,
+		KimiDailyUSD:      DefaultEmployeeKimiDailyUSD,
+		KimiWeeklyUSD:     DefaultEmployeeKimiWeeklyUSD,
 	})
 	if err != nil {
 		return user, err

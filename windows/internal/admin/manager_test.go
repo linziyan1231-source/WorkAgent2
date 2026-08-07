@@ -7,12 +7,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"aionuiportal/internal/agentcli"
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/release"
+	"aionuiportal/internal/scheduler"
 	"aionuiportal/internal/winutil"
 )
+
+func TestRemainingTaskVerificationWaitOnlyExtendsRunningTask(t *testing.T) {
+	running := scheduler.Info{LastTaskResult: 0x00041301}
+	if got, want := remainingTaskVerificationWait(running, 2*time.Minute), 4*time.Minute; got != want {
+		t.Fatalf("running task wait=%s, want %s", got, want)
+	}
+	if got := remainingTaskVerificationWait(scheduler.Info{LastTaskResult: 1}, 2*time.Minute); got != 0 {
+		t.Fatalf("finished task wait=%s, want 0", got)
+	}
+	if got := remainingTaskVerificationWait(running, taskVerificationStartupLimit); got != 0 {
+		t.Fatalf("expired running task wait=%s, want 0", got)
+	}
+}
 
 func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	root := t.TempDir()
@@ -23,7 +38,7 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	packed := filepath.Join(root, "packed")
 	for name, body := range map[string]string{
 		"aionui-web.exe": "web", "package.json": `{"version":"test"}`, "static/index.html": "renderer",
-		"bundled-aioncore/win32-x64/aioncore.exe":                      "core",
+		"bundled-aioncore/win32-x64/aioncore.exe":                  "core",
 		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
 		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
 		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
@@ -157,8 +172,8 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 }
 
 func TestValidateUserHostLayoutRequiresExactFixedIdentityAndPaths(t *testing.T) {
-	const sid = "S-1-5-21-1417176286-1839503707-1020375065-6067"
-	const profile = `C:\Users\user-87eba76e`
+	const sid = "S-1-5-21-1-1001"
+	const profile = `C:\Users\worker`
 	manager := Manager{Config: config.Portal{
 		UserProfilesRoot:   `C:\Users`,
 		ReleasesRoot:       `C:\Program Files\AionUiPortal\shared\releases`,
@@ -166,7 +181,7 @@ func TestValidateUserHostLayoutRequiresExactFixedIdentityAndPaths(t *testing.T) 
 		PortalServiceSID:   "S-1-5-80-1234",
 	}, ProfileDirectory: func(requestedSID string) (string, error) {
 		if requestedSID != sid {
-			return `C:\Users\user-d9298a10`, nil
+			return `C:\Users\other`, nil
 		}
 		return profile, nil
 	}}
@@ -186,9 +201,9 @@ func TestValidateUserHostLayoutRequiresExactFixedIdentityAndPaths(t *testing.T) 
 		name   string
 		change func(*config.UserHost)
 	}{
-		{"SID", func(cfg *config.UserHost) { cfg.WindowsSID = "S-1-5-21-1032064966-1535641275-1296334407-6542" }},
-		{"Windows profile", func(cfg *config.UserHost) { cfg.WindowsProfile = `C:\Users\user-d9298a10` }},
-		{"data root", func(cfg *config.UserHost) { cfg.DataRoot = `C:\Users\user-d9298a10\AionUiPortal` }},
+		{"SID", func(cfg *config.UserHost) { cfg.WindowsSID = "S-1-5-21-1-1002" }},
+		{"Windows profile", func(cfg *config.UserHost) { cfg.WindowsProfile = `C:\Users\other` }},
+		{"data root", func(cfg *config.UserHost) { cfg.DataRoot = `C:\Users\other\AionUiPortal` }},
 		{"release root", func(cfg *config.UserHost) { cfg.ReleasesRoot = `C:\untrusted\releases` }},
 		{"current pointer", func(cfg *config.UserHost) { cfg.CurrentReleaseFile = `C:\untrusted\current.json` }},
 		{"service SID", func(cfg *config.UserHost) { cfg.PortalServiceSID = "S-1-5-80-9999" }},
@@ -250,6 +265,49 @@ func TestProvisionUserFilesUsesResolvedWindowsProfileChild(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(profile, config.UserDataDirectoryName, "data")); err != nil {
 		t.Fatalf("private data directory missing: %v", err)
+	}
+}
+
+func TestProvisionUserFilesUsesConfiguredSIDDataRoot(t *testing.T) {
+	root := t.TempDir()
+	profilesRoot := filepath.Join(root, "profiles")
+	profile := filepath.Join(profilesRoot, "worker")
+	dataRootBase := filepath.Join(root, "cloud-data", "users")
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := winutil.CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := Manager{Config: config.Portal{
+		UserProfilesRoot:       profilesRoot,
+		UserDataRoot:           dataRootBase,
+		UserConfigRoot:         filepath.Join(root, "program-data", "users"),
+		ReleasesRoot:           filepath.Join(root, "shared", "releases"),
+		CurrentReleaseFile:     filepath.Join(root, "shared", "current.json"),
+		PortalServiceSID:       identity.SID,
+		InstanceStartupSeconds: 90,
+		SupportedAionCore:      []string{"v0.1.42"},
+	}, ProfileDirectory: func(requestedSID string) (string, error) {
+		if requestedSID != identity.SID {
+			t.Fatalf("unexpected profile lookup for %s", requestedSID)
+		}
+		return profile, nil
+	}}
+	got, err := manager.provisionUserFiles(identity.SID, `SERVER\worker`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dataRootBase, identity.SID)
+	if got.ConfigVersion != 2 || !equalPath(got.DataRootBase, dataRootBase) || !equalPath(got.DataRoot, want) {
+		t.Fatalf("external user layout=%+v, want base=%s root=%s", got, dataRootBase, want)
+	}
+	if !equalPath(got.WindowsProfile, profile) {
+		t.Fatalf("Windows profile=%s, want %s", got.WindowsProfile, profile)
+	}
+	if err := winutil.VerifyTreeACL(want, winutil.PrivateTreePolicy(identity.SID)); err != nil {
+		t.Fatalf("external private product subtree ACL: %v", err)
 	}
 }
 

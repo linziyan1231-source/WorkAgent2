@@ -81,6 +81,16 @@ func serveProvisioner(ctx context.Context, configPath, scriptsDirectory string) 
 	}
 	provisioner := admin.EmployeeProvisioner{Manager: manager, ScriptsDirectory: scriptsDirectory}
 	server, err := provisionipc.Listen(ctx, sddl, func(requestCtx context.Context, request provisionipc.Request, report func(provisionipc.Progress)) provisionipc.Response {
+		if request.Command == "set-kimi-datasource" {
+			grant, err := manager.SetKimiDatasourceGrant(requestCtx, request.Username, request.Enabled, request.AllowedSources, request.DailyLimit, request.MonthlyLimit)
+			if err != nil {
+				return provisionipc.Response{ErrorCode: "KIMI_DATASOURCE_POLICY_FAILED", ErrorMessage: err.Error()}
+			}
+			return provisionipc.Response{OK: true, KimiDatasource: &provisionipc.KimiDatasourceGrant{
+				Enabled: grant.Enabled, AllowedSources: grant.AllowedSources, DailyLimit: grant.DailyLimit, MonthlyLimit: grant.MonthlyLimit,
+				DailyUsed: grant.DailyUsed, MonthlyUsed: grant.MonthlyUsed,
+			}}
+		}
 		user, err := provisioner.AddWithProgress(requestCtx, request.Username, request.PortalPassword, func(percent int, step string) {
 			report(provisionipc.Progress{Percent: percent, Step: step})
 		})

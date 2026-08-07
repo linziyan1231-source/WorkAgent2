@@ -10,7 +10,7 @@ func TestReadFrameReadsProgressBeforeFinalResponse(t *testing.T) {
 	if err := writeFrame(&stream, Response{Progress: &Progress{Percent: 42, Step: "applying_security_policy"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFrame(&stream, Response{OK: true, User: &User{Username: "employee-two"}}); err != nil {
+	if err := writeFrame(&stream, Response{OK: true, User: &User{Username: "duan"}}); err != nil {
 		t.Fatal(err)
 	}
 	var progress Response
@@ -18,7 +18,7 @@ func TestReadFrameReadsProgressBeforeFinalResponse(t *testing.T) {
 		t.Fatalf("read progress frame: response=%+v err=%v", progress, err)
 	}
 	var completed Response
-	if err := readFrame(&stream, &completed); err != nil || !completed.OK || completed.User == nil || completed.User.Username != "employee-two" {
+	if err := readFrame(&stream, &completed); err != nil || !completed.OK || completed.User == nil || completed.User.Username != "duan" {
 		t.Fatalf("read final frame: response=%+v err=%v", completed, err)
 	}
 }

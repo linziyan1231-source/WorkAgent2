@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 	"aionuiportal/internal/store"
 )
 
-const managerSID = "S-1-5-21-1335169958-1819941586-1322872941-1322"
+const managerSID = "S-1-5-21-100-200-300-1017"
 
 type fakeTask struct {
 	mu      sync.Mutex
@@ -74,6 +75,63 @@ func TestConcurrentEnsureStartsOneScheduledTask(t *testing.T) {
 	defer tasks.mu.Unlock()
 	if tasks.starts != 1 {
 		t.Fatalf("scheduled task starts=%d, want 1", tasks.starts)
+	}
+}
+
+func TestRestartUsesSIDPrivateUserHostCommandAndClearsRouteAuthentication(t *testing.T) {
+	data, cfg := managerStore(t)
+	var commands []string
+	manager := NewWithIPC(cfg, data, &fakeTask{}, func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
+		if pipe != config.PipeNameForSID(managerSID) {
+			t.Fatalf("restart used wrong pipe: %s", pipe)
+		}
+		commands = append(commands, request.Command)
+		response := ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true}
+		if request.Command == "status" {
+			response.Status = &ipc.Status{WindowsSID: managerSID, Healthy: true, WebPort: 31001, UserHostPID: 1234, StartedAtUnix: 1700000000, Version: "2.1.29"}
+		}
+		if request.Command == "auth" {
+			response.Auth = &ipc.AuthMaterial{CookieHeader: "aionui-session=internal"}
+		}
+		return response, nil
+	})
+	if _, err := manager.Route(context.Background(), managerSID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Restart(context.Background(), managerSID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Route(context.Background(), managerSID); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(commands, ",") != "status,auth,restart,status,auth" {
+		t.Fatalf("commands=%v, want cached auth cleared after restart", commands)
+	}
+}
+
+func TestWaitHealthyDoesNotStartAnotherScheduledTask(t *testing.T) {
+	data, cfg := managerStore(t)
+	tasks := &fakeTask{}
+	statusCalls := 0
+	caller := func(_ context.Context, _ string, request ipc.Request) (ipc.Response, error) {
+		if request.Command != "status" {
+			return ipc.Response{}, errors.New("unexpected command")
+		}
+		statusCalls++
+		if statusCalls == 1 {
+			return ipc.Response{}, errors.New("pipe not found")
+		}
+		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true,
+			Status: &ipc.Status{WindowsSID: managerSID, Healthy: true, State: "healthy", WebPort: 31001}}, nil
+	}
+	manager := NewWithIPC(cfg, data, tasks, caller)
+	if _, err := manager.WaitHealthy(context.Background(), managerSID, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	tasks.mu.Lock()
+	defer tasks.mu.Unlock()
+	if tasks.starts != 0 {
+		t.Fatalf("healthy wait started scheduled task %d times, want 0", tasks.starts)
 	}
 }
 
@@ -192,7 +250,7 @@ func TestProbeActivityRefreshesAndValidatesUserHostIdentity(t *testing.T) {
 	manager := NewWithIPC(cfg, data, &fakeTask{}, func(_ context.Context, _ string, request ipc.Request) (ipc.Response, error) {
 		sid := managerSID
 		if wrongIdentity {
-			sid = "S-1-5-21-1988320210-1174886911-1684912000-8042"
+			sid = "S-1-5-21-100-200-300-9999"
 		}
 		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true,
 			Status: &ipc.Status{WindowsSID: sid, Activity: activity}}, nil
@@ -268,7 +326,7 @@ func TestModelKeyIDsStayBoundToRequestedSIDAndPipe(t *testing.T) {
 
 func TestModelKeyIDsRejectAnotherUsersWellFormedIDs(t *testing.T) {
 	data, cfg := managerStore(t)
-	other := modelbootstrap.KeyIDsForSID("S-1-5-21-1836781275-1957422218-1832856846-7828")
+	other := modelbootstrap.KeyIDsForSID("S-1-5-21-100-200-300-1018")
 	caller := func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
 		if pipe != config.PipeNameForSID(managerSID) {
 			t.Fatalf("model marker IPC used wrong pipe: %s", pipe)
@@ -284,7 +342,10 @@ func TestModelKeyIDsRejectAnotherUsersWellFormedIDs(t *testing.T) {
 
 func TestStorageUsageStaysBoundToRequestedSIDAndPipe(t *testing.T) {
 	data, cfg := managerStore(t)
-	want := ipc.StorageUsage{LimitBytes: 100, UsedBytes: 30, RemainingBytes: 70, MeasuredAt: "2026-07-26T08:00:00Z"}
+	want := ipc.StorageUsage{
+		Personal: ipc.StorageBucketUsage{LimitBytes: 100, UsedBytes: 30, RemainingBytes: 70, MeasuredAt: "2026-07-26T08:00:00Z"},
+		Shared:   ipc.StorageBucketUsage{LimitBytes: 40, UsedBytes: 10, RemainingBytes: 30, MeasuredAt: "2026-07-26T08:00:00Z"},
+	}
 	var seenPipe string
 	var seenRequest ipc.Request
 	caller := func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
@@ -304,7 +365,10 @@ func TestStorageUsageStaysBoundToRequestedSIDAndPipe(t *testing.T) {
 func TestStorageUsageRejectsInconsistentRemainingBytes(t *testing.T) {
 	data, cfg := managerStore(t)
 	caller := func(_ context.Context, _ string, request ipc.Request) (ipc.Response, error) {
-		invalid := ipc.StorageUsage{LimitBytes: 100, UsedBytes: 30, RemainingBytes: 80, MeasuredAt: "2026-07-26T08:00:00Z"}
+		invalid := ipc.StorageUsage{
+			Personal: ipc.StorageBucketUsage{LimitBytes: 100, UsedBytes: 30, RemainingBytes: 80, MeasuredAt: "2026-07-26T08:00:00Z"},
+			Shared:   ipc.StorageBucketUsage{LimitBytes: 40, UsedBytes: 10, RemainingBytes: 30, MeasuredAt: "2026-07-26T08:00:00Z"},
+		}
 		return ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true, StorageUsage: &invalid}, nil
 	}
 	manager := NewWithIPC(cfg, data, &fakeTask{}, caller)

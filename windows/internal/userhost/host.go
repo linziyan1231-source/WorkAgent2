@@ -2,6 +2,8 @@ package userhost
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,10 +66,23 @@ type Host struct {
 	storageMu      sync.Mutex
 	storageUsage   ipc.StorageUsage
 	storageUsageAt time.Time
+
+	runtimeControlSecret string
+	sharedCredentialMu   sync.RWMutex
+	sharedCredentials    map[string]sharedAgentCredential
 }
 
 func Run(ctx context.Context, cfg config.UserHost) error {
-	h := &Host{cfg: cfg, stop: make(chan struct{})}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return fmt.Errorf("generate AionCore runtime control secret: %w", err)
+	}
+	h := &Host{
+		cfg: cfg, stop: make(chan struct{}),
+		runtimeControlSecret: base64.RawURLEncoding.EncodeToString(secret),
+		sharedCredentials:    make(map[string]sharedAgentCredential),
+	}
+	clear(secret)
 	return h.run(ctx)
 }
 
@@ -91,6 +106,9 @@ func (h *Host) run(ctx context.Context) error {
 		return fmt.Errorf("registered Windows profile %s does not match configured profile %s", windowsProfile, h.cfg.WindowsProfile)
 	}
 	expectedDataRoot := filepath.Join(windowsProfile, config.UserDataDirectoryName)
+	if h.cfg.ConfigVersion == 2 {
+		expectedDataRoot = filepath.Join(filepath.Clean(h.cfg.DataRootBase), h.cfg.WindowsSID)
+	}
 	if !samePath(expectedDataRoot, h.cfg.DataRoot) {
 		return fmt.Errorf("configured data root %s does not match SID profile data root %s", h.cfg.DataRoot, expectedDataRoot)
 	}
@@ -215,12 +233,27 @@ func (h *Host) initialize(ctx context.Context) error {
 	}
 	h.log.Printf("Startup phase completed phase=aioncore-migrations elapsed_ms=%d", time.Since(phaseStarted).Milliseconds())
 	dbPath := filepath.Join(h.dirs.Data, "aionui-backend.db")
+	legacyRoot := filepath.Join(h.cfg.WindowsProfile, config.UserDataDirectoryName)
+	repairedPaths, err := repairLegacyDataRootPaths(ctx, dbPath, legacyRoot, h.cfg.DataRoot)
+	if err != nil {
+		return err
+	}
+	if repairedPaths > 0 {
+		h.log.Printf("Rebased %d persisted data-root path fields from %s to %s", repairedPaths, legacyRoot, h.cfg.DataRoot)
+	}
 	brandingApplied, err := applyWorkAgentBranding(ctx, dbPath, h.dirs.Data, filepath.Join(h.dirs.Config, workagentBrandingMarkerName), time.Now())
 	if err != nil {
 		return err
 	}
 	if brandingApplied {
 		h.log.Printf("Updated the built-in WorkAgent AI assistant, prompt, and skill bindings")
+	}
+	kimiDatasourceApplied, err := applyKimiDatasourceAccess(ctx, dbPath, h.dirs.Data, h.cfg.KimiDatasource, time.Now())
+	if err != nil {
+		return err
+	}
+	if kimiDatasourceApplied {
+		h.log.Printf("Applied managed Kimi datasource MCP and skill access")
 	}
 	if pendingModels == nil {
 		codexModelDefaultsApplied, err := applyCodexModelDefaults(h.cfg.DataRoot, h.dirs)
@@ -297,6 +330,23 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	h.client, h.auth = client, material
+	// The live AionCore startup reconciles builtin assistant definitions after
+	// the migration process exits. Re-apply Portal-owned branding and managed
+	// capability bindings once that reconciliation is complete and before this
+	// UserHost becomes routable.
+	brandingApplied, err = applyWorkAgentBranding(startupCtx, dbPath, h.dirs.Data, filepath.Join(h.dirs.Config, workagentBrandingMarkerName), time.Now())
+	if err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
+	kimiDatasourceApplied, err = applyKimiDatasourceAccess(startupCtx, dbPath, h.dirs.Data, h.cfg.KimiDatasource, time.Now())
+	if err != nil {
+		h.stopCommand(cmd, h.webDone, 5*time.Second)
+		return err
+	}
+	if brandingApplied || kimiDatasourceApplied {
+		h.log.Printf("Reconciled Portal-owned assistant branding and managed capability bindings after AionCore startup")
+	}
 	if err := h.applyPendingModelBootstrap(startupCtx, pendingModels); err != nil {
 		h.stopCommand(cmd, h.webDone, 5*time.Second)
 		return err
@@ -732,7 +782,123 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		}
 		h.touchActivity()
 		return ipc.Response{OK: true, ProjectRename: &result}
-	case "stop":
+	case "project_resolve":
+		if request.ProjectResolve == nil || !h.validOAuthInstance(request.ProjectResolve.InstanceID) {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_PROJECT_RESOLVE", ErrorMessage: "project resolution did not match this healthy UserHost instance"}
+		}
+		result, code, err := resolveProjectState(h.dirs.Workspace, request.ProjectResolve.ProjectID)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		return ipc.Response{OK: true, ProjectResolve: &result}
+	case "project_list":
+		if request.ProjectList == nil || !h.validOAuthInstance(request.ProjectList.InstanceID) {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_PROJECT_LIST", ErrorMessage: "project list did not match this healthy UserHost instance"}
+		}
+		result, code, err := listProjectStates(h.dirs.Workspace)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		return ipc.Response{OK: true, ProjectList: &result}
+	case "shared_project_provision":
+		if request.SharedProject == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_PROJECT", ErrorMessage: "shared project request is missing"}
+		}
+		result, code, err := h.provisionSharedProject(ctx, *request.SharedProject)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		h.storageMu.Lock()
+		h.storageUsageAt = time.Time{}
+		h.storageMu.Unlock()
+		h.touchActivity()
+		return ipc.Response{OK: true, SharedProject: &result}
+	case "shared_project_acl":
+		if request.SharedProject == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_PROJECT", ErrorMessage: "shared project ACL request is missing"}
+		}
+		result, code, err := h.updateSharedProjectACL(*request.SharedProject)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		return ipc.Response{OK: true, SharedProject: &result}
+	case "shared_project_finish":
+		if request.SharedProject == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_PROJECT", ErrorMessage: "shared project finalization request is missing"}
+		}
+		result, code, err := h.finishSharedProjectProvisioning(ctx, *request.SharedProject)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		h.storageMu.Lock()
+		h.storageUsageAt = time.Time{}
+		h.storageMu.Unlock()
+		return ipc.Response{OK: true, SharedProject: &result}
+	case "shared_agent_run":
+		if request.SharedAgent == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_AGENT", ErrorMessage: "shared agent request is missing"}
+		}
+		result, code, err := h.runSharedAgent(ctx, *request.SharedAgent)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		h.touchActivity()
+		return ipc.Response{OK: true, SharedAgent: &result}
+	case "shared_agent_stop":
+		if request.SharedAgentStop == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_AGENT", ErrorMessage: "missing shared agent stop request"}
+		}
+		code, err := h.stopSharedAgent(ctx, *request.SharedAgentStop)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		return ipc.Response{OK: true}
+	case "shared_agent_credential_install", "shared_agent_credential_verify":
+		if request.SharedCredential == nil || !h.validOAuthInstance(request.SharedCredential.InstanceID) {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_CREDENTIAL", ErrorMessage: "shared credential request did not match this UserHost instance"}
+		}
+		if request.Command == "shared_agent_credential_install" {
+			if err := h.installSharedAgentCredential(*request.SharedCredential); err != nil {
+				return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_CREDENTIAL", ErrorMessage: err.Error()}
+			}
+		}
+		installed := h.hasSharedAgentCredential(request.SharedCredential.CredentialID)
+		return ipc.Response{OK: true, SharedCredential: &ipc.SharedAgentCredentialResult{Installed: installed}}
+	case "shared_file":
+		if request.SharedFile == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_FILE", ErrorMessage: "shared file request is missing"}
+		}
+		result, code, err := h.sharedFile(ctx, *request.SharedFile)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		h.touchActivity()
+		return ipc.Response{OK: true, SharedFile: &result}
+	case "shared_project_transfer", "shared_project_transfer_finish":
+		if request.SharedTransfer == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_TRANSFER", ErrorMessage: "missing shared project transfer request"}
+		}
+		var code string
+		var err error
+		if request.Command == "shared_project_transfer_finish" {
+			code, err = h.finishSharedProjectTransfer(*request.SharedTransfer)
+		} else {
+			code, err = h.transferSharedProject(ctx, *request.SharedTransfer)
+		}
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		return ipc.Response{OK: true}
+	case "shared_conversations_relocate":
+		if request.SharedRelocate == nil {
+			return ipc.Response{OK: false, ErrorCode: "INVALID_SHARED_RELOCATION", ErrorMessage: "missing shared conversation relocation request"}
+		}
+		code, err := h.relocateSharedProjectConversations(ctx, *request.SharedRelocate)
+		if err != nil {
+			return ipc.Response{OK: false, ErrorCode: code, ErrorMessage: err.Error()}
+		}
+		return ipc.Response{OK: true}
+	case "stop", "restart":
 		h.stopOnce.Do(func() { close(h.stop) })
 		return ipc.Response{OK: true}
 	default:
@@ -759,7 +925,8 @@ func (h *Host) snapshot() ipc.Status {
 	return status
 }
 
-const userStorageLimitBytes = uint64(20 * 1024 * 1024 * 1024)
+const personalStorageLimitBytes = uint64(60 * 1024 * 1024 * 1024)
+const sharedStorageLimitBytes = uint64(20 * 1024 * 1024 * 1024)
 const storageUsageCacheTTL = 5 * time.Minute
 
 func (h *Host) currentStorageUsage(ctx context.Context) (ipc.StorageUsage, error) {
@@ -769,30 +936,42 @@ func (h *Host) currentStorageUsage(ctx context.Context) (ipc.StorageUsage, error
 		return ipc.StorageUsage{}, err
 	}
 	now := time.Now()
-	if h.storageUsage.MeasuredAt != "" && now.Sub(h.storageUsageAt) < storageUsageCacheTTL {
+	if h.storageUsage.Personal.MeasuredAt != "" && h.storageUsage.Shared.MeasuredAt != "" && now.Sub(h.storageUsageAt) < storageUsageCacheTTL {
 		return h.storageUsage, nil
 	}
-	usage, err := measureStorageUsage(ctx, h.cfg.DataRoot)
+	if h.cfg.ConfigVersion != 2 || h.cfg.DataRootBase == "" {
+		return ipc.StorageUsage{}, errors.New("shared storage requires a stable data_root_base")
+	}
+	personal, err := measureStorageUsage(ctx, h.cfg.DataRoot, personalStorageLimitBytes)
 	if err != nil {
 		return ipc.StorageUsage{}, err
 	}
+	sharedRoot := filepath.Join(filepath.Clean(h.cfg.DataRootBase), "shared", h.cfg.WindowsSID)
+	shared, err := measureStorageUsage(ctx, sharedRoot, sharedStorageLimitBytes)
+	if err != nil {
+		return ipc.StorageUsage{}, err
+	}
+	usage := ipc.StorageUsage{Personal: personal, Shared: shared}
 	h.storageUsage = usage
 	h.storageUsageAt = now
 	return usage, nil
 }
 
-func measureStorageUsage(ctx context.Context, root string) (ipc.StorageUsage, error) {
+func measureStorageUsage(ctx context.Context, root string, limitBytes uint64) (ipc.StorageBucketUsage, error) {
+	if limitBytes == 0 {
+		return ipc.StorageBucketUsage{}, errors.New("storage usage limit is required")
+	}
 	var used uint64
 	err := filepath.WalkDir(root, accumulateStorageEntry(ctx, &used))
 	if err != nil {
-		return ipc.StorageUsage{}, err
+		return ipc.StorageBucketUsage{}, err
 	}
 	remaining := uint64(0)
-	if used < userStorageLimitBytes {
-		remaining = userStorageLimitBytes - used
+	if used < limitBytes {
+		remaining = limitBytes - used
 	}
-	return ipc.StorageUsage{
-		LimitBytes:     userStorageLimitBytes,
+	return ipc.StorageBucketUsage{
+		LimitBytes:     limitBytes,
 		UsedBytes:      used,
 		RemainingBytes: remaining,
 		MeasuredAt:     time.Now().UTC().Format(time.RFC3339),
@@ -833,7 +1012,7 @@ func accumulateStorageEntry(ctx context.Context, used *uint64) fs.WalkDirFunc {
 		}
 		size := uint64(info.Size())
 		if ^uint64(0)-*used < size {
-			return errors.New("private storage usage overflowed")
+			return errors.New("storage usage overflowed")
 		}
 		*used += size
 		return nil
@@ -866,6 +1045,7 @@ func (h *Host) environment() []string {
 		"HOME": h.dirs.Profile, "USERPROFILE": h.dirs.Profile, "APPDATA": h.dirs.AppData, "LOCALAPPDATA": h.dirs.LocalAppData,
 		"TEMP": h.dirs.Temp, "TMP": h.dirs.Temp, "AIONUI_DATA_DIR": h.dirs.Data, "AIONUI_LOG_DIR": h.dirs.Logs,
 		"AIONUI_CACHE_DIR": h.dirs.Cache, "AIONUI_WORK_DIR": h.dirs.Workspace,
+		"AIONUI_RUNTIME_CONTROL_SECRET":    h.runtimeControlSecret,
 		"AIONUI_BUILTIN_ASSISTANTS_PATH":   filepath.Join(h.release.Path, "workagent-builtin-assistants"),
 		"CODEX_HOME":                       filepath.Join(h.dirs.Config, "codex"),
 		"KIMI_CODE_HOME":                   filepath.Join(h.dirs.Profile, ".kimi-code"),
