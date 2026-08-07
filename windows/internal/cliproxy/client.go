@@ -94,19 +94,20 @@ type publicKeyList struct {
 }
 
 type publicKey struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Enabled             bool              `json:"enabled"`
-	KeyPreview          string            `json:"key_preview"`
-	RPM                 int               `json:"rpm"`
-	Models              []json.RawMessage `json:"models"`
-	Aliases             []any             `json:"aliases"`
-	DailyLimitUSD       json.Number       `json:"daily_limit_usd"`
-	WeeklyLimitUSD      json.Number       `json:"weekly_limit_usd"`
-	AllowModelsEndpoint bool              `json:"allow_models_endpoint"`
-	Usage               any               `json:"usage"`
-	CreatedAt           string            `json:"created_at,omitempty"`
-	UpdatedAt           string            `json:"updated_at,omitempty"`
+	ID                        string            `json:"id"`
+	Name                      string            `json:"name"`
+	Enabled                   bool              `json:"enabled"`
+	KeyPreview                string            `json:"key_preview"`
+	RPM                       int               `json:"rpm"`
+	Models                    []json.RawMessage `json:"models"`
+	Aliases                   []any             `json:"aliases"`
+	DailyLimitUSD             json.Number       `json:"daily_limit_usd"`
+	WeeklyLimitUSD            json.Number       `json:"weekly_limit_usd"`
+	AllowModelsEndpoint       bool              `json:"allow_models_endpoint"`
+	CollaborationTargetKeyIDs []string          `json:"collaboration_target_key_ids,omitempty"`
+	Usage                     any               `json:"usage"`
+	CreatedAt                 string            `json:"created_at,omitempty"`
+	UpdatedAt                 string            `json:"updated_at,omitempty"`
 }
 
 type keyWrite struct {

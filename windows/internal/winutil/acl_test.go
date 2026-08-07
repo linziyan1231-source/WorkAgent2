@@ -9,6 +9,49 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func TestSharedProjectPolicyAllowsAcceptedMemberOwnersButNeverReparsePoints(t *testing.T) {
+	owner := "S-1-5-21-1-1001"
+	member := "S-1-5-21-1-1002"
+	policy := SharedProjectPolicy(owner, []string{member})
+	if policy.allowContainedReparsePoints {
+		t.Fatal("shared projects must reject all contained reparse points")
+	}
+	if !allowedOwner(policy, member) {
+		t.Fatal("accepted members must be permitted as NTFS owners of files they create")
+	}
+	if policy.Principals[member] != ACLModify {
+		t.Fatal("accepted members must modify files without WRITE_DAC or WRITE_OWNER")
+	}
+	if policy.Principals[OwnerRightsSID] != ACLModify {
+		t.Fatal("member-owned files must restrict implicit owner rights to modify without WRITE_DAC")
+	}
+	removed := SharedProjectPolicy(owner, nil)
+	if allowedOwner(removed, member) {
+		t.Fatal("removed members must no longer be accepted as file owners after ACL rewrite")
+	}
+}
+
+func TestApplyAndVerifySharedProjectACLRestrictsOwnerRights(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "shared-project")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "member-editable.txt"), []byte("shared"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := SharedProjectPolicy(identity.SID, []string{"S-1-5-21-1-1002"})
+	if err := ApplyTreeACL(root, policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyTreeACL(root, policy); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApplyAndVerifyProtectedPrivateTreeACL(t *testing.T) {
 	identity, err := CurrentIdentity()
 	if err != nil {
@@ -173,7 +216,7 @@ func TestOwnerRightsPrivateTreeExceptionRemainsNarrow(t *testing.T) {
 
 	t.Run("cross-user SID ACE", func(t *testing.T) {
 		path := newDirectory(t)
-		foreignUserSID := "S-1-5-21-1280439226-1918457042-1239661119-3216"
+		foreignUserSID := "S-1-5-21-111-222-333-1001"
 		applySecurityDescriptorForTest(t, path, "O:"+identity.SID+"G:"+SystemSID+"D:P"+
 			"(A;;FA;;;"+OwnerRightsSID+")"+
 			"(A;;FA;;;"+SystemSID+")"+
@@ -275,6 +318,12 @@ func TestPrivateTreeAllowsOnlyContainedDescendantReparsePoints(t *testing.T) {
 	}
 	if err := VerifyTreeACL(root, SharedReadOnlyPolicy()); err == nil {
 		t.Fatal("shared immutable policy accepted a reparse point")
+	}
+	if err := ApplyTreeACL(root, SharedProjectPolicy(identity.SID, nil)); err == nil {
+		t.Fatal("shared project policy accepted a contained reparse point")
+	}
+	if err := VerifyTreeACL(root, SharedProjectPolicy(identity.SID, nil)); err == nil {
+		t.Fatal("shared project policy verified a contained reparse point")
 	}
 }
 

@@ -23,9 +23,47 @@ $c = 'c' * 64
 Assert-ReleaseScopeContract -ReleaseScope 'web-only' -IncludedComponents @('web')
 Assert-ReleaseScopeContract -ReleaseScope 'runtime-only' -IncludedComponents @('AionAgentCli.exe')
 Assert-ReleaseScopeContract -ReleaseScope 'backend-only' -IncludedComponents @('AionUiUserHost.exe')
-Assert-ReleaseScopeContract -ReleaseScope 'combined' -IncludedComponents @('web', 'AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe')
+Assert-ReleaseScopeContract -ReleaseScope 'combined' -IncludedComponents @('web', 'AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionKimiDatasourceBroker.exe')
 Assert-Throws { Assert-ReleaseScopeContract -ReleaseScope 'web-only' -IncludedComponents @('web', 'AionUiUserHost.exe') } 'exactly the web component'
 Assert-Throws { Assert-ReleaseScopeContract -ReleaseScope 'backend-only' -IncludedComponents @('AionAgentCli.exe') } 'Portal backend executables'
+
+$refreshMessage = '系统正在升级，页面可能需要刷新，但正在进行的任务不会中断'
+$interruptionMessage = '系统正在升级，正在进行的任务可能会中断'
+foreach ($safeRelease in @(
+    @{ Scope = 'web-only'; Components = @('web') },
+    @{ Scope = 'backend-only'; Components = @('AionUiPortal.exe') },
+    @{ Scope = 'backend-only'; Components = @('portal.exe') },
+    @{ Scope = 'combined'; Components = @('web', 'AionUiPortal.exe', 'portal.exe') }
+)) {
+    if ((Get-UpgradeInterruptionClass -ReleaseScope $safeRelease.Scope -IncludedComponents $safeRelease.Components) -cne 'refresh-only') {
+        throw "Safe release was not classified as refresh-only: $($safeRelease.Components -join ',')"
+    }
+    if ((Get-UpgradeNotificationMessage -ReleaseScope $safeRelease.Scope -IncludedComponents $safeRelease.Components) -cne $refreshMessage) {
+        throw "Safe release received the wrong notification: $($safeRelease.Components -join ',')"
+    }
+}
+foreach ($interruptingRelease in @(
+    @{ Scope = 'runtime-only'; Components = @('AionAgentCli.exe') },
+    @{ Scope = 'backend-only'; Components = @('AionUiUserHost.exe') },
+    @{ Scope = 'combined'; Components = @('web', 'AionUiUserHost.exe') }
+)) {
+    if ((Get-UpgradeInterruptionClass -ReleaseScope $interruptingRelease.Scope -IncludedComponents $interruptingRelease.Components) -cne 'task-interruption-possible') {
+        throw "Interrupting release was not classified correctly: $($interruptingRelease.Components -join ',')"
+    }
+    if ((Get-UpgradeNotificationMessage -ReleaseScope $interruptingRelease.Scope -IncludedComponents $interruptingRelease.Components) -cne $interruptionMessage) {
+        throw "Interrupting release received the wrong notification: $($interruptingRelease.Components -join ',')"
+    }
+}
+
+$published = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"}]}' | ConvertFrom-Json
+Assert-PublishedUpgradeNotification -Payload $published -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage
+Assert-Throws {
+    Assert-PublishedUpgradeNotification -Payload $published -ExpectedId 'upgrade-safe-1' -ExpectedMessage $interruptionMessage
+} 'wrong interruption message'
+$duplicate = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"},{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"}]}' | ConvertFrom-Json
+Assert-Throws {
+    Assert-PublishedUpgradeNotification -Payload $duplicate -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage
+} 'exactly one notification'
 
 if (-not (Test-UpgradeComponentTransition -Component 'AionUiUserHost.exe' -CurrentSha256 $a -TargetSha256 $b -ExpectedInstalledSha256 $a)) {
     throw 'A baseline-to-target transition was incorrectly treated as a no-op.'
@@ -47,12 +85,24 @@ if ($agentCliPublisher -notmatch 'Stop-PortalUserHosts\s+& \$launcher release ac
     throw 'Agent CLI publisher must stop every Portal UserHost immediately before activating current.json.'
 }
 
+$install = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install.ps1') -Raw
 $upgrade = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Upgrade.ps1') -Raw
+foreach ($requiredNotificationScript in @('ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1')) {
+    if (-not $install.Contains("'$requiredNotificationScript'")) {
+        throw "Install script does not preserve the notification publisher dependency: $requiredNotificationScript"
+    }
+    if (-not $upgrade.Contains("'$requiredNotificationScript'")) {
+        throw "Upgrade script does not preserve the notification publisher dependency: $requiredNotificationScript"
+    }
+}
+
 foreach ($required in @(
     "if (`$updatesUserHostBinary)",
     "Wait-AllInstancesIdle.ps1",
     "if (-not `$updatesUserHostBinary) { `$releaseInstallArguments += '--allow-running' }",
-    "if (`$portalServiceStoppedForUpgrade)"
+    "if (`$portalServiceStoppedForUpgrade)",
+    "Get-UpgradeNotificationMessage",
+    "Assert-PublishedUpgradeNotification"
 )) {
     if (-not $upgrade.Contains($required)) { throw "Upgrade script is missing the non-interrupting cutover contract: $required" }
 }
@@ -61,4 +111,4 @@ if ($stopAllInstancesCalls -ne 1) {
     throw "Upgrade script must stop all instances only in the UserHost-binary drain path; calls=$stopAllInstancesCalls."
 }
 
-Write-Host 'Release scope, optimistic baseline, idempotence, preserved-component, CLI cutover, and non-interrupting Web cutover tests passed.'
+Write-Host 'Release scope, notification classification, optimistic baseline, idempotence, preserved-component, CLI cutover, and non-interrupting Web cutover tests passed.'

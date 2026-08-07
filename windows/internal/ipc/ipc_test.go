@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -57,5 +58,37 @@ func TestProtectedPipeRoundTrip(t *testing.T) {
 func TestSDDLRejectsNonSID(t *testing.T) {
 	if _, err := SDDL("alice", "S-1-5-18"); err == nil {
 		t.Fatal("non-SID owner accepted")
+	}
+}
+
+func TestSharedAgentRequestUsesRunSizedDeadline(t *testing.T) {
+	if requestTimeout("status") != 15*time.Second {
+		t.Fatalf("status timeout=%s", requestTimeout("status"))
+	}
+	if requestTimeout("shared_agent_run") <= 30*time.Minute {
+		t.Fatalf("shared agent timeout=%s", requestTimeout("shared_agent_run"))
+	}
+}
+
+func TestSharedAgentFrameFitsValidatedContextLimits(t *testing.T) {
+	request := Request{
+		ProtocolVersion: ProtocolVersion,
+		Command:         "shared_agent_run",
+		Nonce:           "0123456789abcdef",
+		SharedAgent: &SharedAgentRequest{
+			Context:         string(bytes.Repeat([]byte("a"), 512*1024)),
+			RecoveryContext: string(bytes.Repeat([]byte("b"), 768*1024)),
+		},
+	}
+	var frame bytes.Buffer
+	if err := writeFrame(&frame, request); err != nil {
+		t.Fatal(err)
+	}
+	var decoded Request
+	if err := readFrame(&frame, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.SharedAgent.Context) != 512*1024 || len(decoded.SharedAgent.RecoveryContext) != 768*1024 {
+		t.Fatal("shared agent context was truncated")
 	}
 }

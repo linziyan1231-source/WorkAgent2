@@ -14,6 +14,8 @@ import (
 
 func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case http.MethodGet:
+		s.listProjects(w, r)
 	case http.MethodPost:
 		s.createProject(w, r)
 	case http.MethodPatch:
@@ -21,6 +23,24 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
+	session, _, err := s.session(r)
+	if err != nil {
+		writeProjectError(w, http.StatusUnauthorized, "SESSION_REQUIRED", "Portal session is required")
+		return
+	}
+	if r.URL.RawQuery != "" {
+		writeProjectError(w, http.StatusBadRequest, "INVALID_PROJECT_REQUEST", "Project list does not accept query parameters")
+		return
+	}
+	result, err := s.instances.ListProjects(r.Context(), session.User.WindowsSID)
+	if err != nil {
+		writeProjectError(w, http.StatusServiceUnavailable, "PROJECT_LIST_FAILED", "Projects could not be listed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": result})
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {

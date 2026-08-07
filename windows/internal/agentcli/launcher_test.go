@@ -23,7 +23,7 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	}
 
 	arguments := []string{"exec", "--json", `C:\work with spaces`}
-	environment := []string{`Path=C:\Windows\System32`, `CODEX_HOME=C:\Users\user-87eba76e\AionUiPortal\config\codex`}
+	environment := []string{`Path=C:\Windows\System32`, `CODEX_HOME=C:\Users\worker\AionUiPortal\config\codex`}
 	codex, err := Spec(filepath.Join(root, "bin", "codex.exe"), arguments, environment)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 	if !strings.HasPrefix(environmentValue(codex.Env, "PATH"), filepath.Join(releasePath, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-path")+string(os.PathListSeparator)) {
 		t.Fatalf("Codex support PATH was not prepended: %s", environmentValue(codex.Env, "PATH"))
 	}
-	if environmentValue(codex.Env, "CODEX_HOME") != `C:\Users\user-87eba76e\AionUiPortal\config\codex` {
+	if environmentValue(codex.Env, "CODEX_HOME") != `C:\Users\worker\AionUiPortal\config\codex` {
 		t.Fatal("per-user CODEX_HOME was overwritten")
 	}
 	ripgrep, err := Spec(filepath.Join(root, "bin", "rg.exe"), []string{"微信", `C:\docs`}, environment)
@@ -65,7 +65,7 @@ func TestLauncherSpecsUseStablePointerAndPreserveArguments(t *testing.T) {
 		environmentValue(kimi.Env, "PYTHONDONTWRITEBYTECODE") != "1" {
 		t.Fatalf("unexpected Kimi launcher spec: %+v", kimi)
 	}
-	perUserKimiEnvironment := append(append([]string(nil), perUserEnvironment...), `USERPROFILE=C:\Users\user-87eba76e\AionUiPortal\profile`)
+	perUserKimiEnvironment := append(append([]string(nil), perUserEnvironment...), `USERPROFILE=C:\Users\worker\AionUiPortal\profile`)
 	perUserKimi, err := Spec(filepath.Join(root, "bin", "kimi.exe"), []string{"--version"}, perUserKimiEnvironment)
 	if err != nil {
 		t.Fatal(err)

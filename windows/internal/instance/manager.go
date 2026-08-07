@@ -136,7 +136,30 @@ func (m *Manager) Ensure(ctx context.Context, sid string) (ipc.Status, error) {
 	if err := m.tasks.Start(ctx, sid); err != nil {
 		return ipc.Status{}, fmt.Errorf("start scheduled UserHost task: %w", err)
 	}
-	deadline := m.now().Add(time.Duration(m.cfg.InstanceStartupSeconds) * time.Second)
+	return m.waitHealthyLocked(ctx, sid, state, time.Duration(m.cfg.InstanceStartupSeconds)*time.Second)
+}
+
+// WaitHealthy waits for an already-started UserHost without starting another
+// scheduled-task run. Provisioning uses this when the task is demonstrably
+// still running after the normal interactive-login startup deadline.
+func (m *Manager) WaitHealthy(ctx context.Context, sid string, timeout time.Duration) (ipc.Status, error) {
+	if timeout <= 0 {
+		return ipc.Status{}, errors.New("UserHost healthy wait timeout must be positive")
+	}
+	state := m.runtime(sid)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.draining {
+		return ipc.Status{}, ErrDraining
+	}
+	if err := m.requireEnabled(ctx, sid); err != nil {
+		return ipc.Status{}, err
+	}
+	return m.waitHealthyLocked(ctx, sid, state, timeout)
+}
+
+func (m *Manager) waitHealthyLocked(ctx context.Context, sid string, state *runtimeState, timeout time.Duration) (ipc.Status, error) {
+	deadline := m.now().Add(timeout)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	var lastStatus ipc.Status
@@ -268,17 +291,21 @@ func (m *Manager) StorageUsage(ctx context.Context, sid string) (ipc.StorageUsag
 	if err != nil {
 		return ipc.StorageUsage{}, err
 	}
-	if response.StorageUsage == nil || response.StorageUsage.LimitBytes == 0 || response.StorageUsage.MeasuredAt == "" {
-		return ipc.StorageUsage{}, errors.New("UserHost returned invalid private storage usage")
-	}
-	expectedRemaining := uint64(0)
-	if response.StorageUsage.UsedBytes < response.StorageUsage.LimitBytes {
-		expectedRemaining = response.StorageUsage.LimitBytes - response.StorageUsage.UsedBytes
-	}
-	if response.StorageUsage.RemainingBytes != expectedRemaining {
-		return ipc.StorageUsage{}, errors.New("UserHost returned invalid private storage usage")
+	if response.StorageUsage == nil || !validStorageBucket(response.StorageUsage.Personal) || !validStorageBucket(response.StorageUsage.Shared) {
+		return ipc.StorageUsage{}, errors.New("UserHost returned invalid independent storage usage")
 	}
 	return *response.StorageUsage, nil
+}
+
+func validStorageBucket(value ipc.StorageBucketUsage) bool {
+	if value.LimitBytes == 0 || value.MeasuredAt == "" {
+		return false
+	}
+	expectedRemaining := uint64(0)
+	if value.UsedBytes < value.LimitBytes {
+		expectedRemaining = value.LimitBytes - value.UsedBytes
+	}
+	return value.RemainingBytes == expectedRemaining
 }
 
 func (m *Manager) WriteUsageSnapshot(ctx context.Context, sid string, snapshot []byte) error {
@@ -326,7 +353,7 @@ func (m *Manager) CreateProject(ctx context.Context, sid, name string) (ipc.Proj
 	if err != nil {
 		return ipc.ProjectCreateResult{}, err
 	}
-	if response.ProjectCreate == nil || response.ProjectCreate.Path == "" {
+	if response.ProjectCreate == nil || response.ProjectCreate.Path == "" || response.ProjectCreate.ProjectID == "" {
 		return ipc.ProjectCreateResult{}, errors.New("UserHost returned an incomplete project creation result")
 	}
 	return *response.ProjectCreate, nil
@@ -342,19 +369,215 @@ func (m *Manager) RenameProject(ctx context.Context, sid, oldName, newName strin
 	if err != nil {
 		return ipc.ProjectRenameResult{}, err
 	}
-	if response.ProjectRename == nil || response.ProjectRename.NewPath == "" || response.ProjectRename.OldPath == "" {
+	if response.ProjectRename == nil || response.ProjectRename.NewPath == "" || response.ProjectRename.OldPath == "" || response.ProjectRename.ProjectID == "" {
 		return ipc.ProjectRenameResult{}, errors.New("UserHost returned an incomplete project rename result")
 	}
 	return *response.ProjectRename, nil
 }
 
+func (m *Manager) ResolveProject(ctx context.Context, sid, projectID string) (ipc.ProjectResolveResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.ProjectResolveResult{}, err
+	}
+	request := ipc.ProjectResolveRequest{InstanceID: id(status), ProjectID: projectID}
+	response, err := m.request(ctx, sid, ipc.Request{Command: "project_resolve", ProjectResolve: &request})
+	if err != nil {
+		return ipc.ProjectResolveResult{}, err
+	}
+	if response.ProjectResolve == nil || response.ProjectResolve.Path == "" {
+		return ipc.ProjectResolveResult{}, errors.New("UserHost returned an incomplete project resolution result")
+	}
+	return *response.ProjectResolve, nil
+}
+
+func (m *Manager) ListProjects(ctx context.Context, sid string) (ipc.ProjectListResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.ProjectListResult{}, err
+	}
+	request := ipc.ProjectListRequest{InstanceID: id(status)}
+	response, err := m.request(ctx, sid, ipc.Request{Command: "project_list", ProjectList: &request})
+	if err != nil {
+		return ipc.ProjectListResult{}, err
+	}
+	if response.ProjectList == nil {
+		return ipc.ProjectListResult{}, errors.New("UserHost returned no project list")
+	}
+	return *response.ProjectList, nil
+}
+
+func (m *Manager) ProvisionSharedProject(ctx context.Context, sid string, request ipc.SharedProjectRequest) (ipc.SharedProjectResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.SharedProjectResult{}, err
+	}
+	request.InstanceID = id(status)
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_project_provision", SharedProject: &request})
+	if err != nil {
+		return ipc.SharedProjectResult{}, err
+	}
+	if response.SharedProject == nil || response.SharedProject.ProjectID != request.ProjectID {
+		return ipc.SharedProjectResult{}, errors.New("UserHost returned an invalid shared project result")
+	}
+	return *response.SharedProject, nil
+}
+
+func (m *Manager) UpdateSharedProjectACL(ctx context.Context, sid string, request ipc.SharedProjectRequest) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_project_acl", SharedProject: &request})
+	if err != nil {
+		return err
+	}
+	if response.SharedProject == nil || response.SharedProject.ProjectID != request.ProjectID {
+		return errors.New("UserHost returned an invalid shared project ACL result")
+	}
+	return nil
+}
+
+func (m *Manager) FinishSharedProjectProvisioning(ctx context.Context, sid string, request ipc.SharedProjectRequest, commit bool) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	request.Commit = commit
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_project_finish", SharedProject: &request})
+	if err != nil {
+		return err
+	}
+	if response.SharedProject == nil || response.SharedProject.ProjectID != request.ProjectID {
+		return errors.New("UserHost returned an invalid shared project finalization result")
+	}
+	return nil
+}
+
+func (m *Manager) RunSharedAgent(ctx context.Context, sid string, request ipc.SharedAgentRequest) (ipc.SharedAgentResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.SharedAgentResult{}, err
+	}
+	request.InstanceID = id(status)
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_agent_run", SharedAgent: &request})
+	if err != nil {
+		return ipc.SharedAgentResult{}, err
+	}
+	if response.SharedAgent == nil || response.SharedAgent.RuntimeConversationID == "" {
+		return ipc.SharedAgentResult{}, errors.New("UserHost returned an invalid shared agent result")
+	}
+	return *response.SharedAgent, nil
+}
+
+func (m *Manager) StopSharedAgent(ctx context.Context, sid string, request ipc.SharedAgentStopRequest) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	_, err = m.request(ctx, sid, ipc.Request{Command: "shared_agent_stop", SharedAgentStop: &request})
+	return err
+}
+
+func (m *Manager) InstallSharedAgentCredential(ctx context.Context, sid string, request ipc.SharedAgentCredentialRequest) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_agent_credential_install", SharedCredential: &request})
+	if err != nil {
+		return err
+	}
+	if response.SharedCredential == nil || !response.SharedCredential.Installed {
+		return errors.New("UserHost did not retain the shared Agent credential")
+	}
+	return nil
+}
+
+func (m *Manager) VerifySharedAgentCredential(ctx context.Context, sid, credentialID string) (bool, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return false, err
+	}
+	request := ipc.SharedAgentCredentialRequest{InstanceID: id(status), CredentialID: credentialID}
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_agent_credential_verify", SharedCredential: &request})
+	if err != nil {
+		return false, err
+	}
+	if response.SharedCredential == nil {
+		return false, errors.New("UserHost returned an invalid shared credential status")
+	}
+	return response.SharedCredential.Installed, nil
+}
+
+func (m *Manager) SharedFile(ctx context.Context, sid string, request ipc.SharedFileRequest) (ipc.SharedFileResult, error) {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return ipc.SharedFileResult{}, err
+	}
+	request.InstanceID = id(status)
+	response, err := m.request(ctx, sid, ipc.Request{Command: "shared_file", SharedFile: &request})
+	if err != nil {
+		return ipc.SharedFileResult{}, err
+	}
+	if response.SharedFile == nil || !json.Valid(response.SharedFile.Data) {
+		return ipc.SharedFileResult{}, errors.New("UserHost returned invalid shared file data")
+	}
+	return *response.SharedFile, nil
+}
+
+func (m *Manager) TransferSharedProject(ctx context.Context, sid string, request ipc.SharedTransferRequest) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	_, err = m.request(ctx, sid, ipc.Request{Command: "shared_project_transfer", SharedTransfer: &request})
+	return err
+}
+
+func (m *Manager) FinishSharedProjectTransfer(ctx context.Context, sid string, request ipc.SharedTransferRequest, commit bool) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	request.Commit = commit
+	_, err = m.request(ctx, sid, ipc.Request{Command: "shared_project_transfer_finish", SharedTransfer: &request})
+	return err
+}
+
+func (m *Manager) RelocateSharedProjectConversations(ctx context.Context, sid string, request ipc.SharedConversationRelocateRequest) error {
+	status, err := m.Ensure(ctx, sid)
+	if err != nil {
+		return err
+	}
+	request.InstanceID = id(status)
+	_, err = m.request(ctx, sid, ipc.Request{Command: "shared_conversations_relocate", SharedRelocate: &request})
+	return err
+}
+
 func (m *Manager) Stop(ctx context.Context, sid string) error {
+	return m.drain(ctx, sid, "stop")
+}
+
+// Restart asks the SID-owned UserHost to tear down its complete process tree.
+// The next authenticated browser request starts a fresh scheduled UserHost run.
+func (m *Manager) Restart(ctx context.Context, sid string) error {
+	return m.drain(ctx, sid, "restart")
+}
+
+func (m *Manager) drain(ctx context.Context, sid, command string) error {
 	state := m.runtime(sid)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.draining = true
 	defer func() { state.draining = false }()
-	_, err := m.command(ctx, sid, "stop")
+	_, err := m.command(ctx, sid, command)
 	state.auth, state.authInstanceID = ipc.AuthMaterial{}, ""
 	return err
 }

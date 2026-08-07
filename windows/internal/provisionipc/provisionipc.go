@@ -22,11 +22,15 @@ const (
 )
 
 type Request struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	Command         string `json:"command"`
-	Username        string `json:"username"`
-	PortalPassword  []byte `json:"portal_password"`
-	Nonce           string `json:"nonce"`
+	ProtocolVersion int      `json:"protocol_version"`
+	Command         string   `json:"command"`
+	Username        string   `json:"username"`
+	PortalPassword  []byte   `json:"portal_password"`
+	Enabled         bool     `json:"enabled,omitempty"`
+	AllowedSources  []string `json:"allowed_sources,omitempty"`
+	DailyLimit      int      `json:"daily_limit,omitempty"`
+	MonthlyLimit    int      `json:"monthly_limit,omitempty"`
+	Nonce           string   `json:"nonce"`
 }
 
 type User struct {
@@ -41,13 +45,23 @@ type Progress struct {
 }
 
 type Response struct {
-	ProtocolVersion int       `json:"protocol_version"`
-	Nonce           string    `json:"nonce"`
-	OK              bool      `json:"ok"`
-	ErrorCode       string    `json:"error_code,omitempty"`
-	ErrorMessage    string    `json:"error_message,omitempty"`
-	User            *User     `json:"user,omitempty"`
-	Progress        *Progress `json:"progress,omitempty"`
+	ProtocolVersion int                  `json:"protocol_version"`
+	Nonce           string               `json:"nonce"`
+	OK              bool                 `json:"ok"`
+	ErrorCode       string               `json:"error_code,omitempty"`
+	ErrorMessage    string               `json:"error_message,omitempty"`
+	User            *User                `json:"user,omitempty"`
+	KimiDatasource  *KimiDatasourceGrant `json:"kimi_datasource,omitempty"`
+	Progress        *Progress            `json:"progress,omitempty"`
+}
+
+type KimiDatasourceGrant struct {
+	Enabled        bool     `json:"enabled"`
+	AllowedSources []string `json:"allowed_sources"`
+	DailyLimit     int      `json:"daily_limit"`
+	MonthlyLimit   int      `json:"monthly_limit"`
+	DailyUsed      int      `json:"daily_used"`
+	MonthlyUsed    int      `json:"monthly_used"`
 }
 
 type Handler func(context.Context, Request, func(Progress)) Response
@@ -112,7 +126,8 @@ func (s *Server) accept(ctx context.Context, handler Handler) {
 			if err := readFrame(connection, &request); err != nil {
 				return
 			}
-			if request.ProtocolVersion != ProtocolVersion || len(request.Nonce) < 16 || len(request.Nonce) > 256 || request.Command != "add-user" {
+			if request.ProtocolVersion != ProtocolVersion || len(request.Nonce) < 16 || len(request.Nonce) > 256 ||
+				(request.Command != "add-user" && request.Command != "set-kimi-datasource") {
 				_ = writeFrame(connection, Response{ProtocolVersion: ProtocolVersion, Nonce: request.Nonce, ErrorCode: "BAD_REQUEST", ErrorMessage: "invalid provision request"})
 				return
 			}

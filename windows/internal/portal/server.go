@@ -36,7 +36,6 @@ const (
 
 type InstanceManager interface {
 	Ensure(context.Context, string) (ipc.Status, error)
-	Status(context.Context, string) (ipc.Status, error)
 	Route(context.Context, string) (instance.Route, error)
 	Touch(context.Context, string) error
 	OAuthStart(context.Context, string, ipc.OAuthStartRequest) (ipc.OAuthResult, error)
@@ -44,15 +43,30 @@ type InstanceManager interface {
 	OAuthCancel(context.Context, string, ipc.OAuthCancelRequest) error
 	CreateProject(context.Context, string, string) (ipc.ProjectCreateResult, error)
 	RenameProject(context.Context, string, string, string, bool, bool) (ipc.ProjectRenameResult, error)
+	ResolveProject(context.Context, string, string) (ipc.ProjectResolveResult, error)
+	ListProjects(context.Context, string) (ipc.ProjectListResult, error)
+	ProvisionSharedProject(context.Context, string, ipc.SharedProjectRequest) (ipc.SharedProjectResult, error)
+	FinishSharedProjectProvisioning(context.Context, string, ipc.SharedProjectRequest, bool) error
+	RunSharedAgent(context.Context, string, ipc.SharedAgentRequest) (ipc.SharedAgentResult, error)
+	StopSharedAgent(context.Context, string, ipc.SharedAgentStopRequest) error
+	InstallSharedAgentCredential(context.Context, string, ipc.SharedAgentCredentialRequest) error
+	VerifySharedAgentCredential(context.Context, string, string) (bool, error)
+	SharedFile(context.Context, string, ipc.SharedFileRequest) (ipc.SharedFileResult, error)
+	TransferSharedProject(context.Context, string, ipc.SharedTransferRequest) error
+	FinishSharedProjectTransfer(context.Context, string, ipc.SharedTransferRequest, bool) error
+	RelocateSharedProjectConversations(context.Context, string, ipc.SharedConversationRelocateRequest) error
+	UpdateSharedProjectACL(context.Context, string, ipc.SharedProjectRequest) error
 	BeginRequest(string, bool) (func(), error)
 	ModelKeyIDs(context.Context, string) (modelbootstrap.KeyIDs, error)
 	StorageUsage(context.Context, string) (ipc.StorageUsage, error)
 	WriteUsageSnapshot(context.Context, string, []byte) error
 	Stop(context.Context, string) error
+	Restart(context.Context, string) error
 }
 
 type UsageService interface {
 	Current(context.Context, string, modelbootstrap.KeyIDs) (portalusage.Summary, error)
+	CurrentMany(context.Context, []string) (map[string]portalusage.Summary, error)
 }
 
 type Server struct {
@@ -74,8 +88,10 @@ type Server struct {
 	chatForwardSecret  []byte
 	notificationTarget *url.URL
 	notificationClient *http.Client
+	skillMarketRoot    string
 	provision          func(context.Context, provisionipc.Request, func(provisionipc.Progress)) (provisionipc.Response, error)
 	provisionJobs      provisionJobStore
+	sharedEvents       *sharedEventHub
 }
 
 func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage UsageService, staticDir string, logger *log.Logger) (*Server, error) {
@@ -121,13 +137,22 @@ func New(cfg config.Portal, data *store.Store, instances InstanceManager, usage 
 	if err != nil {
 		return nil, err
 	}
+	skillMarketRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "skill-market")
+	if err := os.MkdirAll(skillMarketRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create skill market storage: %w", err)
+	}
 	return &Server{cfg: cfg, store: data, instances: instances, usage: usage, static: static, public: public, origins: browserOrigins, dummyHash: dummy, adminMasterHash: adminMasterHash, logger: logger, now: time.Now,
 		cookieName: cookieName, cookieSecure: cfg.UsesTLS(), profilePath: winutil.ProfileDirectoryForSID, chatForwardTarget: chatForwardTarget, chatForwardSecret: chatForwardSecret,
 		notificationTarget: notificationTarget, notificationClient: notificationClient, provision: provisionipc.CallWithProgress,
-		provisionJobs: provisionJobStore{items: make(map[string]provisionJob)}}, nil
+		skillMarketRoot: skillMarketRoot,
+		provisionJobs:   provisionJobStore{items: make(map[string]provisionJob)},
+		sharedEvents:    newSharedEventHub()}, nil
 }
 
 func (s *Server) userFilesystemRoot(sid string) (string, error) {
+	if s.cfg.UserDataRoot != "" {
+		return filepath.Join(filepath.Clean(s.cfg.UserDataRoot), sid), nil
+	}
 	profile, err := s.profilePath(sid)
 	if err != nil {
 		return "", err
@@ -188,6 +213,9 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if isCollaborationAPIPath(r.URL.Path) && !s.requireCollaborationEnabled(w, r) {
+		return
+	}
 	switch r.URL.Path {
 	case "/healthz":
 		if r.Method != http.MethodGet {
@@ -211,11 +239,74 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/portal/me/usage":
 		s.currentUsage(w, r)
 		return
+	case "/api/portal/me/profile":
+		s.profile(w, r)
+		return
+	case "/api/portal/me/restart-service":
+		s.restartCurrentUserService(w, r)
+		return
 	case "/api/portal/me/projects":
 		s.projects(w, r)
 		return
+	case "/api/portal/shared-projects":
+		s.sharedProjects(w, r)
+		return
+	case "/api/portal/shared-projects/hidden":
+		s.sharedProjectHidden(w, r)
+		return
+	case "/api/portal/shared-projects/transfer":
+		s.sharedProjectTransfer(w, r)
+		return
+	case "/api/portal/shared-conversations":
+		s.sharedConversations(w, r)
+		return
+	case "/api/portal/shared-runtime-options":
+		s.sharedRuntimeOptions(w, r)
+		return
+	case "/api/portal/shared-events":
+		s.sharedEventStream(w, r)
+		return
+	case "/api/portal/shared-files":
+		s.sharedFiles(w, r)
+		return
+	case "/api/portal/shared-messages":
+		s.sharedMessages(w, r)
+		return
+	case "/api/portal/shared-users":
+		s.sharedUsers(w, r)
+		return
+	case "/api/portal/shared-invites":
+		s.sharedInvites(w, r)
+		return
+	case "/api/portal/shared-invites/accept":
+		s.acceptSharedInvite(w, r)
+		return
+	case "/api/portal/shared-invites/decline":
+		s.declineSharedInvite(w, r)
+		return
+	case "/api/portal/shared-invite-links":
+		s.sharedInviteLinks(w, r)
+		return
+	case "/api/portal/shared-invite-links/accept":
+		s.acceptSharedInviteLink(w, r)
+		return
+	case "/api/portal/shared-members":
+		s.sharedMembers(w, r)
+		return
+	case "/api/portal/shared-members/leave":
+		s.leaveSharedProject(w, r)
+		return
 	case "/api/portal/me/notifications":
 		s.currentNotifications(w, r)
+		return
+	case "/api/portal/skill-market":
+		s.skillMarket(w, r)
+		return
+	case "/api/portal/skill-market/download":
+		s.downloadMarketSkill(w, r)
+		return
+	case "/api/portal/skill-market/install":
+		s.installMarketSkill(w, r)
 		return
 	case "/api/portal/admin/users":
 		s.adminUsers(w, r)
@@ -234,6 +325,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/portal/admin/users/reset-password":
 		s.resetUserPassword(w, r)
+		return
+	case "/api/portal/admin/users/kimi-datasource":
+		s.setUserKimiDatasource(w, r)
 		return
 	case "/internal/chatforward/quota/reserve":
 		s.chatForwardQuotaReserve(w, r)
@@ -571,7 +665,51 @@ func (s *Server) authUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func authUserPayload(user store.User) map[string]any {
-	return map[string]any{"id": strconv.FormatInt(user.ID, 10), "username": user.Username, "admin": user.Admin}
+	return map[string]any{
+		"id": strconv.FormatInt(user.ID, 10), "username": user.Username, "display_name": user.DisplayName, "admin": user.Admin,
+		"collaboration_enabled": user.CollaborationEnabled, "collaboration_capable": !user.Admin,
+	}
+}
+
+func isCollaborationAPIPath(path string) bool {
+	switch path {
+	case "/api/portal/shared-projects",
+		"/api/portal/shared-projects/hidden",
+		"/api/portal/shared-projects/transfer",
+		"/api/portal/shared-conversations",
+		"/api/portal/shared-runtime-options",
+		"/api/portal/shared-events",
+		"/api/portal/shared-files",
+		"/api/portal/shared-messages",
+		"/api/portal/shared-users",
+		"/api/portal/shared-invites",
+		"/api/portal/shared-invites/accept",
+		"/api/portal/shared-invites/decline",
+		"/api/portal/shared-invite-links",
+		"/api/portal/shared-invite-links/accept",
+		"/api/portal/shared-members",
+		"/api/portal/shared-members/leave":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) requireCollaborationEnabled(w http.ResponseWriter, r *http.Request) bool {
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return false
+	}
+	if session.User.Admin || !session.User.CollaborationEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"success": false,
+			"code":    "COLLABORATION_DISABLED",
+			"message": "User collaboration is disabled in your profile",
+		})
+		return false
+	}
+	return true
 }
 
 func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
@@ -592,9 +730,14 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		items := make([]map[string]any, len(users))
 		for index, user := range users {
-			items[index] = managedUserPayload(user)
+			grant, err := s.store.KimiDatasourceGrantForUser(r.Context(), user.ID, s.now())
+			if err != nil {
+				s.internalError(w, "read managed user Kimi datasource grant", err)
+				return
+			}
+			items[index] = managedUserPayload(user, grant)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "users": items})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "users": items, "kimi_datasource_sources": store.KimiDatasourceSources})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -644,26 +787,20 @@ func (s *Server) adminUserUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
 		return
 	}
-	query := r.URL.Query()
-	usernames, valid := query["username"]
-	if !valid || len(query) != 1 || len(usernames) != 1 || strings.TrimSpace(usernames[0]) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Exactly one managed username is required"})
+	if r.URL.RawQuery != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Managed resource usage does not accept query parameters"})
 		return
 	}
-	user, err := s.store.UserByUsername(r.Context(), usernames[0])
-	if err != nil || user.Admin {
-		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
-		return
-	}
-	if !user.Enabled {
-		writeJSON(w, http.StatusConflict, map[string]any{"success": false, "message": "Managed user is disabled"})
+	users, err := s.store.ListManagedUsers(r.Context())
+	if err != nil {
+		s.internalError(w, "list managed users for resource usage", err)
 		return
 	}
 	usageCtx, cancel := context.WithTimeout(r.Context(), time.Duration(s.cfg.UsageQueryTimeoutSecs)*time.Second)
 	defer cancel()
-	summary, err := s.managedUserUsage(usageCtx, user)
+	items, err := s.managedUsersUsage(usageCtx, users)
 	if err != nil {
-		s.logger.Printf("Administrator resource usage unavailable username=%s", user.Username)
+		s.logger.Print("Administrator resource usage unavailable")
 		if errors.Is(usageCtx.Err(), context.DeadlineExceeded) {
 			writeJSON(w, http.StatusGatewayTimeout, map[string]any{"success": false, "message": "Resource usage request timed out"})
 			return
@@ -671,16 +808,86 @@ func (s *Server) adminUserUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Resource usage is unavailable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "username": user.Username, "resource_usage": summary})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "users": items})
 }
 
-func managedUserPayload(user store.User) map[string]any {
+func managedUserPayload(user store.User, grant store.KimiDatasourceGrant) map[string]any {
 	item := map[string]any{"username": user.Username, "windows_username": user.WindowsUsername, "windows_sid": user.WindowsSID, "enabled": user.Enabled,
-		"created_at": user.CreatedAt.UTC().Format(time.RFC3339)}
+		"display_name": user.DisplayName, "collaboration_enabled": user.CollaborationEnabled,
+		"created_at": user.CreatedAt.UTC().Format(time.RFC3339), "kimi_datasource": grant}
 	if user.LastLoginAt != nil {
 		item["last_login_at"] = user.LastLoginAt.UTC().Format(time.RFC3339)
 	}
 	return item
+}
+
+func (s *Server) setUserKimiDatasource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.validBrowserOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Security origin validation failed"})
+		return
+	}
+	session, _, err := s.session(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "Portal session is required"})
+		return
+	}
+	if !session.User.Admin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Administrator access is required"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var request struct {
+		Username       string   `json:"username"`
+		Enabled        bool     `json:"enabled"`
+		AllowedSources []string `json:"allowed_sources"`
+		DailyLimit     int      `json:"daily_limit"`
+		MonthlyLimit   int      `json:"monthly_limit"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "Invalid Kimi datasource policy request"})
+		return
+	}
+	user, err := s.store.UserByUsername(r.Context(), request.Username)
+	if err != nil || user.Admin {
+		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "message": "Managed user was not found"})
+		return
+	}
+	normalized, err := store.NormalizeKimiDatasourceSources(request.AllowedSources)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	if err := store.ValidateKimiDatasourceLimits(request.DailyLimit, request.MonthlyLimit); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	nonce, err := auth.RandomToken(18)
+	if err != nil {
+		s.internalError(w, "create Kimi datasource policy nonce", err)
+		return
+	}
+	requestCtx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	response, err := s.provision(requestCtx, provisionipc.Request{Command: "set-kimi-datasource", Username: user.Username, Enabled: request.Enabled,
+		AllowedSources: normalized, DailyLimit: request.DailyLimit, MonthlyLimit: request.MonthlyLimit, Nonce: nonce}, nil)
+	if err != nil || response.KimiDatasource == nil {
+		s.logger.Printf("Administrator Kimi datasource policy update failed username=%s", user.Username)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "Kimi datasource policy update failed"})
+		return
+	}
+	if err := s.audit(r.Context(), "portal.admin.user.kimi_datasource", "success", user.Username, user.WindowsSID, peerIP(r.RemoteAddr), map[string]any{
+		"actor": session.User.Username, "enabled": request.Enabled, "allowed_sources": normalized, "daily_limit": request.DailyLimit, "monthly_limit": request.MonthlyLimit,
+	}); err != nil {
+		s.internalError(w, "audit administrator Kimi datasource policy", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "kimi_datasource": response.KimiDatasource})
 }
 
 func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {

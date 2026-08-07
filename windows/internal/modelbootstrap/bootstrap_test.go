@@ -10,8 +10,8 @@ import (
 )
 
 func realBundle() Bundle {
-	return Bundle{State: State{FormatVersion: 1, BaseURL: "http://203.0.113.52:8317/v1", CodexKeyID: "aionui-0123456789abcdef-chatgpt",
-		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "example-reasoning", CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: ManagedKimiModels()},
+	return Bundle{State: State{FormatVersion: 1, BaseURL: "http://43.134.118.158:8317/v1", CodexKeyID: "aionui-0123456789abcdef-chatgpt",
+		KimiKeyID: "aionui-0123456789abcdef-kimi", CodexDefaultModel: "gpt-5.6-luna", CodexModels: []string{"gpt-5.6-luna", "gpt-5.4-mini"}, KimiModels: ManagedKimiModels()},
 		CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
 }
 
@@ -212,10 +212,10 @@ func TestRebaseRejectsAnyNonBaseURLChange(t *testing.T) {
 
 func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 	tests := []func(*Bundle){
-		func(bundle *Bundle) { bundle.BaseURL = "http://203.0.113.52:8317/v1/" },
+		func(bundle *Bundle) { bundle.BaseURL = "http://43.134.118.158:8317/v1/" },
 		func(bundle *Bundle) { bundle.KimiKeyID = bundle.CodexKeyID },
 		func(bundle *Bundle) { bundle.KimiAPIKey = bundle.CodexAPIKey },
-		func(bundle *Bundle) { bundle.CodexModels = append(bundle.CodexModels, "example-reasoning") },
+		func(bundle *Bundle) { bundle.CodexModels = append(bundle.CodexModels, "gpt-5.6-luna") },
 		func(bundle *Bundle) { bundle.CodexDefaultModel = "not-allowed" },
 		func(bundle *Bundle) { bundle.KimiModels = []string{"kimi-for-coding"} },
 		func(bundle *Bundle) { bundle.KimiModels = append(bundle.KimiModels, "kimi-other") },
@@ -232,35 +232,35 @@ func TestValidationRejectsSharedOrMalformedCredentials(t *testing.T) {
 func TestManagedModelPolicyIsExactAndReturnsCopies(t *testing.T) {
 	codex := ManagedCodexModels()
 	kimi := ManagedKimiModels()
-	if !reflect.DeepEqual(codex, []string{"example-reasoning", "example-balanced", "example-fast"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}) {
+	if !reflect.DeepEqual(codex, []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}) || !reflect.DeepEqual(kimi, []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"}) {
 		t.Fatalf("unexpected managed model policy: codex=%v kimi=%v", codex, kimi)
 	}
 	codex[0] = "changed"
-	if ManagedCodexModels()[0] != "example-reasoning" {
+	if ManagedCodexModels()[0] != "gpt-5.6-luna" {
 		t.Fatal("managed model policy leaked mutable storage")
 	}
 }
 
 func TestKeyIDsAreStableAndBoundToUppercaseSID(t *testing.T) {
-	const sid = "S-1-5-21-1335169958-1819941586-1322872941-1322"
-	want := KeyIDs{CodexKeyID: "aionui-6cd6d637d50327d44e4b-chatgpt", KimiKeyID: "aionui-6cd6d637d50327d44e4b-kimi"}
+	const sid = "S-1-5-21-100-200-300-1017"
+	want := KeyIDs{CodexKeyID: "aionui-c6caa7a66c7a1ad24ed9-chatgpt", KimiKeyID: "aionui-c6caa7a66c7a1ad24ed9-kimi"}
 	if got := KeyIDsForSID(sid); got != want {
 		t.Fatalf("key IDs=%+v, want %+v", got, want)
 	}
-	if got := KeyIDsForSID("s-1-5-21-1335169958-1819941586-1322872941-1322"); got != want {
+	if got := KeyIDsForSID("s-1-5-21-100-200-300-1017"); got != want {
 		t.Fatalf("lowercase SID derived different key IDs: %+v", got)
 	}
 	if err := want.ValidateForSID(sid); err != nil {
 		t.Fatal(err)
 	}
-	other := KeyIDsForSID("S-1-5-21-1836781275-1957422218-1832856846-7828")
+	other := KeyIDsForSID("S-1-5-21-100-200-300-1018")
 	if err := other.ValidateForSID(sid); err == nil {
 		t.Fatal("another user's well-formed key IDs matched this SID")
 	}
 }
 
 func TestAppliedKeyIDsReadsOnlySIDBoundAppliedMarker(t *testing.T) {
-	const sid = "S-1-5-21-1335169958-1819941586-1322872941-1322"
+	const sid = "S-1-5-21-100-200-300-1017"
 	root := t.TempDir()
 	ids := KeyIDsForSID(sid)
 	state := realBundle().State
@@ -289,7 +289,7 @@ func TestAppliedKeyIDsReadsOnlySIDBoundAppliedMarker(t *testing.T) {
 	if err != nil || got != ids {
 		t.Fatalf("marker-only key lookup failed: ids=%+v err=%v", got, err)
 	}
-	if _, err := AppliedKeyIDs(root, "S-1-5-21-1988320210-1174886911-1684912000-8042"); err == nil {
+	if _, err := AppliedKeyIDs(root, "S-1-5-21-100-200-300-9999"); err == nil {
 		t.Fatal("marker key IDs were accepted for another Windows SID")
 	}
 }

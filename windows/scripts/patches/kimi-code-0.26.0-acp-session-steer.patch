@@ -1,0 +1,114 @@
+diff --git a/packages/acp-adapter/src/server.ts b/packages/acp-adapter/src/server.ts
+--- a/packages/acp-adapter/src/server.ts
++++ b/packages/acp-adapter/src/server.ts
+@@ -20,6 +20,7 @@ import {
+   type AvailableCommand,
+   type CancelNotification,
+   type ClientCapabilities,
++  type ContentBlock,
+   type ForkSessionRequest,
+   type ForkSessionResponse,
+   type Implementation,
+@@ -795,8 +796,24 @@ export class AcpServer implements Agent {
+   */
+   async extMethod(
+     method: string,
+-    _params: Record<string, unknown>,
++    params: Record<string, unknown>,
+   ): Promise<Record<string, unknown>> {
++    if (method === '_aionui/session/steer') {
++      const sessionId = params.sessionId;
++      const prompt = params.prompt;
++      if (typeof sessionId !== 'string' || !Array.isArray(prompt)) {
++        throw RequestError.invalidParams(
++          { sessionId },
++          'AionUI steer requires sessionId and prompt',
++        );
++      }
++      const acpSession = this.sessions.get(sessionId);
++      if (!acpSession) {
++        throw RequestError.invalidParams({ sessionId }, `Unknown sessionId: ${sessionId}`);
++      }
++      await acpSession.steer(prompt as ContentBlock[]);
++      return {};
++    }
+     throw RequestError.methodNotFound(method);
+   }
+ 
+diff --git a/packages/acp-adapter/src/session.ts b/packages/acp-adapter/src/session.ts
+--- a/packages/acp-adapter/src/session.ts
++++ b/packages/acp-adapter/src/session.ts
+@@ -284,6 +284,11 @@ export class AcpSession {
+     await this.session.cancel();
+   }
+ 
++  /** Inject additional user guidance into the currently running turn. */
++  async steer(blocks: readonly ContentBlock[]): Promise<void> {
++    await this.session.steer(acpBlocksToPromptParts(blocks));
++  }
++
+   /**
+    * Seed the per-session `slash command name → skill name` map used by
+    * {@link prompt} to intercept `/skill:<name> ...` inputs. Called by
+diff --git a/packages/acp-adapter/test/ext-methods.test.ts b/packages/acp-adapter/test/ext-methods.test.ts
+--- a/packages/acp-adapter/test/ext-methods.test.ts
++++ b/packages/acp-adapter/test/ext-methods.test.ts
+@@ -13,9 +13,10 @@ import {
+   type WriteTextFileRequest,
+   type WriteTextFileResponse,
+ } from '@agentclientprotocol/sdk';
+-import type { KimiHarness } from '@moonshot-ai/kimi-code-sdk';
++import type { KimiHarness, Session } from '@moonshot-ai/kimi-code-sdk';
+ 
+ import { AcpServer } from '../src/server';
++import { AUTHED_STATUS } from './_helpers/harness-stubs';
+ 
+ class StubClient implements Client {
+   async requestPermission(_p: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+@@ -80,4 +81,46 @@ describe('AcpServer ext method surface', () => {
+       code: -32601,
+     });
+   });
++
++  it('forwards AionUI steer guidance to the active Kimi session', async () => {
++    const steerInputs: unknown[] = [];
++    const fakeSession = {
++      id: 'sess-steer',
++      steer: async (input: unknown) => {
++        steerInputs.push(input);
++      },
++    } as unknown as Session;
++    const harness = {
++      auth: { status: async () => AUTHED_STATUS },
++      createSession: async () => fakeSession,
++    } as unknown as KimiHarness;
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++    const { sessionId } = await client.newSession({ cwd: '/tmp/x', mcpServers: [] });
++
++    await expect(
++      client.extMethod('_aionui/session/steer', {
++        sessionId,
++        prompt: [{ type: 'text', text: 'Focus on the failing test.' }],
++      }),
++    ).resolves.toEqual({});
++    expect(steerInputs).toEqual([[{ type: 'text', text: 'Focus on the failing test.' }]]);
++  });
++
++  it('rejects AionUI steer for an unknown session', async () => {
++    const harness = makeMinimalHarness();
++    const { agentStream, clientStream } = makeInMemoryStreamPair();
++
++    new AgentSideConnection((c) => new AcpServer(harness, c), agentStream);
++    const client = new ClientSideConnection((_a) => new StubClient(), clientStream);
++
++    await expect(
++      client.extMethod('_aionui/session/steer', {
++        sessionId: 'missing',
++        prompt: [{ type: 'text', text: 'hello' }],
++      }),
++    ).rejects.toMatchObject({ code: -32602 });
++  });
+ });

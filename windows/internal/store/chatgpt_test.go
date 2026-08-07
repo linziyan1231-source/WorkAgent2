@@ -9,7 +9,7 @@ import (
 
 func TestChatGPTProReservationEnforcesWeeklyLimitAndReleasesFallback(t *testing.T) {
 	data := openTestStore(t)
-	user := createTestUser(t, data, "pro-user", "S-1-5-21-1960833855-1951203435-1179784405-7039")
+	user := createTestUser(t, data, "pro-user", "S-1-5-21-100-200-300-1401")
 	now := time.Date(2026, 7, 20, 9, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	if err := data.SetChatGPTProWeeklyLimit(context.Background(), user.ID, 1, now); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestChatGPTProReservationEnforcesWeeklyLimitAndReleasesFallback(t *testing.
 
 func TestChatGPTProUnknownHoldsSlotAndDuplicateDoesNotCreateAnotherRecord(t *testing.T) {
 	data := openTestStore(t)
-	user := createTestUser(t, data, "unknown-user", "S-1-5-21-1211809964-1167589578-1223134194-4265")
+	user := createTestUser(t, data, "unknown-user", "S-1-5-21-100-200-300-1402")
 	now := time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC)
 	logicalID := testLogicalID('c')
 	if _, err := data.ReserveChatGPTPro(context.Background(), user.ID, logicalID, "gpt-5-6-pro", "", now); err != nil {
@@ -54,7 +54,7 @@ func TestChatGPTProUnknownHoldsSlotAndDuplicateDoesNotCreateAnotherRecord(t *tes
 
 func TestChatGPTProUpstreamRejectionCanBeRetried(t *testing.T) {
 	data := openTestStore(t)
-	user := createTestUser(t, data, "retry-user", "S-1-5-21-1186339456-1342790766-1818638600-6176")
+	user := createTestUser(t, data, "retry-user", "S-1-5-21-100-200-300-1403")
 	now := time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC)
 	logicalID := testLogicalID('d')
 	if _, err := data.ReserveChatGPTPro(context.Background(), user.ID, logicalID, "gpt-5-6-pro", "", now); err != nil {

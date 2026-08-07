@@ -5,8 +5,12 @@ $script:KnownReleaseComponents = @(
     'AionUiPortal.exe',
     'AionUiUserHost.exe',
     'portal.exe',
+    'AionKimiDatasourceBroker.exe',
     'AionAgentCli.exe'
 )
+
+$script:RefreshOnlyUpgradeMessage = '系统正在升级，页面可能需要刷新，但正在进行的任务不会中断'
+$script:TaskInterruptionUpgradeMessage = '系统正在升级，正在进行的任务可能会中断'
 
 function Assert-ReleaseScopeContract {
     param(
@@ -24,7 +28,7 @@ function Assert-ReleaseScopeContract {
 
     $hasWeb = 'web' -cin $components
     $hasRuntime = 'AionAgentCli.exe' -cin $components
-    $backend = @($components | Where-Object { $_ -cin @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe') })
+    $backend = @($components | Where-Object { $_ -cin @('AionUiPortal.exe', 'AionUiUserHost.exe', 'portal.exe', 'AionKimiDatasourceBroker.exe') })
     switch ($ReleaseScope) {
         'web-only' {
             if ($components.Count -ne 1 -or -not $hasWeb) { throw 'web-only releases must contain exactly the web component.' }
@@ -42,6 +46,53 @@ function Assert-ReleaseScopeContract {
                 throw 'combined releases must contain web and at least one backend or runtime component.'
             }
         }
+    }
+}
+
+function Get-UpgradeInterruptionClass {
+    param(
+        [Parameter(Mandatory)][ValidateSet('web-only', 'runtime-only', 'backend-only', 'combined')][string]$ReleaseScope,
+        [Parameter(Mandatory)][string[]]$IncludedComponents
+    )
+
+    Assert-ReleaseScopeContract -ReleaseScope $ReleaseScope -IncludedComponents $IncludedComponents
+    if ('AionUiUserHost.exe' -cin $IncludedComponents -or 'AionAgentCli.exe' -cin $IncludedComponents) {
+        return 'task-interruption-possible'
+    }
+    return 'refresh-only'
+}
+
+function Get-UpgradeNotificationMessage {
+    param(
+        [Parameter(Mandatory)][ValidateSet('web-only', 'runtime-only', 'backend-only', 'combined')][string]$ReleaseScope,
+        [Parameter(Mandatory)][string[]]$IncludedComponents
+    )
+
+    $class = Get-UpgradeInterruptionClass -ReleaseScope $ReleaseScope -IncludedComponents $IncludedComponents
+    if ($class -ceq 'task-interruption-possible') { return $script:TaskInterruptionUpgradeMessage }
+    return $script:RefreshOnlyUpgradeMessage
+}
+
+function Assert-PublishedUpgradeNotification {
+    param(
+        [Parameter(Mandatory)][object]$Payload,
+        [Parameter(Mandatory)][string]$ExpectedId,
+        [Parameter(Mandatory)][string]$ExpectedMessage
+    )
+
+    $notificationsProperty = $Payload.PSObject.Properties['notifications']
+    if ($null -eq $notificationsProperty) { throw 'Upgrade notification source did not return a notifications collection.' }
+    $matches = @($notificationsProperty.Value | Where-Object {
+        $idProperty = $_.PSObject.Properties['id']
+        $null -ne $idProperty -and [string]$idProperty.Value -ceq $ExpectedId
+    })
+    if ($matches.Count -ne 1) {
+        throw "Upgrade notification source must return exactly one notification with id $ExpectedId; matches=$($matches.Count)."
+    }
+    $messageProperty = $matches[0].PSObject.Properties['message']
+    $actualMessage = if ($null -eq $messageProperty) { '' } else { [string]$messageProperty.Value }
+    if ($actualMessage -cne $ExpectedMessage) {
+        throw "Upgrade notification $ExpectedId has the wrong interruption message."
     }
 }
 

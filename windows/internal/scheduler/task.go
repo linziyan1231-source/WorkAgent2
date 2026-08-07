@@ -25,6 +25,8 @@ const (
 	taskDontAddPrincipalACE = 16
 	taskLogonPassword       = 1
 	taskServiceReadExecute  = windows.ACCESS_MASK(0x001200a9)
+	taskStateRunning        = 4
+	taskResultStillRunning  = 0x00041301
 )
 
 var (
@@ -51,6 +53,13 @@ type Info struct {
 	LastTaskResult int32
 	XML            string
 	SecuritySDDL   string
+}
+
+// IsRunning reports the two Task Scheduler signals used while a task action
+// is still active. LastTaskResult is 0x41301 until the action exits, even
+// though that value is often mistaken for a task failure code.
+func (i Info) IsRunning() bool {
+	return i.State == taskStateRunning || i.LastTaskResult == taskResultStillRunning
 }
 
 // Check verifies that the local Task Scheduler COM service and root folder are

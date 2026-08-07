@@ -59,7 +59,7 @@ func TestAdministratorIsSeparateFromManagedUsers(t *testing.T) {
 	if _, err := s.CreateAdministrator(ctx, "second-admin", "admin-hash", now); err == nil {
 		t.Fatal("second Portal administrator was accepted")
 	}
-	if _, err := s.CreateUser(ctx, "employee", "employee-hash", "S-1-5-21-1241094192-1685126104-1679339914-3812", `SERVER\employee`, false, now); err != nil {
+	if _, err := s.CreateUser(ctx, "employee", "employee-hash", "S-1-5-21-1-1009", `SERVER\employee`, false, now); err != nil {
 		t.Fatal(err)
 	}
 	users, err := s.ListManagedUsers(ctx)
@@ -75,7 +75,7 @@ func TestSessionInvalidatedByPasswordResetAndDisable(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	now := time.Unix(1_700_000_000, 0)
-	u, err := s.CreateUser(ctx, "Alice", "hash-one", "S-1-5-21-1417176286-1839503707-1020375065-6067", `SERVER\alice-run`, false, now)
+	u, err := s.CreateUser(ctx, "Alice", "hash-one", "S-1-5-21-1-1001", `SERVER\alice-run`, false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestStaleUserCannotCreateSessionAfterDisable(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	now := time.Unix(1_700_000_000, 0)
-	stale, err := s.CreateUser(ctx, "stale-user", "hash-one", "S-1-5-21-1032064966-1535641275-1296334407-6542", `SERVER\stale-run`, false, now)
+	stale, err := s.CreateUser(ctx, "stale-user", "hash-one", "S-1-5-21-1-1002", `SERVER\stale-run`, false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestOAuthStateIsSessionBoundAndSingleUse(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	now := time.Unix(1_700_000_000, 0)
-	binding := OAuthBinding{SessionTokenHash: TokenHash("portal-session"), WindowsSID: "S-1-5-21-1417176286-1839503707-1020375065-6067", InstanceID: "instance-7", FlowID: "opaque-flow-9", Target: "https://mcp.example.test", ExpiresAt: now.Add(5 * time.Minute)}
+	binding := OAuthBinding{SessionTokenHash: TokenHash("portal-session"), WindowsSID: "S-1-5-21-1-1001", InstanceID: "instance-7", FlowID: "opaque-flow-9", Target: "https://mcp.example.test", ExpiresAt: now.Add(5 * time.Minute)}
 	if err := s.CreateOAuthState(ctx, "oauth-state", binding); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestOAuthStateExpiresWithoutBecomingConsumable(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	now := time.Unix(1_700_000_000, 0)
-	binding := OAuthBinding{SessionTokenHash: TokenHash("portal-session"), WindowsSID: "S-1-5-21-1417176286-1839503707-1020375065-6067", InstanceID: "instance-8",
+	binding := OAuthBinding{SessionTokenHash: TokenHash("portal-session"), WindowsSID: "S-1-5-21-1-1001", InstanceID: "instance-8",
 		FlowID: "opaque-flow-10", Target: "https://mcp.example.test", ExpiresAt: now.Add(2 * time.Minute)}
 	if err := s.CreateOAuthState(ctx, "expiring-oauth-state", binding); err != nil {
 		t.Fatal(err)

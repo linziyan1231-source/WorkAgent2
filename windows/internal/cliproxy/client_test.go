@@ -14,8 +14,8 @@ import (
 )
 
 func testOptions() ProvisionOptions {
-	return ProvisionOptions{Username: "test1", WindowsSID: "S-1-5-21-1335169958-1819941586-1322872941-1322", BaseURL: "http://203.0.113.52:8317/v1",
-		CodexDefaultModel: "example-reasoning", CodexModels: []string{"gpt-5.3-codex-spark", "example-reasoning", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"},
+	return ProvisionOptions{Username: "test1", WindowsSID: "S-1-5-21-100-200-300-1017", BaseURL: "http://43.134.118.158:8317/v1",
+		CodexDefaultModel: "gpt-5.6-luna", CodexModels: []string{"gpt-5.3-codex-spark", "gpt-5.6-luna", "gpt-5.4-mini"}, KimiModels: []string{"kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k3"},
 		RPM: 0, CodexDailyUSD: 20, CodexWeeklyUSD: 40, KimiDailyUSD: 5, KimiWeeklyUSD: 10}
 }
 
@@ -102,7 +102,8 @@ func TestProvisionUsesLoopbackManagementAPIAndVerifiesReadback(t *testing.T) {
 			listed := make([]map[string]any, 0, len(keys))
 			for _, key := range keys {
 				listed = append(listed, map[string]any{"id": key.ID, "name": key.Name, "enabled": key.Enabled, "rpm": key.RPM, "models": key.Models, "aliases": []any{},
-					"daily_limit_usd": key.DailyLimitUSD, "weekly_limit_usd": key.WeeklyLimitUSD, "allow_models_endpoint": key.AllowModelsEndpoint, "usage": map[string]any{}})
+					"daily_limit_usd": key.DailyLimitUSD, "weekly_limit_usd": key.WeeklyLimitUSD, "allow_models_endpoint": key.AllowModelsEndpoint,
+					"collaboration_target_key_ids": []string{"shared-target"}, "usage": map[string]any{}})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": listed})
 		case "POST /v0/management/plugins/cpa-key-policy/keys":

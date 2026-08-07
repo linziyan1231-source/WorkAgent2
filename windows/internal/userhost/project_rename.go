@@ -101,6 +101,10 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 			return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("inspect target project directory: %w", err)
 		}
 	}
+	marker, err := projectfs.EnsureMarker(source)
+	if err != nil {
+		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("ensure stable project marker: %w", err)
+	}
 	dbInfo, err := os.Lstat(dbPath)
 	if err != nil || !dbInfo.Mode().IsRegular() || dbInfo.Mode()&os.ModeSymlink != 0 {
 		return ipc.ProjectRenameResult{}, "PROJECT_RENAME_FAILED", fmt.Errorf("inspect AionCore database: %w", err)
@@ -149,7 +153,7 @@ func renameProjectState(ctx context.Context, workspaceRoot, dbPath, sid, oldName
 	if err := tx.Commit(); err != nil {
 		return ipc.ProjectRenameResult{}, projectRenameDatabaseErrorCode(err), rollbackDirectory(fmt.Errorf("commit project rename: %w", err))
 	}
-	return ipc.ProjectRenameResult{OldPath: source, NewPath: target, UpdatedConversations: len(updates)}, "", nil
+	return ipc.ProjectRenameResult{OldPath: source, NewPath: target, UpdatedConversations: len(updates), ProjectID: marker.ProjectID}, "", nil
 }
 
 func managedProjectChildren(ctx context.Context, tx *sql.Tx, workspaceRoot, source string) (map[string]bool, error) {

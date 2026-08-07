@@ -112,6 +112,7 @@ if ($RequireUpgradeContract) {
     }
     foreach ($component in $components) {
         $baseline = [string]$expectedInstalled.PSObject.Properties[$component].Value
+        if ($baseline -ceq 'absent' -and $component -ceq 'AionKimiDatasourceBroker.exe') { continue }
         Assert-Sha256String -Value $baseline -Description "$component production baseline"
     }
 }

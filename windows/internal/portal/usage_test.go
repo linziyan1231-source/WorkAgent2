@@ -35,8 +35,9 @@ func TestCurrentUsageUsesOnlyAuthenticatedUsersSIDBoundMapping(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"pro":{"used":0,"limit":7,`) {
 		t.Fatalf("first user response omitted default ChatGPT Pro quota: %s", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"storage":{"limit_bytes":21474836480,"used_bytes":2147483648,"remaining_bytes":19327352832,`) {
-		t.Fatalf("first user response omitted private storage usage: %s", response.Body.String())
+	if !strings.Contains(response.Body.String(), `"storage":{"personal":{"limit_bytes":64424509440,"used_bytes":2147483648,"remaining_bytes":62277025792,`) ||
+		!strings.Contains(response.Body.String(), `"shared":{"limit_bytes":21474836480,"used_bytes":2147483648,"remaining_bytes":19327352832,`) {
+		t.Fatalf("first user response omitted independent personal/shared storage usage: %s", response.Body.String())
 	}
 	secondToken := createPortalSessionFor(t, data, "portal-bob", testSID2, `SERVER\test2`)
 	secondResponse := httptest.NewRecorder()

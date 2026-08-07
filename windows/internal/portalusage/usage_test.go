@@ -2,6 +2,7 @@ package portalusage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,8 +10,8 @@ import (
 )
 
 const (
-	testSID1 = "S-1-5-21-1335169958-1819941586-1322872941-1322"
-	testSID2 = "S-1-5-21-1836781275-1957422218-1832856846-7828"
+	testSID1 = "S-1-5-21-100-200-300-1017"
+	testSID2 = "S-1-5-21-100-200-300-1018"
 )
 
 type fakeRemote struct {
@@ -22,6 +23,17 @@ type fakeRemote struct {
 func (f *fakeRemote) Query(_ context.Context, ids modelbootstrap.KeyIDs) (RawSnapshot, error) {
 	f.calls = append(f.calls, ids)
 	return f.raw, f.err
+}
+
+type fakeBatchRemote struct {
+	fakeRemote
+	batchCalls int
+	rawByOwner map[string]RawSnapshot
+}
+
+func (f *fakeBatchRemote) QueryMany(_ context.Context, _ map[string]modelbootstrap.KeyIDs) (map[string]RawSnapshot, error) {
+	f.batchCalls++
+	return f.rawByOwner, f.err
 }
 
 func rawUsage() RawSnapshot {
@@ -110,6 +122,48 @@ func TestCacheIsBoundToSIDAndReturnsDefensiveCopies(t *testing.T) {
 	}
 	if len(remote.calls) != 3 {
 		t.Fatalf("expired cache did not refresh: calls=%d", len(remote.calls))
+	}
+}
+
+func TestCurrentManyLoadsUncachedUsersInOneRemoteRequest(t *testing.T) {
+	second := rawUsage()
+	second.Providers = append([]RawProvider(nil), second.Providers...)
+	second.Providers[0].Daily.UsedUSD = "2.50"
+	remote := &fakeBatchRemote{rawByOwner: map[string]RawSnapshot{
+		strings.ToUpper(testSID1): rawUsage(),
+		strings.ToUpper(testSID2): second,
+	}}
+	service, err := NewService(remote, 30*time.Second, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.CurrentMany(context.Background(), []string{testSID1, testSID2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.batchCalls != 1 || len(remote.calls) != 0 || got[testSID1].Providers[0].Daily.UsedUSD != "1.26" || got[testSID2].Providers[0].Daily.UsedUSD != "2.50" {
+		t.Fatalf("users were not loaded by one batch request: batch=%d single=%d got=%+v", remote.batchCalls, len(remote.calls), got)
+	}
+	if _, err := service.CurrentMany(context.Background(), []string{testSID1, testSID2}); err != nil {
+		t.Fatal(err)
+	}
+	if remote.batchCalls != 1 {
+		t.Fatalf("batch cache was not reused: calls=%d", remote.batchCalls)
+	}
+}
+
+func TestCurrentManyKeepsAvailableUsersWhenOnePolicyMappingIsMissing(t *testing.T) {
+	remote := &fakeBatchRemote{rawByOwner: map[string]RawSnapshot{strings.ToUpper(testSID1): rawUsage()}}
+	service, err := NewService(remote, 30*time.Second, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.CurrentMany(context.Background(), []string{testSID1, testSID2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.batchCalls != 1 || len(got) != 1 || got[testSID1].Providers[0].Daily.UsedUSD != "1.26" {
+		t.Fatalf("missing user policy hid available quota data: calls=%d got=%+v", remote.batchCalls, got)
 	}
 }
 

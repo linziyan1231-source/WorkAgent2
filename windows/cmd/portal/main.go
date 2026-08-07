@@ -23,6 +23,7 @@ import (
 	"aionuiportal/internal/kimi"
 	"aionuiportal/internal/modelbootstrap"
 	"aionuiportal/internal/release"
+	"aionuiportal/internal/store"
 	"aionuiportal/internal/winutil"
 	"golang.org/x/term"
 )
@@ -84,6 +85,8 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 		return limitsCommand(ctx, manager, arguments[1:])
 	case "chatgpt-pro-limit":
 		return chatGPTProLimitCommand(ctx, manager, arguments[1:])
+	case "kimi-datasource":
+		return kimiDatasourceCommand(ctx, manager, arguments[1:])
 	case "logs":
 		return logsCommand(ctx, manager, arguments[1:])
 	case "release":
@@ -103,6 +106,64 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 		return printFailures("production readiness", manager.Readiness(ctx))
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
+	}
+}
+
+func kimiDatasourceCommand(ctx context.Context, manager *admin.Manager, arguments []string) error {
+	if len(arguments) == 0 {
+		return errors.New("usage: portal --config <path> kimi-datasource <grant|revoke|show|sources> ...")
+	}
+	switch arguments[0] {
+	case "sources":
+		if len(arguments) != 1 {
+			return errors.New("usage: portal --config <path> kimi-datasource sources")
+		}
+		for _, source := range store.KimiDatasourceSources {
+			fmt.Println(source)
+		}
+		return nil
+	case "show":
+		if len(arguments) != 2 {
+			return errors.New("usage: portal --config <path> kimi-datasource show <portal-username>")
+		}
+		user, err := manager.Store.UserByUsername(ctx, arguments[1])
+		if err != nil {
+			return err
+		}
+		grant, err := manager.Store.KimiDatasourceGrantForUser(ctx, user.ID, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Printf("user=%s enabled=%t sources=%s daily=%d/%d monthly=%d/%d\n", user.Username, grant.Enabled,
+			strings.Join(grant.AllowedSources, ","), grant.DailyUsed, grant.DailyLimit, grant.MonthlyUsed, grant.MonthlyLimit)
+		return nil
+	case "revoke":
+		if len(arguments) != 2 {
+			return errors.New("usage: portal --config <path> kimi-datasource revoke <portal-username>")
+		}
+		grant, err := manager.SetKimiDatasourceGrant(ctx, arguments[1], false, nil, 0, 0)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("user=%s enabled=false daily_limit=%d monthly_limit=%d\n", arguments[1], grant.DailyLimit, grant.MonthlyLimit)
+		return nil
+	case "grant":
+		flags := newFlags("kimi-datasource grant")
+		username := flags.String("username", "", "Portal username")
+		sources := flags.String("sources", "", "comma-separated datasource IDs")
+		daily := flags.Int("daily", 100, "daily MCP calls")
+		monthly := flags.Int("monthly", 1000, "monthly MCP calls")
+		if err := flags.Parse(arguments[1:]); err != nil || *username == "" || *sources == "" || flags.NArg() != 0 {
+			return errors.New("usage: portal --config <path> kimi-datasource grant --username <name> --sources <id,id> [--daily 100] [--monthly 1000]")
+		}
+		grant, err := manager.SetKimiDatasourceGrant(ctx, *username, true, strings.Split(*sources, ","), *daily, *monthly)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("user=%s enabled=true sources=%s daily_limit=%d monthly_limit=%d\n", *username, strings.Join(grant.AllowedSources, ","), grant.DailyLimit, grant.MonthlyLimit)
+		return nil
+	default:
+		return fmt.Errorf("unknown kimi-datasource subcommand %q", arguments[0])
 	}
 }
 
@@ -212,10 +273,10 @@ func modelBootstrapCommand(ctx context.Context, manager *admin.Manager, argument
 	codexModels := flags.String("codex-models", "", "comma-separated Codex/ChatGPT aliases")
 	kimiModels := flags.String("kimi-models", "", "comma-separated Kimi aliases")
 	rpm := flags.Int("rpm", 0, "requests per minute; zero means unlimited")
-	codexDaily := flags.Float64("codex-daily-usd", 20, "Codex/ChatGPT daily USD limit")
-	codexWeekly := flags.Float64("codex-weekly-usd", 40, "Codex/ChatGPT weekly USD limit")
-	kimiDaily := flags.Float64("kimi-daily-usd", 5, "Kimi daily USD limit")
-	kimiWeekly := flags.Float64("kimi-weekly-usd", 10, "Kimi weekly USD limit")
+	codexDaily := flags.Float64("codex-daily-usd", admin.DefaultEmployeeCodexDailyUSD, "Codex/ChatGPT daily USD limit")
+	codexWeekly := flags.Float64("codex-weekly-usd", admin.DefaultEmployeeCodexWeeklyUSD, "Codex/ChatGPT weekly USD limit")
+	kimiDaily := flags.Float64("kimi-daily-usd", admin.DefaultEmployeeKimiDailyUSD, "Kimi daily USD limit")
+	kimiWeekly := flags.Float64("kimi-weekly-usd", admin.DefaultEmployeeKimiWeeklyUSD, "Kimi weekly USD limit")
 	update := flags.Bool("update", false, "rotate keys and replace an existing initialization")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return err

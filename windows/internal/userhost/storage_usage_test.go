@@ -26,6 +26,9 @@ func (entry *reparseLikeDirEntry) Info() (fs.FileInfo, error) {
 }
 
 func TestMeasureStorageUsageCountsPrivateRegularFiles(t *testing.T) {
+	if personalStorageLimitBytes != 60*1024*1024*1024 || sharedStorageLimitBytes != 20*1024*1024*1024 {
+		t.Fatalf("storage limits personal=%d shared=%d", personalStorageLimitBytes, sharedStorageLimitBytes)
+	}
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "first.bin"), make([]byte, 1536), 0o600); err != nil {
 		t.Fatal(err)
@@ -38,11 +41,11 @@ func TestMeasureStorageUsageCountsPrivateRegularFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	usage, err := measureStorageUsage(context.Background(), root)
+	usage, err := measureStorageUsage(context.Background(), root, personalStorageLimitBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.LimitBytes != userStorageLimitBytes || usage.UsedBytes != 4096 || usage.RemainingBytes != userStorageLimitBytes-4096 {
+	if usage.LimitBytes != personalStorageLimitBytes || usage.UsedBytes != 4096 || usage.RemainingBytes != personalStorageLimitBytes-4096 {
 		t.Fatalf("storage usage=%+v", usage)
 	}
 	if _, err := time.Parse(time.RFC3339, usage.MeasuredAt); err != nil {
@@ -53,18 +56,26 @@ func TestMeasureStorageUsageCountsPrivateRegularFiles(t *testing.T) {
 func TestMeasureStorageUsageStopsWhenRequestIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := measureStorageUsage(ctx, t.TempDir())
+	_, err := measureStorageUsage(ctx, t.TempDir(), personalStorageLimitBytes)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v, want context cancellation", err)
 	}
 }
 
 func TestCurrentStorageUsageCachesAndRefreshesFullWalk(t *testing.T) {
-	root := t.TempDir()
+	base := t.TempDir()
+	root := filepath.Join(base, "S-1-5-21-100-200-300-1001")
+	shared := filepath.Join(base, "shared", "S-1-5-21-100-200-300-1001")
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "first.bin"), make([]byte, 1024), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	host := Host{cfg: config.UserHost{DataRoot: root}}
+	host := Host{cfg: config.UserHost{ConfigVersion: 2, WindowsSID: "S-1-5-21-100-200-300-1001", DataRootBase: base, DataRoot: root}}
 	first, err := host.currentStorageUsage(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +87,7 @@ func TestCurrentStorageUsageCachesAndRefreshesFullWalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cached.UsedBytes != first.UsedBytes || cached.MeasuredAt != first.MeasuredAt {
+	if cached.Personal.UsedBytes != first.Personal.UsedBytes || cached.Personal.MeasuredAt != first.Personal.MeasuredAt {
 		t.Fatalf("storage cache changed before expiry: first=%+v cached=%+v", first, cached)
 	}
 	host.storageMu.Lock()
@@ -86,7 +97,7 @@ func TestCurrentStorageUsageCachesAndRefreshesFullWalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refreshed.UsedBytes != 3072 {
+	if refreshed.Personal.UsedBytes != 3072 || refreshed.Shared.LimitBytes != sharedStorageLimitBytes {
 		t.Fatalf("expired storage cache was not refreshed: %+v", refreshed)
 	}
 }

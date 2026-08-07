@@ -10,6 +10,18 @@ import (
 	"github.com/go-ole/go-ole"
 )
 
+func TestInfoIsRunningRecognizesTaskSchedulerSignals(t *testing.T) {
+	if !(Info{State: taskStateRunning}).IsRunning() {
+		t.Fatal("running task state was not recognized")
+	}
+	if !(Info{LastTaskResult: taskResultStillRunning}).IsRunning() {
+		t.Fatal("0x41301 still-running result was not recognized")
+	}
+	if (Info{State: 3, LastTaskResult: 1}).IsRunning() {
+		t.Fatal("finished task was reported as running")
+	}
+}
+
 func TestTaskSchedulerCOMIsReachableReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -127,7 +139,7 @@ func TestRegisterTaskPasswordArgumentIsByValueBSTR(t *testing.T) {
 }
 
 func TestTaskNameRejectsInputOutsideSIDGrammar(t *testing.T) {
-	for _, value := range []string{"test1", "S-1-5-21-1621521014-1272021986-1552131027-5534/other", "S-1-5-x", ""} {
+	for _, value := range []string{"test1", "S-1-5-21-1/other", "S-1-5-x", ""} {
 		if _, err := TaskName(value); err == nil {
 			t.Fatalf("accepted invalid SID %q", value)
 		}
@@ -136,10 +148,10 @@ func TestTaskNameRejectsInputOutsideSIDGrammar(t *testing.T) {
 
 func testSpec() Spec {
 	return Spec{
-		WindowsSID:       "S-1-5-21-1335169958-1819941586-1322872941-1322",
+		WindowsSID:       "S-1-5-21-100-200-300-1017",
 		WindowsUsername:  `SERVER\test1`,
 		Executable:       `C:\Program Files\AionUiPortal\AionUiUserHost.exe`,
-		ConfigPath:       `C:\ProgramData\AionUiPortal\users\S-1-5-21-1335169958-1819941586-1322872941-1322\userhost.json`,
+		ConfigPath:       `C:\ProgramData\AionUiPortal\users\S-1-5-21-100-200-300-1017\userhost.json`,
 		WorkingDirectory: `C:\Program Files\AionUiPortal`,
 		PortalServiceSID: "S-1-5-80-123-456-789",
 	}

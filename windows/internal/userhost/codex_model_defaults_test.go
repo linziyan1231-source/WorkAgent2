@@ -18,7 +18,7 @@ func TestApplyCodexModelDefaultsMigratesConfigAndStateWithoutTouchingAuth(t *tes
 	}
 	configPath := filepath.Join(dirs.Config, "codex", "config.toml")
 	existing := `openai_base_url = "http://127.0.0.1:8317/v1"
-model = "example-reasoning"
+model = "gpt-5.6-luna"
 model_reasoning_effort = "xhigh"
 cli_auth_credentials_store = "file"
 approval_policy = "on-request"
@@ -40,7 +40,7 @@ model = "table-value-must-survive"
 		BaseURL:           "http://127.0.0.1:8317/v1",
 		CodexKeyID:        "aionui-0123456789abcdef-chatgpt",
 		KimiKeyID:         "aionui-0123456789abcdef-kimi",
-		CodexDefaultModel: "example-reasoning",
+		CodexDefaultModel: "gpt-5.6-luna",
 		CodexModels:       modelbootstrap.ManagedCodexModels(),
 		KimiModels:        modelbootstrap.ManagedKimiModels(),
 	}, CodexAPIKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", KimiAPIKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654"}
@@ -60,12 +60,12 @@ model = "table-value-must-survive"
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{`model = "example-balanced"`, `model_reasoning_effort = "low"`, `openai_base_url = "http://127.0.0.1:8317/v1"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `model = "table-value-must-survive"`} {
+	for _, required := range []string{`model = "gpt-5.6-sol"`, `model_reasoning_effort = "low"`, `openai_base_url = "http://127.0.0.1:8317/v1"`, `cli_auth_credentials_store = "file"`, `approval_policy = "on-request"`, `model = "table-value-must-survive"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("migrated config is missing %q: %s", required, got)
 		}
 	}
-	if strings.Contains(got, `model = "example-reasoning"`) || strings.Contains(got, `model_reasoning_effort = "xhigh"`) {
+	if strings.Contains(got, `model = "gpt-5.6-luna"`) || strings.Contains(got, `model_reasoning_effort = "xhigh"`) {
 		t.Fatalf("old defaults survived migration: %s", got)
 	}
 	status, err := modelbootstrap.Inspect(root)

@@ -44,11 +44,20 @@ INSERT INTO assistant_definitions VALUES ('user:codex','user',NULL,'custom','aut
 FROM assistant_definitions WHERE id='bare:codex'`).Scan(&modelMode, &modelValue, &permissionMode, &permissionValue); err != nil {
 		t.Fatal(err)
 	}
-	if modelMode != "fixed" || modelValue != "example-balanced" || permissionMode != "fixed" || permissionValue != "agent-full-access" {
+	if modelMode != "fixed" || modelValue != "gpt-5.6-sol" || permissionMode != "fixed" || permissionValue != "agent-full-access" {
 		t.Fatalf("unexpected defaults: %s %s %s %s", modelMode, modelValue, permissionMode, permissionValue)
 	}
 	if applied, err := applyCodexAssistantDefaults(context.Background(), dbPath, markerPath, time.Now()); err != nil || applied {
 		t.Fatalf("repeat defaults: applied=%t err=%v", applied, err)
+	}
+	if _, err := db.Exec(`UPDATE assistant_definitions SET default_permission_value='agent' WHERE id='bare:codex'`); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := applyCodexAssistantDefaults(context.Background(), dbPath, markerPath, time.Now()); err != nil || !applied {
+		t.Fatalf("repair regressed defaults despite marker: applied=%t err=%v", applied, err)
+	}
+	if err := db.QueryRow(`SELECT default_permission_value FROM assistant_definitions WHERE id='bare:codex'`).Scan(&permissionValue); err != nil || permissionValue != "agent-full-access" {
+		t.Fatalf("regressed permission not repaired: value=%q err=%v", permissionValue, err)
 	}
 }
 

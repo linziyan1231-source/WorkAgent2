@@ -59,7 +59,7 @@ func TestProductionConfigAcceptsExplicitHTTPAndRejectsUnsafeOrigins(t *testing.T
 		t.Fatal("alternate production public port accepted")
 	}
 	c = validPortal(t)
-	c.PublicBaseURL = "https://contact@example.invalid:25808"
+	c.PublicBaseURL = "https://user@portal.example.test:25808"
 	if err := c.Validate(); err == nil {
 		t.Fatal("public URL userinfo accepted")
 	}
@@ -109,7 +109,7 @@ func TestOutboundProxyURLIsOptionalAndStrictlyValidated(t *testing.T) {
 		}
 	}
 
-	sid := "S-1-5-21-1244944357-1781978532-1838913594-2042"
+	sid := "S-1-5-21-1-2-3-1001"
 	profile := filepath.Join(`C:\Users`, "worker")
 	userHost := UserHost{ConfigVersion: 1, WindowsSID: sid, WindowsUsername: `SERVER\worker`, WindowsProfile: profile,
 		DataRoot: filepath.Join(profile, UserDataDirectoryName), ReleasesRoot: `C:\Program Files\AionUiWebShared\releases`,
@@ -125,10 +125,10 @@ func TestOutboundProxyURLIsOptionalAndStrictlyValidated(t *testing.T) {
 func TestPortalUsageManagementConfigRejectsNonLocalOrBroadPaths(t *testing.T) {
 	for name, mutate := range map[string]func(*Portal){
 		"remote URL": func(c *Portal) {
-			c.UsageManagementURL = "http://203.0.113.52:8317/v0/management/plugins/cpa-key-policy"
+			c.UsageManagementURL = "http://43.134.118.158:8317/v0/management/plugins/cpa-key-policy"
 		},
 		"wrong route":      func(c *Portal) { c.UsageManagementURL = "http://127.0.0.1:8317/v0/management" },
-		"key outside root": func(c *Portal) { c.UsageManagementKeyFile = `C:\Users\user-4194d170\management.key` },
+		"key outside root": func(c *Portal) { c.UsageManagementKeyFile = `C:\Users\Administrator\management.key` },
 		"long timeout":     func(c *Portal) { c.UsageQueryTimeoutSecs = 61 },
 		"long cache":       func(c *Portal) { c.UsageCacheSeconds = 61 },
 	} {
@@ -151,7 +151,7 @@ func TestChatForwardConfigRequiresLoopbackSecretAndProModels(t *testing.T) {
 		"remote bridge": func(c *Portal) { c.ChatForwardURL = "http://192.0.2.10:3210" },
 		"bridge path":   func(c *Portal) { c.ChatForwardURL = "http://127.0.0.1:3210/chatgpt" },
 		"secret outside Portal root": func(c *Portal) {
-			c.ChatForwardSecretFile = `C:\Users\user-4194d170\chatforward.key`
+			c.ChatForwardSecretFile = `C:\Users\Administrator\chatforward.key`
 		},
 		"invalid model":   func(c *Portal) { c.ChatGPTProModels = []string{"gpt-5-6-thinking"} },
 		"duplicate model": func(c *Portal) { c.ChatGPTProModels = []string{"gpt-5-6-pro", "GPT-5-6-PRO"} },
@@ -192,7 +192,7 @@ func TestAdminMasterPasswordHashFileIsOptionalAndConfinedToPortalData(t *testing
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid admin master password hash path rejected: %v", err)
 	}
-	for _, invalid := range []string{"relative.argon2id", `C:\Users\user-4194d170\admin-master-password.argon2id`} {
+	for _, invalid := range []string{"relative.argon2id", `C:\Users\Administrator\admin-master-password.argon2id`} {
 		candidate := valid
 		candidate.AdminMasterHashFile = invalid
 		if err := candidate.Validate(); err == nil {
@@ -223,7 +223,7 @@ func TestConfigPinsReleasePointerAndWindowsProfileDataLayouts(t *testing.T) {
 		t.Fatal("release pointer outside the shared release root was accepted")
 	}
 
-	sid := "S-1-5-21-1244944357-1781978532-1838913594-2042"
+	sid := "S-1-5-21-1-2-3-1001"
 	profile := filepath.Join(`C:\Users`, "worker")
 	userHost := UserHost{
 		ConfigVersion: 1, WindowsSID: sid, WindowsUsername: `SERVER\worker`, WindowsProfile: profile,
@@ -244,7 +244,7 @@ func TestConfigPinsReleasePointerAndWindowsProfileDataLayouts(t *testing.T) {
 }
 
 func TestUserHostSIDControlsPipeAndDataRoot(t *testing.T) {
-	sid := "S-1-5-21-1244944357-1781978532-1838913594-2042"
+	sid := "S-1-5-21-1-2-3-1001"
 	profile := filepath.Join(`C:\Users`, "worker")
 	c := UserHost{
 		ConfigVersion: 1, WindowsSID: sid, WindowsUsername: `SERVER\worker`,

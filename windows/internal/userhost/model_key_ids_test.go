@@ -13,7 +13,7 @@ import (
 	"aionuiportal/internal/modelbootstrap"
 )
 
-const modelKeyIDsTestSID = "S-1-5-21-1335169958-1819941586-1322872941-1322"
+const modelKeyIDsTestSID = "S-1-5-21-100-200-300-1017"
 
 func TestModelKeyIDsIPCReadsOnlyAppliedSIDBoundMarker(t *testing.T) {
 	root := t.TempDir()
@@ -67,7 +67,7 @@ func TestModelKeyIDsIPCRejectsUnavailableOrInvalidMarkers(t *testing.T) {
 			writeModelKeyIDsMarker(t, root, state)
 		}, wantCode: "MODEL_MARKER_INVALID"},
 		{name: "another user IDs", setup: func(t *testing.T, root string) {
-			state := modelKeyIDsTestState("S-1-5-21-1836781275-1957422218-1832856846-7828")
+			state := modelKeyIDsTestState("S-1-5-21-100-200-300-1018")
 			writeModelKeyIDsMarker(t, root, state)
 		}, wantCode: "MODEL_MARKER_INVALID"},
 		{name: "pending only", setup: func(t *testing.T, root string) {
@@ -99,9 +99,9 @@ func TestModelKeyIDsIPCRejectsUnavailableOrInvalidMarkers(t *testing.T) {
 
 func modelKeyIDsTestState(sid string) modelbootstrap.State {
 	ids := modelbootstrap.KeyIDsForSID(sid)
-	return modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: "http://203.0.113.52:8317/v1",
-		CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID, CodexDefaultModel: "example-reasoning",
-		CodexModels: []string{"example-reasoning", "gpt-5.4-mini"}, KimiModels: modelbootstrap.ManagedKimiModels()}
+	return modelbootstrap.State{FormatVersion: modelbootstrap.FormatVersion, BaseURL: "http://43.134.118.158:8317/v1",
+		CodexKeyID: ids.CodexKeyID, KimiKeyID: ids.KimiKeyID, CodexDefaultModel: "gpt-5.6-luna",
+		CodexModels: []string{"gpt-5.6-luna", "gpt-5.4-mini"}, KimiModels: modelbootstrap.ManagedKimiModels()}
 }
 
 func writeModelKeyIDsMarker(t *testing.T, root string, state modelbootstrap.State) {
