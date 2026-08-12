@@ -282,7 +282,11 @@ func (s *Server) callUpstreamAttempt(ctx context.Context, method string, params 
 	request.Header.Set("X-Msh-Platform", "workagent2")
 	request.Header.Set("X-Msh-Version", "1.0.0")
 	request.Header.Set("X-Msh-Os-Version", runtime.GOOS+"/"+runtime.GOARCH)
-	request.Header.Set("X-Msh-Tool-Call-Id", randomID())
+	callID, err := randomID()
+	if err != nil {
+		return nil, "", err
+	}
+	request.Header.Set("X-Msh-Tool-Call-Id", callID)
 	response, err := s.client.Do(request)
 	if err != nil {
 		return nil, "", fmt.Errorf("Kimi datasource request failed: %w", err)
@@ -373,12 +377,12 @@ func writeRPC(w http.ResponseWriter, response rpcResponse) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-func randomID() string {
+func randomID() (string, error) {
 	data := make([]byte, 16)
 	if _, err := rand.Read(data); err != nil {
-		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+		return "", err
 	}
-	return hex.EncodeToString(data)
+	return hex.EncodeToString(data), nil
 }
 
 func firstHeader(header http.Header, names ...string) string {
@@ -439,9 +443,7 @@ func (m *credentialManager) read() (credentialDocument, map[string]any, error) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		return document, nil, fmt.Errorf("decode Kimi datasource credential: %w", err)
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return document, nil, fmt.Errorf("decode Kimi datasource credential: %w", err)
-	}
+	_ = json.Unmarshal(data, &raw)
 	if document.AccessToken == "" || document.RefreshToken == "" {
 		return document, nil, errors.New("Kimi datasource credential requires access_token and refresh_token")
 	}

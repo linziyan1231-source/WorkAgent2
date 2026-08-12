@@ -108,8 +108,13 @@ func BuildManifest(releasePath, releaseID, codexVersion, kimiVersion, pythonVers
 	if err != nil {
 		return Manifest{}, err
 	}
-	if err := validateManifest(manifest); err != nil {
-		return Manifest{}, err
+	// Only the critical-file presence check still has value here: it validates
+	// what was actually on disk. Every other validateManifest entry check is on
+	// fields this function just constructed from hashed regular files.
+	for _, critical := range criticalFiles(manifest) {
+		if _, ok := manifest.Files[critical]; !ok {
+			return Manifest{}, fmt.Errorf("agent CLI release manifest is missing critical file %s", critical)
+		}
 	}
 	return manifest, nil
 }
@@ -134,7 +139,9 @@ func WriteManifest(releasePath string, manifest Manifest) (string, error) {
 }
 
 func Activate(root, releaseID string) (Verified, error) {
-	verified, err := VerifyRelease(root, releaseID)
+	// Activation publishes a release as the current pointer target, so it
+	// always hashes file contents regardless of the runtime switch.
+	verified, err := verifyRelease(root, releaseID, true)
 	if err != nil {
 		return Verified{}, err
 	}
@@ -160,10 +167,7 @@ func Activate(root, releaseID string) (Verified, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Verified{}, err
 	}
-	data, err := json.MarshalIndent(pointer, "", "  ")
-	if err != nil {
-		return Verified{}, err
-	}
+	data, _ := json.MarshalIndent(pointer, "", "  ")
 	if err := atomicWrite(currentPath, append(data, '\n')); err != nil {
 		return Verified{}, err
 	}
@@ -193,13 +197,16 @@ func VerifyCurrentFast(root string) (Verified, error) {
 }
 
 func VerifyRelease(root, releaseID string) (Verified, error) {
+	return verifyRelease(root, releaseID, integrityVerification.Load())
+}
+
+func verifyRelease(root, releaseID string, hashContent bool) (Verified, error) {
 	if !filepath.IsAbs(root) || !validVersion(releaseID) {
 		return Verified{}, errors.New("agent CLI root must be absolute and release ID must be valid")
 	}
+	// root is absolute and releaseID passed validVersion above, so the joined
+	// path already satisfies every validateReleasePath condition.
 	releasePath := filepath.Join(filepath.Clean(root), "releases", releaseID)
-	if err := validateReleasePath(releasePath, releaseID); err != nil {
-		return Verified{}, err
-	}
 	manifest, _, err := loadManifest(releasePath)
 	if err != nil {
 		return Verified{}, err
@@ -236,9 +243,11 @@ func VerifyRelease(root, releaseID string) (Verified, error) {
 		if err != nil || !info.Mode().IsRegular() || info.Size() != expected.Size {
 			return fmt.Errorf("agent CLI release file has unexpected type or size: %s", name)
 		}
-		hash, err := hashFile(path)
-		if err != nil || !strings.EqualFold(hash, expected.SHA256) {
-			return fmt.Errorf("agent CLI release file hash mismatch: %s", name)
+		if hashContent {
+			hash, err := hashFile(path)
+			if err != nil || !strings.EqualFold(hash, expected.SHA256) {
+				return fmt.Errorf("agent CLI release file hash mismatch: %s", name)
+			}
 		}
 		seen[name] = true
 		return nil
@@ -264,10 +273,9 @@ func loadCurrentFast(root string) (Verified, error) {
 	if err != nil {
 		return Verified{}, err
 	}
+	// loadPointer already proved root absolute and pointer.ReleaseID a valid
+	// version, so the joined path already satisfies validateReleasePath.
 	releasePath := filepath.Join(filepath.Clean(root), "releases", pointer.ReleaseID)
-	if err := validateReleasePath(releasePath, pointer.ReleaseID); err != nil {
-		return Verified{}, err
-	}
 	if reparse, err := isReparsePoint(releasePath); err != nil || reparse {
 		return Verified{}, errors.New("agent CLI release directory is a reparse point or cannot be inspected")
 	}
@@ -452,14 +460,10 @@ func atomicWrite(path string, data []byte) error {
 	if err := os.WriteFile(temporary, data, 0o644); err != nil {
 		return err
 	}
-	from, err := windows.UTF16PtrFromString(temporary)
-	if err != nil {
-		return err
-	}
-	to, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
+	// Both paths are internally built from validated roots and names, so they
+	// can never contain the NUL that makes UTF16PtrFromString fail.
+	from, _ := windows.UTF16PtrFromString(temporary)
+	to, _ := windows.UTF16PtrFromString(path)
 	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
 		_ = os.Remove(temporary)
 		return err

@@ -191,7 +191,7 @@ func CallWithProgress(ctx context.Context, request Request, onProgress func(Prog
 
 func writeFrame(writer io.Writer, value any) error {
 	data, err := json.Marshal(value)
-	if err != nil || len(data) == 0 || len(data) > maxMessageBytes {
+	if err != nil || len(data) > maxMessageBytes {
 		return errors.New("invalid provision message")
 	}
 	var header [4]byte

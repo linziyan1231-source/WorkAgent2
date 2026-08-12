@@ -168,9 +168,6 @@ func privateSharedConversationIDs(ctx context.Context, dbPath, workspace string)
 }
 
 func setConversationWorkspaces(ctx context.Context, dbPath string, ids []string, oldPath, newPath, target string) error {
-	if !samePath(target, oldPath) && !samePath(target, newPath) {
-		return errors.New("conversation relocation target is invalid")
-	}
 	dsn := "file:" + filepath.ToSlash(dbPath) + "?mode=rw&_txlock=immediate&_pragma=busy_timeout(3000)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -184,9 +181,6 @@ func setConversationWorkspaces(ctx context.Context, dbPath string, ids []string,
 	}
 	defer tx.Rollback()
 	for _, id := range ids {
-		if !validRuntimeConversationID(id) {
-			return errors.New("relocation journal contains an invalid conversation id")
-		}
 		var raw string
 		if err := tx.QueryRowContext(ctx, `SELECT extra FROM conversations WHERE id=?`, id).Scan(&raw); err != nil {
 			return fmt.Errorf("read conversation %s: %w", id, err)

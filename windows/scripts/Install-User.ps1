@@ -100,8 +100,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Per-user CLIProxyAPI key creation/model bootst
 if ($LASTEXITCODE -ne 0) { throw 'Password-logon task registration or real identity verification failed.' }
 & $PortalCli --config $ConfigPath model-bootstrap status $PortalUsername
 if ($LASTEXITCODE -ne 0) { throw 'UserHost did not complete Codex/Aion model initialization.' }
+$installedDataRoot = if ([string]::IsNullOrWhiteSpace($userDataRoot)) { Join-Path $profilePath 'AionUiPortal' } else { Join-Path $userDataRoot $expectedSid }
+$skillPolicyScript = Join-Path $PSScriptRoot 'Apply-UserSkillPolicy.ps1'
+if (-not (Test-Path -LiteralPath $skillPolicyScript -PathType Leaf)) { throw "Managed Skill policy script is missing: $skillPolicyScript" }
+& $skillPolicyScript -DataRoot $installedDataRoot | Out-Null
 & $PortalCli --config $ConfigPath acl verify
 if ($LASTEXITCODE -ne 0) { throw 'Post-install ACL verification failed.' }
 & (Join-Path $PSScriptRoot 'Test-WindowsProfileIsolation.ps1') -WindowsAccount $resolvedAccount -DataRootBase $userDataRoot
-$installedDataRoot = if ([string]::IsNullOrWhiteSpace($userDataRoot)) { Join-Path $profilePath 'AionUiPortal' } else { Join-Path $userDataRoot $sid }
-Write-Host "User $PortalUsername is installed at $installedDataRoot and its real UserHost launch verified."
+Write-Host "User $PortalUsername is installed at $installedDataRoot; runtime, managed Skill policy, and identity isolation are verified."

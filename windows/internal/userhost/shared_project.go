@@ -77,7 +77,7 @@ func (h *Host) transferSharedProject(ctx context.Context, request ipc.SharedTran
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "SHARED_TRANSFER_FAILED", err
 	}
-	manifest, err := buildSharedManifest(ctx, source, true)
+	manifest, err := buildSharedManifest(ctx, source, true, h.cfg.VerifyReleaseIntegrity)
 	if err != nil {
 		return "SHARED_TRANSFER_FAILED", err
 	}
@@ -109,7 +109,7 @@ func (h *Host) transferSharedProject(ctx context.Context, request ipc.SharedTran
 	if err := os.Rename(source, target); err != nil {
 		return "SHARED_TRANSFER_FAILED", errors.Join(err, h.rollbackSharedProjectTransfer(journal))
 	}
-	movedManifest, err := buildSharedManifest(ctx, target, true)
+	movedManifest, err := buildSharedManifest(ctx, target, true, h.cfg.VerifyReleaseIntegrity)
 	if err != nil || !sameSharedManifest(manifest, movedManifest) {
 		if err == nil {
 			err = errors.New("shared project changed while ownership transfer was being prepared")
@@ -370,7 +370,7 @@ func (h *Host) provisionSharedProject(ctx context.Context, request ipc.SharedPro
 		if err := winutil.VerifyDescendantACL(source, winutil.PrivateTreePolicy(h.cfg.WindowsSID)); err != nil {
 			return ipc.SharedProjectResult{}, "SOURCE_PROJECT_INVALID", fmt.Errorf("verify private source project: %w", err)
 		}
-		sourceManifest, err = buildSharedManifest(ctx, source, true)
+		sourceManifest, err = buildSharedManifest(ctx, source, true, h.cfg.VerifyReleaseIntegrity)
 		if err != nil {
 			return ipc.SharedProjectResult{}, "SOURCE_PROJECT_INVALID", err
 		}
@@ -401,9 +401,6 @@ func (h *Host) provisionSharedProject(ctx context.Context, request ipc.SharedPro
 	// Reserve a small amount for the stable marker and filesystem metadata. This
 	// keeps an otherwise-full 20 GiB owner root from failing after the preflight.
 	requiredBytes := sourceBytes
-	if ^uint64(0)-requiredBytes < 4096 {
-		return ipc.SharedProjectResult{}, "SOURCE_PROJECT_INVALID", errors.New("shared project size overflowed")
-	}
 	requiredBytes += 4096
 	if requiredBytes > current.RemainingBytes {
 		return ipc.SharedProjectResult{}, "SHARED_QUOTA_EXCEEDED", fmt.Errorf("shared project needs %d bytes but only %d bytes remain", requiredBytes, current.RemainingBytes)
@@ -428,13 +425,13 @@ func (h *Host) provisionSharedProject(ctx context.Context, request ipc.SharedPro
 		if err := copySharedManifest(ctx, source, staging, sourceManifest); err != nil {
 			return ipc.SharedProjectResult{}, "SHARED_COPY_FAILED", err
 		}
-		copied, err := buildSharedManifest(ctx, staging, true)
+		copied, err := buildSharedManifest(ctx, staging, true, h.cfg.VerifyReleaseIntegrity)
 		if err != nil || !sameSharedManifest(sourceManifest, copied) {
 			return ipc.SharedProjectResult{}, "SHARED_COPY_VERIFY_FAILED", errors.New("shared project copy did not match its source manifest")
 		}
 		// Re-read the source after the copy. A source that changed while it was
 		// being copied must fail instead of publishing a point-in-time mixture.
-		currentSource, err := buildSharedManifest(ctx, source, true)
+		currentSource, err := buildSharedManifest(ctx, source, true, h.cfg.VerifyReleaseIntegrity)
 		if err != nil || !sameSharedManifest(sourceManifest, currentSource) {
 			return ipc.SharedProjectResult{}, "SHARED_COPY_SOURCE_CHANGED", errors.New("shared project source changed during copy")
 		}
@@ -881,7 +878,13 @@ func windowsReparse(info fs.FileInfo) bool {
 	return ok && data.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-func buildSharedManifest(ctx context.Context, root string, includeMarker bool) ([]sharedFileRecord, error) {
+// buildSharedManifest records the relative path and size of every regular
+// file below root. When hashContent is false (intranet mode,
+// verify_release_integrity off) the SHA256 field is left zeroed and only
+// metadata is recorded: sameSharedManifest then compares paths and sizes
+// only, which gives up content-level detection of concurrent modifications
+// during copy or ownership transfer.
+func buildSharedManifest(ctx context.Context, root string, includeMarker, hashContent bool) ([]sharedFileRecord, error) {
 	if err := requireNormalDirectory(root); err != nil {
 		return nil, err
 	}
@@ -916,21 +919,23 @@ func buildSharedManifest(ctx context.Context, root string, includeMarker bool) (
 		if !includeMarker && strings.EqualFold(relative, projectfs.MarkerFileName) {
 			return nil
 		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		hash := sha256.New()
-		_, copyErr := io.Copy(hash, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
 		var digest [sha256.Size]byte
-		copy(digest[:], hash.Sum(nil))
+		if hashContent {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			hash := sha256.New()
+			_, copyErr := io.Copy(hash, file)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			copy(digest[:], hash.Sum(nil))
+		}
 		records = append(records, sharedFileRecord{Relative: relative, Size: info.Size(), SHA256: digest})
 		return nil
 	})
@@ -943,9 +948,6 @@ func buildSharedManifest(ctx context.Context, root string, includeMarker bool) (
 func manifestSize(records []sharedFileRecord) (uint64, error) {
 	var result uint64
 	for _, record := range records {
-		if record.Size < 0 || ^uint64(0)-result < uint64(record.Size) {
-			return 0, errors.New("shared project size overflowed")
-		}
 		result += uint64(record.Size)
 	}
 	return result, nil

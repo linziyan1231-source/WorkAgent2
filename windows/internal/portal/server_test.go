@@ -370,7 +370,7 @@ func TestEmployeeCanRestartOnlyTheirSIDOwnedService(t *testing.T) {
 
 	server.Handler().ServeHTTP(response, request)
 
-	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"reconnect_after_ms":2000`) {
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"reconnect_after_ms":1000`) {
 		t.Fatalf("restart status=%d body=%s", response.Code, response.Body.String())
 	}
 	instances.mu.Lock()
@@ -403,6 +403,47 @@ func TestServiceRestartRejectsUntrustedOriginAndReportsRuntimeFailure(t *testing
 	server.Handler().ServeHTTP(failedResponse, failed)
 	if failedResponse.Code != http.StatusServiceUnavailable || !strings.Contains(failedResponse.Body.String(), "restart could not be started") {
 		t.Fatalf("failed restart status=%d body=%s", failedResponse.Code, failedResponse.Body.String())
+	}
+}
+
+func TestServiceRestartRequiresPostAndEmployeeSession(t *testing.T) {
+	server, data, _ := testServer(t)
+
+	methodResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(methodResponse, httptest.NewRequest(http.MethodGet, "https://portal.example.test/api/portal/me/restart-service", nil))
+	if methodResponse.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET restart status=%d body=%s", methodResponse.Code, methodResponse.Body.String())
+	}
+
+	unauthenticated := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/me/restart-service", nil)
+	unauthenticated.Header.Set("Origin", "https://portal.example.test")
+	unauthenticatedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unauthenticatedResponse, unauthenticated)
+	if unauthenticatedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated restart status=%d body=%s", unauthenticatedResponse.Code, unauthenticatedResponse.Body.String())
+	}
+
+	password := []byte("correct-administrator-portal-password")
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.CreateAdministrator(context.Background(), "restart-admin", hash, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	login := httptest.NewRecorder()
+	server.Handler().ServeHTTP(login, loginRequest(`{"username":"restart-admin","password":"correct-administrator-portal-password"}`))
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("administrator session cookie missing: %#v", cookies)
+	}
+	adminRequest := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/portal/me/restart-service", nil)
+	adminRequest.Header.Set("Origin", "https://portal.example.test")
+	adminRequest.AddCookie(cookies[0])
+	adminResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusForbidden {
+		t.Fatalf("administrator restart status=%d body=%s", adminResponse.Code, adminResponse.Body.String())
 	}
 }
 
@@ -759,10 +800,10 @@ func TestRendererCachesOnlyFingerprintedStaticAssets(t *testing.T) {
 
 func TestAdditionalBrowserOriginsAreExactAndDoNotChangeOAuthOrigin(t *testing.T) {
 	server, _, _ := testServerWithPublicURLAndOrigins(t, "http://portal.example.test", []string{
-		"http://203.0.113.79:25808",
+		"http://134.175.110.121:25808",
 		"http://127.0.0.1:25808",
 	})
-	for _, origin := range []string{"http://portal.example.test", "http://203.0.113.79:25808", "http://127.0.0.1:25808"} {
+	for _, origin := range []string{"http://portal.example.test", "http://134.175.110.121:25808", "http://127.0.0.1:25808"} {
 		request := httptest.NewRequest(http.MethodPost, "http://portal.example.test/login", strings.NewReader("{"))
 		request.Header.Set("Origin", origin)
 		response := httptest.NewRecorder()

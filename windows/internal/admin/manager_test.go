@@ -29,6 +29,23 @@ func TestRemainingTaskVerificationWaitOnlyExtendsRunningTask(t *testing.T) {
 	}
 }
 
+func TestStartupCaptureDiagnosticSurfacesOnlyBoundedStructuredStage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup.json")
+	if err := os.WriteFile(path, []byte(`{"stage":"release_verify","status":"failed","exit_code":1,"stderr":"private detail"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := startupCaptureDiagnostic(path)
+	if !strings.Contains(diagnostic, "startup_stage=release_verify") || strings.Contains(diagnostic, "private detail") {
+		t.Fatalf("unexpected diagnostic %q", diagnostic)
+	}
+	if err := os.WriteFile(path, []byte(`{"stage":"bad stage","status":"failed","exit_code":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if diagnostic := startupCaptureDiagnostic(path); diagnostic != "" {
+		t.Fatalf("unsafe stage was surfaced: %q", diagnostic)
+	}
+}
+
 func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 	root := t.TempDir()
 	program := filepath.Join(root, "program")
@@ -40,9 +57,9 @@ func TestApplyAndVerifyIncludesConfigAndReleaseControlACLs(t *testing.T) {
 		"aionui-web.exe": "web", "package.json": `{"version":"test"}`, "static/index.html": "renderer",
 		"bundled-aioncore/win32-x64/aioncore.exe":                  "core",
 		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
-		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
-		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
-		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent AI 管家",
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent Butler",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent 管家",
 	} {
 		path := filepath.Join(packed, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

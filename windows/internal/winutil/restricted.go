@@ -58,9 +58,6 @@ func newCurrentUserRestrictedToken(expectedSID string, disabled []*windows.SID) 
 	entries := make([]windows.SIDAndAttributes, 0, len(disabled))
 	disabledStrings := make([]string, 0, len(disabled))
 	for _, sid := range disabled {
-		if sid == nil {
-			return nil, errors.New("disabled SID is nil")
-		}
 		entries = append(entries, windows.SIDAndAttributes{Sid: sid})
 		disabledStrings = append(disabledStrings, sid.String())
 	}
@@ -232,10 +229,7 @@ func verifyMinimalPrivileges(token windows.Token) error {
 		return fmt.Errorf("read restricted token privileges: %w", err)
 	}
 	privileges := (*windows.Tokenprivileges)(unsafe.Pointer(&buffer[0])).AllPrivileges()
-	name, err := windows.UTF16PtrFromString(changeNotifyPrivilegeName)
-	if err != nil {
-		return err
-	}
+	name, _ := windows.UTF16PtrFromString(changeNotifyPrivilegeName)
 	var changeNotify windows.LUID
 	if err := windows.LookupPrivilegeValue(nil, name, &changeNotify); err != nil {
 		return fmt.Errorf("resolve %s: %w", changeNotifyPrivilegeName, err)

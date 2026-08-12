@@ -140,7 +140,7 @@ func normalizeSharedRelativePath(projectID, value string) (string, error) {
 		return "", errors.New("shared path escapes the project")
 	}
 	for _, segment := range strings.Split(clean, "/") {
-		if segment == "" || segment == "." || segment == ".." || strings.IndexFunc(segment, unicode.IsControl) >= 0 {
+		if strings.IndexFunc(segment, unicode.IsControl) >= 0 {
 			return "", errors.New("shared path contains an invalid segment")
 		}
 	}

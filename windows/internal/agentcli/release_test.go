@@ -7,7 +7,14 @@ import (
 	"testing"
 )
 
+func enableIntegrityVerification(t *testing.T) {
+	t.Helper()
+	SetIntegrityVerification(true)
+	t.Cleanup(func() { SetIntegrityVerification(false) })
+}
+
 func TestBuildActivateAndVerifyRealShapedAgentCLIRelease(t *testing.T) {
+	enableIntegrityVerification(t)
 	root := t.TempDir()
 	releaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
 	releasePath := makeRelease(t, root, releaseID)
@@ -120,6 +127,7 @@ func TestKimiCodeBinaryBecomesCriticalWithoutChangingManifestSchema(t *testing.T
 }
 
 func TestVerifyCurrentFastDefersNonCriticalHashingToFullGate(t *testing.T) {
+	enableIntegrityVerification(t)
 	root := t.TempDir()
 	releaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
 	releasePath := makeRelease(t, root, releaseID)
@@ -142,6 +150,44 @@ func TestVerifyCurrentFastDefersNonCriticalHashingToFullGate(t *testing.T) {
 	}
 	if _, err := VerifyCurrent(root); err == nil {
 		t.Fatal("full deployment gate accepted a tampered noncritical dependency")
+	}
+}
+
+func TestVerifyCurrentSkipsContentHashingWhenIntegrityVerificationDisabled(t *testing.T) {
+	// Integrity verification defaults to off (intranet mode): same-size
+	// content tampering is accepted, while structural checks still run.
+	root := t.TempDir()
+	releaseID := "codex-0.142.5_kimi-1.38.0_python-3.13.13"
+	releasePath := makeRelease(t, root, releaseID)
+	manifest, err := BuildManifest(releasePath, releaseID, "0.142.5", "1.38.0", "3.13.13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(releasePath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(root, manifest.ReleaseID); err != nil {
+		t.Fatal(err)
+	}
+	noncritical := filepath.Join(releasePath, "codex", "vendor", "x86_64-pc-windows-msvc", "codex-resources", "codex-windows-sandbox-setup.exe")
+	if err := os.WriteFile(noncritical, []byte("changed-helper"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyCurrent(root); err != nil {
+		t.Fatalf("integrity-disabled verification rejected same-size tampering: %v", err)
+	}
+	if err := os.Remove(noncritical); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyCurrent(root); err == nil {
+		t.Fatal("integrity-disabled verification accepted a missing manifested file")
+	}
+	if err := os.WriteFile(noncritical, []byte("changed-helper"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enableIntegrityVerification(t)
+	if _, err := VerifyCurrent(root); err == nil {
+		t.Fatal("integrity-enabled verification accepted a tampered noncritical dependency")
 	}
 }
 

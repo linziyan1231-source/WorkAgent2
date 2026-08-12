@@ -19,6 +19,13 @@ func ValidName(name string) bool {
 	if name == "" || name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > MaxNameRunes || strings.HasSuffix(name, ".") {
 		return false
 	}
+	// Windows 8.3 aliases (for example LONGNA~1) can resolve to a different
+	// long-name directory while still passing lexical direct-child checks.
+	// Project APIs use names as stable tenant-scoped identifiers, so reject the
+	// alias shape instead of allowing two spellings for the same directory.
+	if looksLikeWindowsShortName(name) {
+		return false
+	}
 	for _, character := range name {
 		if unicode.IsControl(character) || strings.ContainsRune(`<>:"/\|?*`, character) {
 			return false
@@ -29,15 +36,30 @@ func ValidName(name string) bool {
 	return !reserved
 }
 
+func looksLikeWindowsShortName(name string) bool {
+	parts := strings.SplitN(name, ".", 2)
+	base := parts[0]
+	if len(parts) == 2 && len(parts[1]) > 3 {
+		return false
+	}
+	tilde := strings.LastIndexByte(base, '~')
+	if tilde < 1 || tilde > 6 || tilde == len(base)-1 {
+		return false
+	}
+	for _, character := range base[tilde+1:] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func ResolveChild(root, name string) (string, bool) {
 	root = filepath.Clean(root)
 	if !filepath.IsAbs(root) || !ValidName(name) {
 		return "", false
 	}
 	target := filepath.Join(root, name)
-	if !strings.EqualFold(filepath.Dir(target), root) {
-		return "", false
-	}
 	return target, true
 }
 

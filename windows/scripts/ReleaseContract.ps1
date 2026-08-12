@@ -77,7 +77,9 @@ function Assert-PublishedUpgradeNotification {
     param(
         [Parameter(Mandatory)][object]$Payload,
         [Parameter(Mandatory)][string]$ExpectedId,
-        [Parameter(Mandatory)][string]$ExpectedMessage
+        [Parameter(Mandatory)][string]$ExpectedMessage,
+        [ValidateRange(0, 3600)][int]$MinimumAgeSeconds = 60,
+        [datetime]$NowUtc = [DateTime]::UtcNow
     )
 
     $notificationsProperty = $Payload.PSObject.Properties['notifications']
@@ -93,6 +95,23 @@ function Assert-PublishedUpgradeNotification {
     $actualMessage = if ($null -eq $messageProperty) { '' } else { [string]$messageProperty.Value }
     if ($actualMessage -cne $ExpectedMessage) {
         throw "Upgrade notification $ExpectedId has the wrong interruption message."
+    }
+    $publishedAtProperty = $matches[0].PSObject.Properties['published_at']
+    if ($null -eq $publishedAtProperty -or [string]::IsNullOrWhiteSpace([string]$publishedAtProperty.Value)) {
+        throw "Upgrade notification $ExpectedId is missing published_at."
+    }
+    $publishedAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse(
+        [string]$publishedAtProperty.Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal,
+        [ref]$publishedAt
+    )) {
+        throw "Upgrade notification $ExpectedId has an invalid published_at timestamp."
+    }
+    $ageSeconds = ([DateTimeOffset]$NowUtc.ToUniversalTime() - $publishedAt).TotalSeconds
+    if ($ageSeconds -lt $MinimumAgeSeconds) {
+        throw "Upgrade notification $ExpectedId must be visible for at least $MinimumAgeSeconds seconds before cutover; age=$([Math]::Floor($ageSeconds)) seconds."
     }
 }
 

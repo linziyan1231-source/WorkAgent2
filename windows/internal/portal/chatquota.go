@@ -111,9 +111,6 @@ func (s *Server) chatForwardQuotaReserve(w http.ResponseWriter, r *http.Request)
 	case store.ChatGPTProDuplicateComplete:
 		response["code"] = "chatgpt_pro_send_already_processed"
 		response["message"] = "This ChatGPT Pro send was already processed"
-	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "code": "quota_state_invalid", "message": "ChatGPT Pro quota state is invalid"})
-		return
 	}
 	writeJSON(w, http.StatusOK, response)
 }

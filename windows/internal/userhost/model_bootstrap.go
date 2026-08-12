@@ -110,7 +110,7 @@ func (h *Host) preparePendingModelBootstrap(ctx context.Context, env []string) (
 		}
 		pending := &pendingModelBootstrap{rebase: &rebase, codexKeyHash: sha256.Sum256(codexKey)}
 		decoded, err := hex.DecodeString(kimiHash)
-		if err != nil || len(decoded) != sha256.Size {
+		if err != nil {
 			return nil, errors.New("Kimi API-key rebase returned an invalid verification hash")
 		}
 		copy(pending.kimiKeyHash[:], decoded)
@@ -595,9 +595,6 @@ func (h *Host) applyPendingModelBootstrap(ctx context.Context, pending *pendingM
 		return h.applyPendingModelRebase(ctx, pending)
 	}
 	bundle := pending.bundle
-	if bundle == nil {
-		return errors.New("pending model bootstrap has no operation")
-	}
 	defer func() { bundle.CodexAPIKey, bundle.KimiAPIKey = "", "" }()
 	desired := []aionProvider{
 		{ID: modelbootstrap.CodexProviderID, Platform: "custom", Name: modelbootstrap.CodexProviderName, BaseURL: bundle.BaseURL, APIKey: bundle.CodexAPIKey, Models: append([]string(nil), bundle.CodexModels...), Enabled: true},
@@ -615,9 +612,6 @@ func (h *Host) applyPendingModelBootstrap(ctx context.Context, pending *pendingM
 
 func (h *Host) applyPendingModelRebase(ctx context.Context, pending *pendingModelBootstrap) error {
 	rebase := pending.rebase
-	if rebase == nil {
-		return errors.New("pending model rebase is missing")
-	}
 	current, err := h.client.listProviders(ctx)
 	if err != nil {
 		return fmt.Errorf("list Aion model providers for rebase: %w", err)

@@ -68,9 +68,6 @@ func ValidateLocalUsername(username string) error {
 }
 
 func CreateLocalStandardAccount(username string, password []byte) (sid, canonical string, err error) {
-	if err := ValidateLocalUsername(username); err != nil {
-		return "", "", err
-	}
 	name, err := windows.UTF16PtrFromString(username)
 	if err != nil {
 		return "", "", err
@@ -98,9 +95,6 @@ func CreateLocalStandardAccount(username string, password []byte) (sid, canonica
 }
 
 func InspectLocalStandardAccount(username string) (sid, canonical, comment string, exists bool, err error) {
-	if err := ValidateLocalUsername(username); err != nil {
-		return "", "", "", false, err
-	}
 	pointer, err := windows.UTF16PtrFromString(username)
 	if err != nil {
 		return "", "", "", false, err
@@ -113,9 +107,6 @@ func InspectLocalStandardAccount(username string) (sid, canonical, comment strin
 		return "", "", "", false, fmt.Errorf("read Windows account %s: %w", username, err)
 	}
 	defer windows.NetApiBufferFree(buffer)
-	if buffer == nil {
-		return "", "", "", false, errors.New("Windows account lookup returned no data")
-	}
 	info := (*userInfo1)(unsafe.Pointer(buffer))
 	if info.Comment != nil {
 		comment = windows.UTF16PtrToString(info.Comment)
@@ -132,9 +123,6 @@ func InspectLocalStandardAccount(username string) (sid, canonical, comment strin
 }
 
 func SetLocalAccountPassword(username string, password []byte) error {
-	if err := ValidateLocalUsername(username); err != nil {
-		return err
-	}
 	name, err := windows.UTF16PtrFromString(username)
 	if err != nil {
 		return err
@@ -149,9 +137,6 @@ func SetLocalAccountPassword(username string, password []byte) error {
 }
 
 func SetLocalAccountComment(username, comment string) error {
-	if err := ValidateLocalUsername(username); err != nil {
-		return err
-	}
 	name, err := windows.UTF16PtrFromString(username)
 	if err != nil {
 		return err
@@ -240,9 +225,6 @@ func accountDisabled(username string) (bool, error) {
 		return false, fmt.Errorf("read Windows account state for %s: %w", username, err)
 	}
 	defer windows.NetApiBufferFree(buffer)
-	if buffer == nil {
-		return false, errors.New("Windows account lookup returned no data")
-	}
 	info := (*userInfo1)(unsafe.Pointer(buffer))
 	return info.Flags&userAccountDisabled != 0, nil
 }

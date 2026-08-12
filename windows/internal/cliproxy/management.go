@@ -63,9 +63,6 @@ func NewManagementClient(options ManagementOptions) (*ManagementClient, error) {
 }
 
 func (c *ManagementClient) JSON(ctx context.Context, method, route string, input, output any) error {
-	if c == nil || c.http == nil || !regexp.MustCompile(`^/[A-Za-z0-9._/-]{1,160}$`).MatchString(route) || strings.Contains(route, "..") {
-		return errors.New("CLIProxyAPI management request is invalid")
-	}
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)

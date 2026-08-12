@@ -100,6 +100,7 @@ func runPortal(ctx context.Context, configPath string) error {
 	if err != nil {
 		return err
 	}
+	release.SetIntegrityVerification(cfg.VerifyReleaseIntegrity)
 	if err := os.MkdirAll(filepath.Dir(cfg.PortalLogPath), 0o700); err != nil {
 		return fmt.Errorf("create Portal log directory: %w", err)
 	}

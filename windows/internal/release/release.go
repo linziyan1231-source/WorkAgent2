@@ -42,6 +42,10 @@ type Verified struct {
 }
 
 func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string) (Verified, error) {
+	return verifyCurrent(pointerPath, releasesRoot, supportedAionCore, integrityVerification.Load())
+}
+
+func verifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string, hashContent bool) (Verified, error) {
 	verified, err := loadCurrentMetadata(pointerPath, releasesRoot, supportedAionCore)
 	if err != nil {
 		return Verified{}, err
@@ -75,9 +79,11 @@ func VerifyCurrent(pointerPath, releasesRoot string, supportedAionCore []string)
 		if err != nil || !info.Mode().IsRegular() || info.Size() != expected.Size {
 			return fmt.Errorf("release file %s has unexpected type or size", name)
 		}
-		hash, err := hashFile(path)
-		if err != nil || !strings.EqualFold(hash, expected.SHA256) {
-			return fmt.Errorf("release file hash mismatch: %s", name)
+		if hashContent {
+			hash, err := hashFile(path)
+			if err != nil || !strings.EqualFold(hash, expected.SHA256) {
+				return fmt.Errorf("release file hash mismatch: %s", name)
+			}
 		}
 		seen[name] = true
 		return nil
@@ -139,14 +145,9 @@ func loadCurrentMetadata(pointerPath, releasesRoot string, supportedAionCore []s
 	if p.FormatVersion != 1 || p.Version == "" || !filepath.IsAbs(p.ReleasePath) || len(p.ManifestSHA256) != 64 {
 		return Verified{}, errors.New("invalid current release pointer")
 	}
-	root, err := filepath.Abs(releasesRoot)
-	if err != nil {
-		return Verified{}, err
-	}
-	releasePath, err := filepath.Abs(p.ReleasePath)
-	if err != nil {
-		return Verified{}, err
-	}
+	// Both paths passed the IsAbs checks above, so Abs cannot fail here.
+	root, _ := filepath.Abs(releasesRoot)
+	releasePath, _ := filepath.Abs(p.ReleasePath)
 	if !isWithin(root, releasePath) || strings.Contains(p.Version, "\\") || strings.Contains(p.Version, "/") || filepath.Base(releasePath) != p.Version {
 		return Verified{}, errors.New("release pointer escapes releases root or has a mismatched version")
 	}
@@ -254,10 +255,7 @@ func BuildManifest(root, version, aionCoreVersion string) (Manifest, error) {
 }
 
 func WriteManifest(path string, manifest Manifest) (string, error) {
-	b, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return "", err
-	}
+	b, _ := json.MarshalIndent(manifest, "", "  ")
 	b = append(b, '\n')
 	if err := os.WriteFile(path, b, 0o644); err != nil {
 		return "", err

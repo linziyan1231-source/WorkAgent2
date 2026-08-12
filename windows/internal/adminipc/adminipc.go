@@ -62,9 +62,6 @@ func Listen(ctx context.Context, securityDescriptor string, handler Handler) (*S
 }
 
 func listen(ctx context.Context, pipeName, securityDescriptor string, handler Handler) (*Server, error) {
-	if handler == nil {
-		return nil, errors.New("nil Portal admin IPC handler")
-	}
 	listener, err := winio.ListenPipe(pipeName, &winio.PipeConfig{SecurityDescriptor: securityDescriptor, InputBufferSize: 64 * 1024, OutputBufferSize: 64 * 1024})
 	if err != nil {
 		return nil, err
@@ -153,8 +150,10 @@ func call(ctx context.Context, pipeName string, request Request) (Response, erro
 }
 
 func writeFrame(writer io.Writer, value any) error {
-	data, err := json.Marshal(value)
-	if err != nil || len(data) == 0 || len(data) > maxMessageBytes {
+	// Request/Response carry only strings, bools, and numbers, so Marshal
+	// cannot fail or produce an empty payload.
+	data, _ := json.Marshal(value)
+	if len(data) > maxMessageBytes {
 		return errors.New("invalid Portal admin IPC message")
 	}
 	var header [4]byte
@@ -162,8 +161,10 @@ func writeFrame(writer io.Writer, value any) error {
 	if _, err := writer.Write(header[:]); err != nil {
 		return err
 	}
-	_, err = writer.Write(data)
-	return err
+	if _, err := writer.Write(data); err != nil {
+		return err
+	}
+	return nil
 }
 
 func readFrame(reader io.Reader, value any) error {

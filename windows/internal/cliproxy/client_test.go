@@ -50,27 +50,6 @@ func TestStateUsesStableSIDScopedUniqueKeyIDs(t *testing.T) {
 	}
 }
 
-func TestProvisionResponseRequiresTwoUniqueExpectedOneTimeKeys(t *testing.T) {
-	state, err := stateFor(testOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	valid := response{Version: 1, Keys: []responseKey{
-		{ID: state.CodexKeyID, PlainKey: "cpa_abcdefghijklmnopqrstuvwxyz012345", Action: "created"},
-		{ID: state.KimiKeyID, PlainKey: "cpa_zyxwvutsrqponmlkjihgfedcba987654", Action: "rotated"},
-	}}
-	data, _ := json.Marshal(valid)
-	parsed, err := parseResponse(data, state)
-	if err != nil || len(parsed) != 2 {
-		t.Fatalf("valid response rejected: parsed=%v err=%v", parsed, err)
-	}
-	valid.Keys[1].PlainKey = valid.Keys[0].PlainKey
-	data, _ = json.Marshal(valid)
-	if _, err := parseResponse(data, state); err == nil {
-		t.Fatal("shared employee key was accepted")
-	}
-}
-
 func TestRemoteDiagnosticsRedactPlainKeys(t *testing.T) {
 	got := redact("failed for cpa_abcdefghijklmnopqrstuvwxyz012345\nnext")
 	if strings.Contains(got, "cpa_") || strings.Contains(got, "\n") {

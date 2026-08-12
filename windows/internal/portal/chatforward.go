@@ -55,10 +55,6 @@ func (s *Server) isChatForwardRequest(r *http.Request) bool {
 }
 
 func (s *Server) chatForwardProxy(w http.ResponseWriter, r *http.Request) {
-	if s.chatForwardTarget == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "ChatForward is not configured"})
-		return
-	}
 	if requiresOrigin(r) && !s.validBrowserOrigin(r) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "message": "Security origin validation failed"})
 		return

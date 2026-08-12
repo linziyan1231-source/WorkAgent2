@@ -18,6 +18,10 @@ func main() {
 }
 
 func run(arguments []string) int {
+	// The standalone agent CLI binary does not read Portal configuration; the
+	// UserHost that launches it propagates its verify_release_integrity
+	// setting through this environment variable. Default is off.
+	agentcli.SetIntegrityVerification(os.Getenv(agentcli.VerifyIntegrityEnvironment) == "1")
 	executable, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

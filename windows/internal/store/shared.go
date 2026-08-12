@@ -146,9 +146,6 @@ func (s *Store) SearchSharedUsers(ctx context.Context, requesterID int64, query 
 			return nil, errors.New("shared user query is invalid")
 		}
 	}
-	if limit < 1 || limit > 50 {
-		limit = 20
-	}
 	pattern := "%" + escapeSharedLike(strings.ToLower(query)) + "%"
 	rows, err := s.db.QueryContext(ctx, userSelect+` WHERE id<>? AND enabled=1 AND is_admin=0 AND (lower(username) LIKE ? ESCAPE '\' OR lower(display_name) LIKE ? ESCAPE '\') ORDER BY username_norm LIMIT ?`, requesterID, pattern, pattern, limit)
 	if err != nil {
@@ -792,7 +789,7 @@ func (s *Store) CreateSharedConversation(ctx context.Context, conversation Share
 	if conversation.ThinkingEffort == "" {
 		conversation.ThinkingEffort = "low"
 	}
-	if len(conversation.ID) != 32 || conversation.Name == "" || len(conversation.Name) > 128 || conversation.AssistantID == "" || conversation.ModelID == "" || conversation.ThinkingEffort == "" || (conversation.AssistantBackend != "codex" && conversation.AssistantBackend != "kimi") {
+	if len(conversation.ID) != 32 || conversation.Name == "" || len(conversation.Name) > 128 || conversation.AssistantID == "" || conversation.ModelID == "" || (conversation.AssistantBackend != "codex" && conversation.AssistantBackend != "kimi") {
 		return SharedConversation{}, errors.New("shared conversation fields are invalid")
 	}
 	project, err := s.SharedProjectForUser(ctx, conversation.ProjectID, creatorUserID, true)
@@ -1029,14 +1026,8 @@ func (s *Store) AddSharedMessage(ctx context.Context, message SharedMessage, now
 			return SharedMessage{}, errors.New("shared message attachment is outside the shared project")
 		}
 	}
-	mentions, err := json.Marshal(message.Mentions)
-	if err != nil {
-		return SharedMessage{}, err
-	}
-	attachments, err := json.Marshal(message.Attachments)
-	if err != nil {
-		return SharedMessage{}, err
-	}
+	mentions, _ := json.Marshal(message.Mentions)
+	attachments, _ := json.Marshal(message.Attachments)
 	result, err := tx.ExecContext(ctx, `INSERT INTO shared_messages(id,conversation_id,author_user_id,kind,body,mentions_json,attachments_json,created_at) VALUES(?,?,?,'user',?,?,?,?)`, message.ID, message.Conversation, *message.AuthorUserID, message.Body, string(mentions), string(attachments), now.Unix())
 	if err != nil {
 		return SharedMessage{}, err

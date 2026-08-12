@@ -22,7 +22,7 @@ func TestOAuthManagerCompletesPKCEAndUpsertsRealAionCoreSchema(t *testing.T) {
 	dbPath := createOAuthDatabase(t, true)
 	now := time.Unix(1_700_000_000, 0)
 	state := oauthTestToken(1, 32)
-	redirectURI := "http://203.0.113.79:25808/api/mcp/oauth/callback"
+	redirectURI := "http://134.175.110.121:25808/api/mcp/oauth/callback"
 	var tokenCalls atomic.Int32
 	var expectedChallenge string
 	var server *httptest.Server

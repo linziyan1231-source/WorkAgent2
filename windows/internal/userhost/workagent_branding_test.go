@@ -41,14 +41,14 @@ default_skills_mode,default_skill_ids
 FROM assistant_definitions WHERE assistant_id='aionui-assistant'`).Scan(&name, &nameI18n, &description, &resourceType, &resourceRef, &prompt, &skillsMode, &skillIDs); err != nil {
 		t.Fatal(err)
 	}
-	if name != "WorkAgent AI Butler" || !strings.Contains(nameI18n, `"zh-CN":"WorkAgent AI 管家"`) || !strings.Contains(description, "WorkAgent AI") {
+	if name != "WorkAgent Butler" || !strings.Contains(nameI18n, `"zh-CN":"WorkAgent 管家"`) || !strings.Contains(description, "WorkAgent") {
 		t.Fatalf("unexpected assistant branding: name=%q i18n=%q description=%q", name, nameI18n, description)
 	}
 	if resourceType != "inline" || resourceRef.Valid || prompt != workagentAssistantPrompt || strings.Contains(prompt, "AionUi") || strings.Contains(prompt, "AionUI") {
 		t.Fatalf("unexpected branded prompt state: type=%q ref=%v prompt=%q", resourceType, resourceRef, prompt[:min(len(prompt), 160)])
 	}
 	if !strings.Contains(prompt, "`workagent-help`") || strings.Contains(prompt, "三个技能") {
-		t.Fatal("latest WorkAgent AI prompt does not route product help through workagent-help")
+		t.Fatal("latest WorkAgent prompt does not route product help through workagent-help")
 	}
 	if skillsMode != "fixed" || skillIDs != `["workagent-help","aionui-config","aionui-troubleshooting","aionui-webui-public"]` {
 		t.Fatalf("unexpected assistant skill defaults: mode=%q skills=%s", skillsMode, skillIDs)
@@ -82,8 +82,8 @@ FROM assistant_definitions WHERE assistant_id='aionui-assistant'`).Scan(&name, &
 		if strings.Contains(text, "AionUI") {
 			t.Fatalf("legacy AionUI branding remains in %s", relative)
 		}
-		if !strings.Contains(text, "WorkAgent AI") {
-			t.Fatalf("WorkAgent AI branding missing from %s", relative)
+		if !strings.Contains(text, "WorkAgent") {
+			t.Fatalf("WorkAgent branding missing from %s", relative)
 		}
 	}
 	reference, err := os.ReadFile(filepath.Join(dataDir, "builtin-skills", "aionui-webui-setup", "references", "aionui-webui.md"))
@@ -285,7 +285,7 @@ last_disabled_builtin_skill_ids TEXT NOT NULL DEFAULT '[]',last_mcp_ids TEXT NOT
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO skills VALUES (?,?,?,?, 'builtin',1,NULL,1,1)`, "skill-help", "workagent-help", "Read WorkAgent AI help", filepath.Join(filepath.Dir(path), "builtin-skills", "workagent-help")); err != nil {
+	if _, err := db.Exec(`INSERT INTO skills VALUES (?,?,?,?, 'builtin',1,NULL,1,1)`, "skill-help", "workagent-help", "Read WorkAgent help", filepath.Join(filepath.Dir(path), "builtin-skills", "workagent-help")); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}

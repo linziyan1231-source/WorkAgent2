@@ -82,7 +82,7 @@ WHERE source='generated' AND deleted_at IS NULL AND source_ref=agent_id
 		return false, fmt.Errorf("set managed Codex assistant defaults: %w", err)
 	}
 	changed, err := result.RowsAffected()
-	if err != nil || changed < 0 || changed > 1 {
+	if err != nil || changed > 1 {
 		return false, fmt.Errorf("unexpected managed Codex defaults update count: %d (%v)", changed, err)
 	}
 	var verified int

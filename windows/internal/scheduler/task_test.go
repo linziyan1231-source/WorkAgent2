@@ -36,6 +36,9 @@ func TestTaskXMLIsFixedPasswordLogonSingletonWithoutPassword(t *testing.T) {
 	if strings.Contains(documentXML, "Never-Store-This-Windows-Password") {
 		t.Fatal("task XML contains a Windows password")
 	}
+	if !strings.Contains(documentXML, "userhost-prestart.json") {
+		t.Fatal("task XML does not persist pre-log startup diagnostics")
+	}
 	var document taskDocument
 	if err := xml.Unmarshal([]byte(documentXML), &document); err != nil {
 		t.Fatal(err)
@@ -61,6 +64,17 @@ func TestTaskXMLIsFixedPasswordLogonSingletonWithoutPassword(t *testing.T) {
 	canonicalized.XML = strings.Replace(canonicalized.XML, "<Enabled>true</Enabled>", "", 1)
 	if err := VerifySpec(canonicalized, spec); err != nil {
 		t.Fatalf("Task Scheduler omitted true-by-default settings were rejected: %v", err)
+	}
+	legacy := info
+	legacyDocument := document
+	legacyDocument.Actions.Exec.Arguments = `--config "` + spec.ConfigPath + `"`
+	legacyXML, err := xml.Marshal(legacyDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.XML = string(legacyXML)
+	if err := VerifySpec(legacy, spec); err != nil {
+		t.Fatalf("pre-startup-capture task was not accepted for backward-compatible launch: %v", err)
 	}
 	disabledXML := info
 	disabledXML.XML = strings.Replace(documentXML, "<Enabled>true</Enabled>", "<Enabled>false</Enabled>", 1)
@@ -148,11 +162,12 @@ func TestTaskNameRejectsInputOutsideSIDGrammar(t *testing.T) {
 
 func testSpec() Spec {
 	return Spec{
-		WindowsSID:       "S-1-5-21-100-200-300-1017",
-		WindowsUsername:  `SERVER\test1`,
-		Executable:       `C:\Program Files\AionUiPortal\AionUiUserHost.exe`,
-		ConfigPath:       `C:\ProgramData\AionUiPortal\users\S-1-5-21-100-200-300-1017\userhost.json`,
-		WorkingDirectory: `C:\Program Files\AionUiPortal`,
-		PortalServiceSID: "S-1-5-80-123-456-789",
+		WindowsSID:         "S-1-5-21-100-200-300-1017",
+		WindowsUsername:    `SERVER\test1`,
+		Executable:         `C:\Program Files\AionUiPortal\AionUiUserHost.exe`,
+		ConfigPath:         `C:\ProgramData\AionUiPortal\users\S-1-5-21-100-200-300-1017\userhost.json`,
+		StartupCapturePath: `C:\AionUiData\users\S-1-5-21-100-200-300-1017\logs\userhost-prestart.json`,
+		WorkingDirectory:   `C:\Program Files\AionUiPortal`,
+		PortalServiceSID:   "S-1-5-80-123-456-789",
 	}
 }

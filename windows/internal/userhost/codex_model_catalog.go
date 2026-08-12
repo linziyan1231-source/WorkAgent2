@@ -28,6 +28,7 @@ import (
 
 const (
 	maxManagedCodexCatalog             = 1024 * 1024
+	managedCodexVerifierTimeout        = 60 * time.Second
 	managedCodexVerifierCleanupTimeout = 3 * time.Second
 )
 
@@ -368,7 +369,7 @@ func loadCodexAPIKey(path string) ([]byte, error) {
 }
 
 func (h *Host) verifyManagedCodexModelList(ctx context.Context, env []string) error {
-	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	verifyCtx, cancel := context.WithTimeout(ctx, managedCodexVerifierTimeout)
 	defer cancel()
 	executable := filepath.Join(agentcli.BinFromAionReleases(h.cfg.ReleasesRoot), "codex.exe")
 	cmd := exec.CommandContext(verifyCtx, executable, "app-server", "--listen", "stdio://")
@@ -471,7 +472,7 @@ func readCodexResponse(ctx context.Context, results <-chan codexScanResult, requ
 	for lines := 0; lines < 100; lines++ {
 		select {
 		case <-ctx.Done():
-			return codexResponseEnvelope{}, errors.New("Codex model catalog verification exceeded 30 seconds")
+			return codexResponseEnvelope{}, fmt.Errorf("Codex model catalog verification exceeded %.0f seconds", managedCodexVerifierTimeout.Seconds())
 		case result, open := <-results:
 			if !open {
 				return codexResponseEnvelope{}, fmt.Errorf("Codex model catalog verification returned no response for request %d", requestID)

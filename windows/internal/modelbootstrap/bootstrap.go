@@ -75,6 +75,7 @@ type Status struct {
 	Pending       bool
 	RebasePending bool
 	State         State
+	bundle        Bundle
 }
 
 type Rebase struct {
@@ -248,11 +249,8 @@ func Paths(dataRoot string) (bundlePath, markerPath string, err error) {
 	return filepath.Join(root, "credentials", BundleFileName), filepath.Join(root, "config", MarkerFileName), nil
 }
 
-func rebasePath(dataRoot string) (string, error) {
-	if !filepath.IsAbs(dataRoot) {
-		return "", errors.New("model bootstrap data root must be absolute")
-	}
-	return filepath.Join(filepath.Clean(dataRoot), "credentials", RebaseFileName), nil
+func rebasePath(dataRoot string) string {
+	return filepath.Join(filepath.Clean(dataRoot), "credentials", RebaseFileName)
 }
 
 func Inspect(dataRoot string) (Status, error) {
@@ -268,7 +266,7 @@ func Inspect(dataRoot string) (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("inspect model bootstrap marker: %w", err)
 	}
-	rebaseFile, _ := rebasePath(dataRoot)
+	rebaseFile := rebasePath(dataRoot)
 	rebaseExists, err := regularFileExists(rebaseFile)
 	if err != nil {
 		return Status{}, fmt.Errorf("inspect pending model bootstrap rebase: %w", err)
@@ -313,7 +311,7 @@ func Inspect(dataRoot string) (Status, error) {
 		if err := bundle.Validate(); err != nil {
 			return Status{}, fmt.Errorf("validate pending model bootstrap: %w", err)
 		}
-		return Status{Pending: true, State: bundle.State}, nil
+		return Status{Pending: true, State: bundle.State, bundle: bundle}, nil
 	}
 	return Status{}, nil
 }
@@ -331,7 +329,7 @@ func StageRebase(dataRoot, baseURL string) (Rebase, error) {
 		return Rebase{}, err
 	}
 	rebase := Rebase{FormatVersion: FormatVersion, Previous: status.State, Target: target}
-	path, _ := rebasePath(dataRoot)
+	path := rebasePath(dataRoot)
 	if err := writeJSONAtomic(path, rebase); err != nil {
 		return Rebase{}, fmt.Errorf("stage model bootstrap rebase: %w", err)
 	}
@@ -354,10 +352,7 @@ func PrepareRebaseTarget(previous State, baseURL string) (State, error) {
 }
 
 func LoadPendingRebase(dataRoot string) (Rebase, bool, error) {
-	path, err := rebasePath(dataRoot)
-	if err != nil {
-		return Rebase{}, false, err
-	}
+	path := rebasePath(dataRoot)
 	exists, err := regularFileExists(path)
 	if err != nil || !exists {
 		return Rebase{}, false, err
@@ -367,10 +362,7 @@ func LoadPendingRebase(dataRoot string) (Rebase, bool, error) {
 }
 
 func CompleteRebase(dataRoot string, target State) error {
-	path, err := rebasePath(dataRoot)
-	if err != nil {
-		return err
-	}
+	path := rebasePath(dataRoot)
 	rebase, err := loadRebase(path)
 	if err != nil {
 		return errors.New("pending model bootstrap rebase is missing or invalid")
@@ -438,15 +430,7 @@ func LoadPending(dataRoot string) (Bundle, bool, error) {
 	if !status.Pending {
 		return Bundle{}, false, nil
 	}
-	bundlePath, _, _ := Paths(dataRoot)
-	var bundle Bundle
-	if err := readStrictJSON(bundlePath, &bundle); err != nil {
-		return Bundle{}, false, err
-	}
-	if err := bundle.Validate(); err != nil {
-		return Bundle{}, false, err
-	}
-	return bundle, true, nil
+	return status.bundle, true, nil
 }
 
 func Stage(dataRoot string, bundle Bundle, replace bool) error {

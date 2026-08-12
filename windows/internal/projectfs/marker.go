@@ -33,10 +33,7 @@ func EnsureMarker(projectDirectory string) (Marker, error) {
 		return Marker{}, fmt.Errorf("create project id: %w", err)
 	}
 	marker = Marker{Version: 1, ProjectID: base64.RawURLEncoding.EncodeToString(random)}
-	encoded, err := json.Marshal(marker)
-	if err != nil {
-		return Marker{}, err
-	}
+	encoded, _ := json.Marshal(marker)
 	file, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return ReadMarker(projectDirectory)
@@ -73,10 +70,7 @@ func WriteMarker(projectDirectory, projectID string) (Marker, error) {
 	}
 	markerPath := filepath.Join(filepath.Clean(projectDirectory), MarkerFileName)
 	marker := Marker{Version: 1, ProjectID: projectID}
-	encoded, err := json.Marshal(marker)
-	if err != nil {
-		return Marker{}, err
-	}
+	encoded, _ := json.Marshal(marker)
 	file, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return Marker{}, fmt.Errorf("create project marker: %w", err)
@@ -107,7 +101,7 @@ func ReadMarker(projectDirectory string) (Marker, error) {
 	if err != nil {
 		return Marker{}, err
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 2 || info.Size() > 1024 {
+	if !info.Mode().IsRegular() || info.Size() < 2 || info.Size() > 1024 {
 		return Marker{}, errors.New("project marker must be a bounded regular non-symlink file")
 	}
 	contents, err := os.ReadFile(markerPath)

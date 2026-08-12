@@ -85,10 +85,7 @@ func (s *Store) SetKimiDatasourceGrant(ctx context.Context, userID int64, enable
 	if err := ValidateKimiDatasourceLimits(daily, monthly); err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return fmt.Errorf("encode Kimi datasource sources: %w", err)
-	}
+	encoded, _ := json.Marshal(normalized)
 	var tokenHash any
 	if enabled {
 		if strings.TrimSpace(token) == "" {

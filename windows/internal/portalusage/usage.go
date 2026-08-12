@@ -152,12 +152,7 @@ func (s *Service) CurrentMany(ctx context.Context, windowsSIDs []string) (map[st
 			results[cacheKey] = cloneSummary(entry.value)
 			continue
 		}
-		ids := modelbootstrap.KeyIDsForSID(windowsSID)
-		if err := ids.ValidateForSID(windowsSID); err != nil {
-			s.mu.Unlock()
-			return nil, fmt.Errorf("derive current-user model mapping: %w", err)
-		}
-		pending[cacheKey] = ids
+		pending[cacheKey] = modelbootstrap.KeyIDsForSID(windowsSID)
 	}
 	s.mu.Unlock()
 	if len(pending) == 0 {
@@ -269,10 +264,7 @@ func parseDecimal(value string) (*big.Rat, error) {
 	if !decimalPattern.MatchString(value) {
 		return nil, errors.New("unsupported decimal")
 	}
-	amount, ok := new(big.Rat).SetString(value)
-	if !ok || amount.Sign() < 0 {
-		return nil, errors.New("invalid decimal")
-	}
+	amount, _ := new(big.Rat).SetString(value)
 	return amount, nil
 }
 

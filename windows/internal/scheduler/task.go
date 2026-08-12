@@ -39,12 +39,13 @@ var (
 type Controller struct{}
 
 type Spec struct {
-	WindowsSID       string
-	WindowsUsername  string
-	Executable       string
-	ConfigPath       string
-	WorkingDirectory string
-	PortalServiceSID string
+	WindowsSID         string
+	WindowsUsername    string
+	Executable         string
+	ConfigPath         string
+	StartupCapturePath string
+	WorkingDirectory   string
+	PortalServiceSID   string
 }
 
 type Info struct {
@@ -285,7 +286,8 @@ func VerifySpec(info Info, spec Spec) error {
 	if err := xml.Unmarshal([]byte(decodedTaskXML(info.XML)), &document); err != nil {
 		return fmt.Errorf("parse registered task XML: %w", err)
 	}
-	wantArgs := `--config "` + spec.ConfigPath + `"`
+	wantArgs := `--config "` + spec.ConfigPath + `" --startup-capture "` + spec.StartupCapturePath + `"`
+	legacyArgs := `--config "` + spec.ConfigPath + `"`
 	principalMatches := strings.EqualFold(document.Principals.Principal.UserID, spec.WindowsUsername) || strings.EqualFold(document.Principals.Principal.UserID, spec.WindowsSID)
 	runLevel := document.Principals.Principal.RunLevel
 	if !principalMatches || document.Principals.Principal.LogonType != "Password" ||
@@ -296,7 +298,8 @@ func VerifySpec(info Info, spec Spec) error {
 		document.Settings.ExecutionTimeLimit != "PT0S" {
 		return errors.New("task settings do not enforce the required on-demand singleton behavior")
 	}
-	if !samePath(document.Actions.Exec.Command, spec.Executable) || document.Actions.Exec.Arguments != wantArgs ||
+	if !samePath(document.Actions.Exec.Command, spec.Executable) ||
+		(document.Actions.Exec.Arguments != wantArgs && document.Actions.Exec.Arguments != legacyArgs) ||
 		!samePath(document.Actions.Exec.WorkingDirectory, spec.WorkingDirectory) {
 		return errors.New("task action does not match the fixed UserHost command")
 	}
@@ -399,7 +402,7 @@ func validateSpec(spec Spec) error {
 	if strings.TrimSpace(spec.WindowsUsername) == "" || !validSID(spec.PortalServiceSID) {
 		return errors.New("Windows account and Portal service SID are required")
 	}
-	for name, value := range map[string]string{"executable": spec.Executable, "config": spec.ConfigPath, "working directory": spec.WorkingDirectory} {
+	for name, value := range map[string]string{"executable": spec.Executable, "config": spec.ConfigPath, "startup capture": spec.StartupCapturePath, "working directory": spec.WorkingDirectory} {
 		if !filepath.IsAbs(value) {
 			return fmt.Errorf("task %s must be an absolute path", name)
 		}
@@ -420,7 +423,7 @@ func validSID(value string) bool {
 
 func buildXML(spec Spec) string {
 	escape := func(value string) string { return html.EscapeString(value) }
-	arguments := `--config &quot;` + escape(spec.ConfigPath) + `&quot;`
+	arguments := `--config &quot;` + escape(spec.ConfigPath) + `&quot; --startup-capture &quot;` + escape(spec.StartupCapturePath) + `&quot;`
 	return `<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` +
 		`<RegistrationInfo><Description>AionUi isolated per-user Web host</Description></RegistrationInfo>` +
 		`<Principals><Principal id="UserHost"><UserId>` + escape(spec.WindowsUsername) + `</UserId><LogonType>Password</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>` +
