@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidNameFollowsWindowsDirectoryRules(t *testing.T) {
-	invalid := []string{"", " ", ".", "..", "../escape", `nested\escape`, "bad:name", "trailing.", " leading", "CON", "con.txt", "LPT9.log", "line\nbreak"}
+	invalid := []string{"", " ", ".", "..", "../escape", `nested\escape`, "bad:name", "trailing.", " leading", "CON", "con.txt", "LPT9.log", "line\nbreak", "LONGNA~1", "DOCUME~12.doc"}
 	for _, name := range invalid {
 		if ValidName(name) {
 			t.Fatalf("unsafe project name accepted: %q", name)

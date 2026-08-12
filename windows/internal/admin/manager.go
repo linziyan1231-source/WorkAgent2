@@ -669,7 +669,10 @@ func (m *Manager) InstallOrUpdateTask(ctx context.Context, username string, pass
 		}
 		waitForPipeExit(user.WindowsSID, 15*time.Second)
 	}
-	spec := m.taskSpec(user)
+	spec, err := m.taskSpec(user)
+	if err != nil {
+		return ipc.Status{}, err
+	}
 	if err := m.Tasks.Register(ctx, spec, password); err != nil {
 		return ipc.Status{}, err
 	}
@@ -693,11 +696,12 @@ func (m *Manager) InstallOrUpdateTask(ctx context.Context, username string, pass
 			}
 		}
 		if err != nil {
+			capture := startupCaptureDiagnostic(spec.StartupCapturePath)
 			if infoErr == nil {
 				if latest.IsRunning() {
-					return ipc.Status{}, fmt.Errorf("scheduled task is still running (LastTaskResult=0x%08x), but UserHost did not become healthy before the extended startup deadline: %w", uint32(latest.LastTaskResult), err)
+					return ipc.Status{}, fmt.Errorf("scheduled task is still running (LastTaskResult=0x%08x%s), but UserHost did not become healthy before the extended startup deadline: %w", uint32(latest.LastTaskResult), capture, err)
 				}
-				return ipc.Status{}, fmt.Errorf("scheduled task UserHost verification failed (LastTaskResult=0x%08x): %w", uint32(latest.LastTaskResult), err)
+				return ipc.Status{}, fmt.Errorf("scheduled task UserHost verification failed (LastTaskResult=0x%08x%s): %w", uint32(latest.LastTaskResult), capture, err)
 			}
 			return ipc.Status{}, err
 		}
@@ -846,19 +850,45 @@ func (m *Manager) VerifyACLs(ctx context.Context) []error {
 		return append(failures, err)
 	}
 	for _, user := range users {
-		dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("user %s private data layout: %w", user.Username, err))
-			continue
-		}
-		if err := winutil.VerifyTreeACL(dataRoot, winutil.PrivateTreePolicy(user.WindowsSID)); err != nil {
-			failures = append(failures, fmt.Errorf("user %s private data: %w", user.Username, err))
-		}
-		if err := winutil.VerifyTreeACL(filepath.Dir(m.userConfigPath(user.WindowsSID)), winutil.UserConfigPolicy(m.Config.PortalServiceSID, user.WindowsSID)); err != nil {
-			failures = append(failures, fmt.Errorf("user %s fixed config: %w", user.Username, err))
-		}
+		failures = append(failures, m.VerifyUserACLs(user)...)
 	}
 	return failures
+}
+
+func (m *Manager) VerifyUserACLs(user store.User) []error {
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return []error{fmt.Errorf("user %s private data layout: %w", user.Username, err)}
+	}
+	var failures []error
+	if err := winutil.VerifyTreeACL(dataRoot, winutil.PrivateTreePolicy(user.WindowsSID)); err != nil {
+		failures = append(failures, fmt.Errorf("user %s private data: %w", user.Username, err))
+	}
+	if err := winutil.VerifyTreeACL(filepath.Dir(m.userConfigPath(user.WindowsSID)), winutil.UserConfigPolicy(m.Config.PortalServiceSID, user.WindowsSID)); err != nil {
+		failures = append(failures, fmt.Errorf("user %s fixed config: %w", user.Username, err))
+	}
+	return failures
+}
+
+func startupCaptureDiagnostic(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 32*1024 {
+		return ""
+	}
+	var record struct {
+		Stage    string `json:"stage"`
+		Status   string `json:"status"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if json.Unmarshal(data, &record) != nil || record.Stage == "" {
+		return ""
+	}
+	for _, char := range record.Stage + record.Status {
+		if !(char == '_' || char == '-' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z') {
+			return ""
+		}
+	}
+	return fmt.Sprintf(", startup_stage=%s, startup_status=%s, startup_exit=%d", record.Stage, record.Status, record.ExitCode)
 }
 
 func (m *Manager) servicePrivateDirectories() []string {
@@ -1063,9 +1093,8 @@ func (m *Manager) Readiness(ctx context.Context) []error {
 			failures = append(failures, fmt.Errorf("TLS key pair: %w", err))
 		}
 	}
-	if _, err := release.VerifyCurrent(m.Config.CurrentReleaseFile, m.Config.ReleasesRoot, m.Config.SupportedAionCore); err != nil {
-		failures = append(failures, fmt.Errorf("shared release: %w", err))
-	}
+	// VerifyACLs already runs release.VerifyCurrent's full-tree hash for the
+	// shared release; running it here again would double that cost.
 	failures = append(failures, m.VerifyACLs(ctx)...)
 	users, err := m.Store.ListManagedUsers(ctx)
 	if err != nil {
@@ -1077,7 +1106,12 @@ func (m *Manager) Readiness(ctx context.Context) []error {
 			failures = append(failures, fmt.Errorf("user %s task: %w", user.Username, err))
 			continue
 		}
-		if err := scheduler.VerifySpec(info, m.taskSpec(user)); err != nil {
+		spec, specErr := m.taskSpec(user)
+		if specErr != nil {
+			failures = append(failures, fmt.Errorf("user %s task: %w", user.Username, specErr))
+			continue
+		}
+		if err := scheduler.VerifySpec(info, spec); err != nil {
 			failures = append(failures, fmt.Errorf("user %s task: %w", user.Username, err))
 		}
 	}
@@ -1206,11 +1240,7 @@ func (m *Manager) UserDataRootForSID(sid string) (string, error) {
 }
 
 func (m *Manager) profileDataRoot(sid string) (string, string, error) {
-	resolver := m.ProfileDirectory
-	if resolver == nil {
-		resolver = winutil.ProfileDirectoryForSID
-	}
-	profile, err := resolver(sid)
+	profile, err := m.ProfileDirectory(sid)
 	if err != nil {
 		return "", "", err
 	}
@@ -1246,9 +1276,14 @@ func (m *Manager) allocatePortBlocks() (int, int, error) {
 	return 0, 0, errors.New("no configured internal port block remains")
 }
 
-func (m *Manager) taskSpec(user store.User) scheduler.Spec {
+func (m *Manager) taskSpec(user store.User) (scheduler.Spec, error) {
+	dataRoot, err := m.UserDataRootForSID(user.WindowsSID)
+	if err != nil {
+		return scheduler.Spec{}, fmt.Errorf("resolve startup capture directory: %w", err)
+	}
 	return scheduler.Spec{WindowsSID: user.WindowsSID, WindowsUsername: user.WindowsUsername, Executable: m.Config.UserHostExecutable,
-		ConfigPath: m.userConfigPath(user.WindowsSID), WorkingDirectory: filepath.Dir(m.Config.UserHostExecutable), PortalServiceSID: m.Config.PortalServiceSID}
+		ConfigPath: m.userConfigPath(user.WindowsSID), StartupCapturePath: filepath.Join(dataRoot, "logs", "userhost-prestart.json"),
+		WorkingDirectory: filepath.Dir(m.Config.UserHostExecutable), PortalServiceSID: m.Config.PortalServiceSID}, nil
 }
 
 func (m *Manager) userConfigPath(sid string) string {
@@ -1261,7 +1296,7 @@ func writeJSONAtomic(path string, value any) error {
 		return err
 	}
 	data = append(data, '\n')
-	temporary := path + fmt.Sprintf(".tmp-%d", os.Getpid())
+	temporary := path + fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano())
 	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err

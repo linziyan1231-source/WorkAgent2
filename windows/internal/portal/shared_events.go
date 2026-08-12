@@ -53,7 +53,7 @@ func (h *sharedEventHub) publish(message store.SharedMessage) {
 }
 
 func (s *Server) publishSharedMessage(message store.SharedMessage) {
-	if s.sharedEvents != nil && message.Seq > 0 {
+	if message.Seq > 0 {
 		s.sharedEvents.publish(message)
 	}
 }
@@ -165,17 +165,15 @@ func writeSharedSSE(w http.ResponseWriter, currentUserID int64, message store.Sh
 			"content": content,
 		},
 	}
-	envelope, err := json.Marshal(map[string]any{"event": "message.stream", "payload": payload})
-	if err != nil {
-		return false
-	}
-	if _, err = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", message.Seq, envelope); err != nil {
+	// The envelope only contains values derived from a database row, so it always marshals.
+	envelope, _ := json.Marshal(map[string]any{"event": "message.stream", "payload": payload})
+	if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", message.Seq, envelope); err != nil {
 		return false
 	}
 	if message.Kind != "assistant" && message.Kind != "system" {
 		return true
 	}
-	completed, err := json.Marshal(map[string]any{
+	completed, _ := json.Marshal(map[string]any{
 		"event": "turn.completed",
 		"payload": map[string]any{
 			"session_id": "shared:" + message.Conversation,
@@ -188,9 +186,6 @@ func writeSharedSSE(w http.ResponseWriter, currentUserID int64, message store.Sh
 			},
 		},
 	})
-	if err != nil {
-		return false
-	}
-	_, err = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", message.Seq, completed)
+	_, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", message.Seq, completed)
 	return err == nil
 }

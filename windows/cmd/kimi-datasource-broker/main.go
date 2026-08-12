@@ -58,11 +58,9 @@ func run(ctx context.Context, configPath string) error {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
-		err := <-done
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+		// A successful Shutdown means ListenAndServe has returned http.ErrServerClosed.
+		<-done
+		return nil
 	case err := <-done:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

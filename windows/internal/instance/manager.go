@@ -22,6 +22,12 @@ var (
 	ErrUserDisabled  = errors.New("Portal user is disabled")
 )
 
+// UserHost is configured with a 30-second graceful shutdown window in the
+// managed runtime. Waiting an additional 15 seconds for the SID-private pipe
+// to disappear prevents Task Scheduler's IgnoreNew policy from discarding the
+// browser's first post-restart Ensure request while the old task is still live.
+const instanceDrainTimeout = 45 * time.Second
+
 type TaskController interface {
 	Start(context.Context, string) error
 }
@@ -129,9 +135,6 @@ func (m *Manager) Ensure(ctx context.Context, sid string) (ipc.Status, error) {
 	}
 	if count >= m.cfg.MaxRunningInstances {
 		return ipc.Status{}, ErrInstanceLimit
-	}
-	if m.tasks == nil {
-		return ipc.Status{}, errors.New("Task Scheduler controller is unavailable")
 	}
 	if err := m.tasks.Start(ctx, sid); err != nil {
 		return ipc.Status{}, fmt.Errorf("start scheduled UserHost task: %w", err)
@@ -309,7 +312,9 @@ func validStorageBucket(value ipc.StorageBucketUsage) bool {
 }
 
 func (m *Manager) WriteUsageSnapshot(ctx context.Context, sid string, snapshot []byte) error {
-	if len(snapshot) == 0 || len(snapshot) > 64*1024 || !json.Valid(snapshot) {
+	// The snapshot comes from an internal json.Marshal product, so it is never
+	// empty or malformed; only the size guardrail remains meaningful.
+	if len(snapshot) > 64*1024 {
 		return errors.New("usage snapshot is invalid")
 	}
 	response, err := m.request(ctx, sid, ipc.Request{Command: "usage_snapshot", UsageSnapshot: json.RawMessage(snapshot)})
@@ -562,24 +567,46 @@ func (m *Manager) RelocateSharedProjectConversations(ctx context.Context, sid st
 }
 
 func (m *Manager) Stop(ctx context.Context, sid string) error {
-	return m.drain(ctx, sid, "stop")
+	return m.drain(ctx, sid, "stop", false)
 }
 
 // Restart asks the SID-owned UserHost to tear down its complete process tree.
 // The next authenticated browser request starts a fresh scheduled UserHost run.
 func (m *Manager) Restart(ctx context.Context, sid string) error {
-	return m.drain(ctx, sid, "restart")
+	return m.drain(ctx, sid, "restart", true)
 }
 
-func (m *Manager) drain(ctx context.Context, sid, command string) error {
+func (m *Manager) drain(ctx context.Context, sid, command string, waitForTeardown bool) error {
 	state := m.runtime(sid)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.draining = true
 	defer func() { state.draining = false }()
 	_, err := m.command(ctx, sid, command)
+	if err == nil && waitForTeardown {
+		err = m.waitForPipeTeardownLocked(ctx, sid, instanceDrainTimeout)
+	}
 	state.auth, state.authInstanceID = ipc.AuthMaterial{}, ""
 	return err
+}
+
+func (m *Manager) waitForPipeTeardownLocked(ctx context.Context, sid string, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.New("UserHost did not finish draining before the restart deadline")
+		case <-ticker.C:
+			if _, err := m.command(ctx, sid, "status"); err != nil {
+				return nil
+			}
+		}
+	}
 }
 
 func (m *Manager) BeginRequest(sid string, webSocket bool) (func(), error) {

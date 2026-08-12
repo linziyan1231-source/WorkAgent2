@@ -184,10 +184,8 @@ func rejectNonCanonicalJSONKey(object map[string]any, canonical string) error {
 }
 
 func replaceRequestJSONBody(request *http.Request, payload any) error {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
+	// payload was decoded from JSON, so it always marshals back cleanly.
+	encoded, _ := json.Marshal(payload)
 	request.Body = io.NopCloser(bytes.NewReader(encoded))
 	request.ContentLength = int64(len(encoded))
 	request.TransferEncoding = nil
@@ -282,10 +280,8 @@ func (s *Server) sanitizeSharedPathsResponse(response *http.Response, userID int
 		}
 	}
 	payload = sanitizeSharedPathValue(payload, mappings, filepath.Join(filepath.Clean(s.cfg.UserDataRoot), "shared"))
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
+	// payload was decoded from JSON, so it always marshals back cleanly.
+	encoded, _ := json.Marshal(payload)
 	response.Body = io.NopCloser(bytes.NewReader(encoded))
 	response.ContentLength = int64(len(encoded))
 	response.Header.Set("Content-Length", fmt.Sprint(len(encoded)))

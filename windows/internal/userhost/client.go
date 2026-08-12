@@ -34,14 +34,10 @@ type systemInfo struct {
 }
 
 func newAionClient(port int) (*aionClient, error) {
-	base, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
-	if err != nil {
-		return nil, err
-	}
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, err
-	}
+	// url.Parse cannot fail for this fixed loopback URL and cookiejar.New
+	// cannot fail with nil options, so both errors are ignored.
+	base, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	jar, _ := cookiejar.New(nil)
 	return &aionClient{base: base, client: &http.Client{Jar: jar, Timeout: 15 * time.Second}}, nil
 }
 

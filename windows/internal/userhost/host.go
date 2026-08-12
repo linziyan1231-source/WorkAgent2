@@ -70,9 +70,23 @@ type Host struct {
 	runtimeControlSecret string
 	sharedCredentialMu   sync.RWMutex
 	sharedCredentials    map[string]sharedAgentCredential
+	startupStage         func(string)
 }
 
 func Run(ctx context.Context, cfg config.UserHost) error {
+	return RunObserved(ctx, cfg, nil)
+}
+
+// RunObserved reports bounded, non-secret startup stage identifiers before
+// the private UserHost log is available. It is used by the fixed scheduled
+// task entrypoint to make pre-log failures diagnosable and safely retryable.
+func RunObserved(ctx context.Context, cfg config.UserHost, observe func(string)) error {
+	stage := func(value string) {
+		if observe != nil {
+			observe(value)
+		}
+	}
+	stage("runtime_secret")
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return fmt.Errorf("generate AionCore runtime control secret: %w", err)
@@ -81,6 +95,7 @@ func Run(ctx context.Context, cfg config.UserHost) error {
 		cfg: cfg, stop: make(chan struct{}),
 		runtimeControlSecret: base64.RawURLEncoding.EncodeToString(secret),
 		sharedCredentials:    make(map[string]sharedAgentCredential),
+		startupStage:         stage,
 	}
 	clear(secret)
 	return h.run(ctx)
@@ -88,16 +103,19 @@ func Run(ctx context.Context, cfg config.UserHost) error {
 
 func (h *Host) run(ctx context.Context) error {
 	startupBegan := time.Now()
+	h.startupStage("identity")
 	identity, err := winutil.RequireIdentity(h.cfg.WindowsSID, true)
 	if err != nil {
 		return err
 	}
+	h.startupStage("whoami")
 	whoamiCtx, cancelWhoami := context.WithTimeout(ctx, 10*time.Second)
 	err = winutil.VerifyWhoamiSID(whoamiCtx, h.cfg.WindowsSID)
 	cancelWhoami()
 	if err != nil {
 		return err
 	}
+	h.startupStage("windows_profile")
 	windowsProfile, err := winutil.ProfileDirectoryForSID(h.cfg.WindowsSID)
 	if err != nil {
 		return err
@@ -105,6 +123,7 @@ func (h *Host) run(ctx context.Context) error {
 	if !samePath(windowsProfile, h.cfg.WindowsProfile) {
 		return fmt.Errorf("registered Windows profile %s does not match configured profile %s", windowsProfile, h.cfg.WindowsProfile)
 	}
+	h.startupStage("data_root")
 	expectedDataRoot := filepath.Join(windowsProfile, config.UserDataDirectoryName)
 	if h.cfg.ConfigVersion == 2 {
 		expectedDataRoot = filepath.Join(filepath.Clean(h.cfg.DataRootBase), h.cfg.WindowsSID)
@@ -112,35 +131,43 @@ func (h *Host) run(ctx context.Context) error {
 	if !samePath(expectedDataRoot, h.cfg.DataRoot) {
 		return fmt.Errorf("configured data root %s does not match SID profile data root %s", h.cfg.DataRoot, expectedDataRoot)
 	}
+	h.startupStage("release_verify")
 	verified, err := release.VerifyCurrentFast(h.cfg.CurrentReleaseFile, h.cfg.ReleasesRoot, h.cfg.SupportedAionCore)
 	if err != nil {
 		return fmt.Errorf("verify shared AionUi release: %w", err)
 	}
+	h.startupStage("private_directories")
 	h.release = verified
 	h.dirs, err = ensurePrivateDirs(h.cfg.DataRoot)
 	if err != nil {
 		return err
 	}
+	h.startupStage("cli_defaults")
 	if _, err := applyInitialCLILanguageDefaults(h.dirs); err != nil {
 		return err
 	}
+	h.startupStage("private_acl")
 	if err := winutil.VerifyTreeACL(h.cfg.DataRoot, winutil.PrivateTreePolicy(h.cfg.WindowsSID)); err != nil {
 		return fmt.Errorf("verify private user tree before sandbox launch: %w", err)
 	}
+	h.startupStage("sandbox_membership")
 	if err := winutil.RequireCurrentTokenOutsideCodexSandboxGroup(); err != nil {
 		return err
 	}
+	h.startupStage("restricted_token")
 	h.sandbox, err = winutil.NewCurrentUserRestrictedToken(h.cfg.WindowsSID)
 	if err != nil {
 		return fmt.Errorf("create per-user process sandbox: %w", err)
 	}
 	defer h.sandbox.Close()
+	h.startupStage("private_log")
 	h.oauth = newOAuthManager(filepath.Join(h.dirs.Data, "aionui-backend.db"), nil, time.Now, false)
 	h.log, err = openPrivateLog(h.dirs.Logs)
 	if err != nil {
 		return fmt.Errorf("open UserHost log: %w", err)
 	}
 	defer h.log.Close()
+	h.startupStage("private_log_ready")
 	h.log.Printf("UserHost starting sid=%s account=%s\\%s release=%s", identity.SID, identity.Domain, identity.Username, verified.Manifest.Version)
 	h.log.Printf("Startup release verification mode=fast prelaunch_elapsed_ms=%d", time.Since(startupBegan).Milliseconds())
 	h.job, err = winutil.NewJob("AionUiWeb-"+h.cfg.WindowsSID, winutil.JobLimits{
@@ -246,7 +273,7 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	if brandingApplied {
-		h.log.Printf("Updated the built-in WorkAgent AI assistant, prompt, and skill bindings")
+		h.log.Printf("Updated the built-in WorkAgent assistant, prompt, and skill bindings")
 	}
 	kimiDatasourceApplied, err := applyKimiDatasourceAccess(ctx, dbPath, h.dirs.Data, h.cfg.KimiDatasource, time.Now())
 	if err != nil {
@@ -736,7 +763,7 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		h.mu.Unlock()
 		return ipc.Response{OK: true, Status: &status}
 	case "oauth_start":
-		if request.OAuthStart == nil || !h.validOAuthInstance(request.OAuthStart.InstanceID) || h.oauth == nil {
+		if request.OAuthStart == nil || !h.validOAuthInstance(request.OAuthStart.InstanceID) {
 			return ipc.Response{OK: false, ErrorCode: "INVALID_OAUTH_FLOW", ErrorMessage: "OAuth start request did not match this healthy UserHost instance"}
 		}
 		result, err := h.oauth.start(ctx, *request.OAuthStart)
@@ -746,7 +773,7 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		h.touchActivity()
 		return ipc.Response{OK: true, OAuth: &result}
 	case "oauth_complete":
-		if request.OAuthComplete == nil || !h.validOAuthInstance(request.OAuthComplete.InstanceID) || h.oauth == nil {
+		if request.OAuthComplete == nil || !h.validOAuthInstance(request.OAuthComplete.InstanceID) {
 			return ipc.Response{OK: false, ErrorCode: "INVALID_OAUTH_FLOW", ErrorMessage: "OAuth completion request did not match this healthy UserHost instance"}
 		}
 		if err := h.oauth.complete(ctx, *request.OAuthComplete); err != nil {
@@ -755,7 +782,7 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 		h.touchActivity()
 		return ipc.Response{OK: true}
 	case "oauth_cancel":
-		if request.OAuthCancel == nil || !h.validOAuthInstance(request.OAuthCancel.InstanceID) || h.oauth == nil {
+		if request.OAuthCancel == nil || !h.validOAuthInstance(request.OAuthCancel.InstanceID) {
 			return ipc.Response{OK: false, ErrorCode: "INVALID_OAUTH_FLOW", ErrorMessage: "OAuth cancellation request did not match this healthy UserHost instance"}
 		}
 		if err := h.oauth.cancel(*request.OAuthCancel); err != nil {
@@ -958,9 +985,6 @@ func (h *Host) currentStorageUsage(ctx context.Context) (ipc.StorageUsage, error
 }
 
 func measureStorageUsage(ctx context.Context, root string, limitBytes uint64) (ipc.StorageBucketUsage, error) {
-	if limitBytes == 0 {
-		return ipc.StorageBucketUsage{}, errors.New("storage usage limit is required")
-	}
 	var used uint64
 	err := filepath.WalkDir(root, accumulateStorageEntry(ctx, &used))
 	if err != nil {
@@ -1059,6 +1083,11 @@ func (h *Host) environment() []string {
 		overrides["HTTP_PROXY"] = h.cfg.OutboundProxyURL
 		overrides["HTTPS_PROXY"] = h.cfg.OutboundProxyURL
 		overrides["NO_PROXY"] = "127.0.0.1,localhost,::1"
+	}
+	if h.cfg.VerifyReleaseIntegrity {
+		// The standalone agent CLI binary has no Portal configuration; it
+		// decides runtime release hashing from this variable instead.
+		overrides[agentcli.VerifyIntegrityEnvironment] = "1"
 	}
 	result := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {

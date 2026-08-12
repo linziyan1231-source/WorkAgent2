@@ -242,9 +242,6 @@ func CPUPercent(previous, current JobStats, elapsed time.Duration) float64 {
 	}
 	cpuDuration := time.Duration(current.CPUTime100ns-previous.CPUTime100ns) * 100
 	percent := float64(cpuDuration) / float64(elapsed) * 100
-	if percent < 0 {
-		return 0
-	}
 	return percent
 }
 

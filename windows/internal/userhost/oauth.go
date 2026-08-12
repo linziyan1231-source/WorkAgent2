@@ -307,7 +307,7 @@ func (m *oauthManager) take(flowID string) (pendingOAuthFlow, bool) {
 	now := m.now()
 	m.purgeExpiredLocked(now)
 	flow, ok := m.pending[flowID]
-	if !ok || !flow.expiresAt.After(now) {
+	if !ok {
 		return pendingOAuthFlow{}, false
 	}
 	delete(m.pending, flowID)

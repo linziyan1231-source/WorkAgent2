@@ -80,12 +80,20 @@ func TestConcurrentEnsureStartsOneScheduledTask(t *testing.T) {
 
 func TestRestartUsesSIDPrivateUserHostCommandAndClearsRouteAuthentication(t *testing.T) {
 	data, cfg := managerStore(t)
+	tasks := &fakeTask{}
 	var commands []string
-	manager := NewWithIPC(cfg, data, &fakeTask{}, func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
+	restarting := false
+	manager := NewWithIPC(cfg, data, tasks, func(_ context.Context, pipe string, request ipc.Request) (ipc.Response, error) {
 		if pipe != config.PipeNameForSID(managerSID) {
 			t.Fatalf("restart used wrong pipe: %s", pipe)
 		}
 		commands = append(commands, request.Command)
+		if request.Command == "restart" {
+			restarting = true
+		}
+		if request.Command == "status" && restarting && !tasks.isStarted() {
+			return ipc.Response{}, errors.New("pipe not found")
+		}
 		response := ipc.Response{ProtocolVersion: ipc.ProtocolVersion, Nonce: request.Nonce, OK: true}
 		if request.Command == "status" {
 			response.Status = &ipc.Status{WindowsSID: managerSID, Healthy: true, WebPort: 31001, UserHostPID: 1234, StartedAtUnix: 1700000000, Version: "2.1.29"}
@@ -101,10 +109,13 @@ func TestRestartUsesSIDPrivateUserHostCommandAndClearsRouteAuthentication(t *tes
 	if err := manager.Restart(context.Background(), managerSID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := manager.Ensure(context.Background(), managerSID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := manager.Route(context.Background(), managerSID); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(commands, ",") != "status,auth,restart,status,auth" {
+	if strings.Join(commands, ",") != "status,auth,restart,status,status,status,status,auth" {
 		t.Fatalf("commands=%v, want cached auth cleared after restart", commands)
 	}
 }

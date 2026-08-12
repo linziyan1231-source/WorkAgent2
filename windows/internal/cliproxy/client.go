@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 
@@ -74,7 +73,7 @@ func (c Client) Provision(ctx context.Context, options ProvisionOptions) (modelb
 		return modelbootstrap.Bundle{}, err
 	}
 	payload := provisionRequest(options, state)
-	parsed, err := provisionWithManagementAPI(ctx, client, payload, state)
+	parsed, err := provisionWithManagementAPI(ctx, client, payload)
 	if err != nil {
 		return modelbootstrap.Bundle{}, err
 	}
@@ -133,7 +132,7 @@ type keyModel struct {
 	PerCallUSD               float64 `json:"per_call_usd,omitempty"`
 }
 
-func provisionWithManagementAPI(ctx context.Context, client *ManagementClient, payload request, state modelbootstrap.State) (map[string]string, error) {
+func provisionWithManagementAPI(ctx context.Context, client *ManagementClient, payload request) (map[string]string, error) {
 	var aliases aliasList
 	if err := client.JSON(ctx, "GET", "/aliases", nil, &aliases); err != nil {
 		return nil, err
@@ -236,8 +235,14 @@ func provisionWithManagementAPI(ctx context.Context, client *ManagementClient, p
 			}
 		}
 	}
-	encoded, _ := json.Marshal(result)
-	return parseResponse(encoded, state)
+	keys := make(map[string]string, len(result.Keys))
+	for _, key := range result.Keys {
+		if !plainKeyPattern.MatchString(key.PlainKey) {
+			return nil, errors.New("CLIProxyAPI provision response contained an invalid key result")
+		}
+		keys[key.ID] = key.PlainKey
+	}
+	return keys, nil
 }
 
 func provisionRequest(options ProvisionOptions, state modelbootstrap.State) request {
@@ -262,30 +267,6 @@ func stateFor(options ProvisionOptions) (modelbootstrap.State, error) {
 		return modelbootstrap.State{}, err
 	}
 	return state, nil
-}
-
-func parseResponse(data []byte, state modelbootstrap.State) (map[string]string, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var response response
-	if err := decoder.Decode(&response); err != nil {
-		return nil, errors.New("CLIProxyAPI provision response was invalid")
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF || response.Version != 1 || len(response.Keys) != 2 {
-		return nil, errors.New("CLIProxyAPI provision response had an unsupported shape")
-	}
-	expected := map[string]bool{state.CodexKeyID: true, state.KimiKeyID: true}
-	result := make(map[string]string, 2)
-	for _, key := range response.Keys {
-		if !expected[key.ID] || result[key.ID] != "" || !plainKeyPattern.MatchString(key.PlainKey) || (key.Action != "created" && key.Action != "rotated") {
-			return nil, errors.New("CLIProxyAPI provision response contained an invalid key result")
-		}
-		result[key.ID] = key.PlainKey
-	}
-	if len(result) != 2 || result[state.CodexKeyID] == result[state.KimiKeyID] {
-		return nil, errors.New("CLIProxyAPI provision response did not contain two unique employee keys")
-	}
-	return result, nil
 }
 
 func redact(value string) string {

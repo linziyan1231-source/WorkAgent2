@@ -30,14 +30,14 @@ type profileInfo struct {
 }
 
 func EnsureProfileForAccount(sidText, username string, password []byte) (string, error) {
-	if _, err := ProfileDirectoryForSID(sidText); err == nil {
-		return ProfileDirectoryForSID(sidText)
+	if directory, err := ProfileDirectoryForSID(sidText); err == nil {
+		return directory, nil
 	}
 	if err := ValidateLocalUsername(username); err != nil {
 		return "", err
 	}
 	expectedSID, err := windows.StringToSid(sidText)
-	if err != nil || expectedSID == nil || !expectedSID.IsValid() {
+	if err != nil {
 		return "", fmt.Errorf("invalid Windows SID %q", sidText)
 	}
 	name, err := windows.UTF16PtrFromString(username)
@@ -60,7 +60,7 @@ func EnsureProfileForAccount(sidText, username string, password []byte) (string,
 	}
 	defer token.Close()
 	tokenUser, err := token.GetTokenUser()
-	if err != nil || tokenUser == nil || tokenUser.User.Sid == nil || !strings.EqualFold(tokenUser.User.Sid.String(), expectedSID.String()) {
+	if err != nil || !strings.EqualFold(tokenUser.User.Sid.String(), expectedSID.String()) {
 		return "", errors.New("profile logon resolved to an unexpected Windows identity")
 	}
 	profile := profileInfo{Size: uint32(unsafe.Sizeof(profileInfo{})), Flags: 1, Username: name}

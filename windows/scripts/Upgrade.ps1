@@ -13,8 +13,9 @@ param(
     [string]$UsageManagementKeyFile = 'C:\ProgramData\CLIProxyAPI\.management-key',
     [string]$ChatForwardURL = 'http://127.0.0.1:3210',
     [string]$ChatForwardSecretFile = 'C:\ProgramData\AionUiPortal\chatforward.key',
-    [string]$NotificationSourceURL = 'http://203.0.113.79:25888/notification',
+    [string]$NotificationSourceURL = 'http://134.175.110.121:25888/notification',
     [string]$ExpectedNotificationId,
+    [string]$AuthenticatedNotificationEvidencePath,
     [AllowEmptyString()][string]$OutboundProxyURL,
     [ValidateRange(1, 86400)][int]$UserHostDrainTimeoutSeconds = 7200,
     [switch]$PreflightOnly
@@ -165,6 +166,26 @@ try {
 }
 Assert-PublishedUpgradeNotification -Payload $notificationPayload -ExpectedId $ExpectedNotificationId -ExpectedMessage $expectedNotificationMessage
 Write-Host "Verified manifest-classified upgrade notification before cutover: id=$ExpectedNotificationId message=$expectedNotificationMessage"
+if ([string]::IsNullOrWhiteSpace($AuthenticatedNotificationEvidencePath) -or
+    -not (Test-Path -LiteralPath $AuthenticatedNotificationEvidencePath -PathType Leaf)) {
+    throw 'AuthenticatedNotificationEvidencePath is required and must record an authenticated /api/portal/me/notifications verification.'
+}
+$authenticatedEvidence = Get-Content -LiteralPath $AuthenticatedNotificationEvidencePath -Raw | ConvertFrom-Json
+$expectedAuthenticatedEndpoint = $publicUri.AbsoluteUri.TrimEnd('/') + '/api/portal/me/notifications'
+$verifiedAtValue = $authenticatedEvidence.verified_at_utc
+$verifiedAt = if ($verifiedAtValue -is [DateTime]) {
+    [DateTimeOffset]$verifiedAtValue
+} else {
+    [DateTimeOffset]::ParseExact([string]$verifiedAtValue, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+}
+if ([string]$authenticatedEvidence.endpoint -cne $expectedAuthenticatedEndpoint -or
+    [string]$authenticatedEvidence.notification_id -cne $ExpectedNotificationId -or
+    [string]$authenticatedEvidence.message -cne $expectedNotificationMessage -or
+    -not [bool]$authenticatedEvidence.authenticated -or
+    ([DateTimeOffset]::UtcNow - $verifiedAt.ToUniversalTime()).TotalMinutes -gt 15) {
+    throw 'Authenticated Portal notification evidence is missing, stale, or does not match the immutable release notice.'
+}
+Write-Host "Verified authenticated Portal notification evidence: $AuthenticatedNotificationEvidencePath"
 $instanceLines = @(& $portalCli --config $ConfigPath instance list 2>&1)
 if ($LASTEXITCODE -ne 0) { throw "Unable to enumerate Portal Windows accounts before upgrade: $($instanceLines -join [Environment]::NewLine)" }
 $windowsAccounts = @()
@@ -200,6 +221,40 @@ $portalService = Get-Service -Name AionUiPortal -ErrorAction Stop
 $portalServiceStoppedForUpgrade = $false
 $kimiDatasourceService = Get-Service -Name AionKimiDatasourceBroker -ErrorAction SilentlyContinue
 $kimiDatasourceServiceStoppedForUpgrade = $false
+$rollbackRoot = Join-Path $portalDataRoot (Join-Path 'upgrade-rollback' ([string]$buildManifest.release_id))
+if (Test-Path -LiteralPath $rollbackRoot) { throw "Rollback evidence already exists for this immutable release: $rollbackRoot" }
+New-Item -ItemType Directory -Path $rollbackRoot -Force | Out-Null
+$rollbackEntries = [Collections.Generic.List[object]]::new()
+function Add-UpgradeRollbackEntry([string]$name, [string]$target) {
+    $entry = [ordered]@{ name = $name; target = $target; existed = (Test-Path -LiteralPath $target -PathType Leaf); backup = $null; sha256 = 'absent' }
+    if ($entry.existed) {
+        $safeName = ($name -replace '[^A-Za-z0-9._-]', '_')
+        $backup = Join-Path $rollbackRoot $safeName
+        Copy-Item -LiteralPath $target -Destination $backup -Force
+        $entry.backup = $backup
+        $entry.sha256 = (Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    [void]$rollbackEntries.Add([pscustomobject]$entry)
+}
+Add-UpgradeRollbackEntry -name 'portal-config.json' -target $ConfigPath
+if ($includesWeb) { Add-UpgradeRollbackEntry -name 'web-current.json' -target $installedComponentPaths['web'] }
+foreach ($name in $includedBackend) { Add-UpgradeRollbackEntry -name $name -target $installedComponentPaths[$name] }
+$configuredUserRoot = [string]$portalConfig.user_config_root
+if ($configuredUserRoot -and (Test-Path -LiteralPath $configuredUserRoot -PathType Container)) {
+    foreach ($sidDir in @(Get-ChildItem -LiteralPath $configuredUserRoot -Directory -Force)) {
+        if ($sidDir.Name -notmatch '^S-1-[0-9-]+$') { throw "Unexpected non-SID directory in UserHost config root: $($sidDir.FullName)" }
+        Add-UpgradeRollbackEntry -name ("userhost-{0}.json" -f $sidDir.Name) -target (Join-Path $sidDir.FullName 'userhost.json')
+    }
+}
+$rollbackEvidencePath = Join-Path $rollbackRoot 'rollback-evidence.json'
+[IO.File]::WriteAllText($rollbackEvidencePath, (([ordered]@{
+    format_version = 1
+    release_id = [string]$buildManifest.release_id
+    captured_at_utc = [DateTime]::UtcNow.ToString('o')
+    entries = @($rollbackEntries)
+} | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+$upgradeSucceeded = $false
+try {
 if ($updatesUserHostBinary) {
     & (Join-Path $PSScriptRoot 'Wait-AllInstancesIdle.ps1') -PortalCli $portalCli -ConfigPath $ConfigPath -TimeoutSeconds $UserHostDrainTimeoutSeconds
 }
@@ -258,6 +313,7 @@ if ($updatesPortalCli) {
     foreach ($name in @('Remove-CodexSandboxGroupMembership.ps1', 'Set-UserHostRights.ps1', 'Set-UserDiskQuota.ps1', 'ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1', 'Configure-KimiDatasourceBroker.ps1')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $adminScripts $name) -Force
     }
+    & (Join-Path $PSScriptRoot 'Publish-UserSkillPolicyBundle.ps1') -DestinationDirectory $adminScripts
     if (-not $adminService) {
         $adminImagePath = '"' + $portalCli + '" --config "' + $ConfigPath + '" service --scripts "' + $adminScripts + '"'
         Invoke-ServiceControl 'Create Portal administration service' @('create', 'AionUiPortalAdmin', 'binPath=', $adminImagePath, 'start=', 'auto', 'obj=', 'LocalSystem', 'DisplayName=', 'AionUi Portal Account Administration')
@@ -397,7 +453,7 @@ if ($includesWeb) {
 if ($LASTEXITCODE -ne 0) { throw 'ACL reapplication failed; service state was preserved for this release scope.' }
 & $portalCli --config $ConfigPath acl verify
 if ($LASTEXITCODE -ne 0) { throw 'Post-upgrade integrity/ACL verification failed; service state was preserved for this release scope.' }
-if ($portalServiceStoppedForUpgrade) {
+if ($portalServiceStoppedForUpgrade -or (Get-Service -Name AionUiPortal).Status -eq 'Stopped') {
     Start-Service -Name AionUiPortal
     (Get-Service AionUiPortal).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 }
@@ -453,3 +509,38 @@ foreach ($entry in $preservedBefore.GetEnumerator()) {
 }
 Assert-PreservedComponentHashes -Before $preservedBefore -After $preservedAfter
 Write-Host "Upgrade activated component-scoped $ReleaseScope release $($buildManifest.release_id). User databases were backed up and components outside scope were hash-preserved."
+$upgradeSucceeded = $true
+} catch {
+    $upgradeError = $_
+    Write-Warning "Upgrade failed; restoring binaries, pointers, and configuration from $rollbackEvidencePath"
+    foreach ($serviceName in @('AionUiPortalAdmin', 'AionUiPortal', 'AionKimiDatasourceBroker')) {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($service -and $service.Status -ne 'Stopped') {
+            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            try { $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { Write-Warning "Could not stop $serviceName during rollback: $($_.Exception.Message)" }
+        }
+    }
+    foreach ($entry in $rollbackEntries) {
+        if ([bool]$entry.existed) {
+            Copy-Item -LiteralPath ([string]$entry.backup) -Destination ([string]$entry.target) -Force
+            $restoredHash = (Get-FileHash -LiteralPath ([string]$entry.target) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($restoredHash -cne [string]$entry.sha256) { throw "Rollback hash verification failed: $($entry.target)" }
+        } elseif (Test-Path -LiteralPath ([string]$entry.target) -PathType Leaf) {
+            Remove-Item -LiteralPath ([string]$entry.target) -Force
+        }
+    }
+    throw $upgradeError
+} finally {
+    foreach ($serviceName in @('AionUiPortal', 'AionUiPortalAdmin', 'AionKimiDatasourceBroker')) {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($service -and $service.Status -eq 'Stopped') {
+            try {
+                Start-Service -Name $serviceName -ErrorAction Stop
+                (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+            } catch {
+                Write-Warning "Failed to restore service $serviceName after upgrade attempt: $($_.Exception.Message)"
+            }
+        }
+    }
+    if (-not $upgradeSucceeded) { Write-Warning "Upgrade did not complete; rollback evidence is retained at $rollbackEvidencePath" }
+}

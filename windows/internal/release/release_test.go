@@ -19,9 +19,9 @@ func makeRelease(t *testing.T) (string, string) {
 		"static/index.html": "<html></html>", "bundled-aioncore/win32-x64/aioncore.exe": "core-binary",
 		"static/assets/app.js":                                     "console.log('release')",
 		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
-		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
-		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
-		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent AI 管家",
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent Butler",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent 管家",
 	} {
 		path := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -62,7 +62,14 @@ func TestVerifyCurrentFastChecksProtectedMetadataAndCriticalShape(t *testing.T) 
 	}
 }
 
+func enableIntegrityVerification(t *testing.T) {
+	t.Helper()
+	SetIntegrityVerification(true)
+	t.Cleanup(func() { SetIntegrityVerification(false) })
+}
+
 func TestVerifyCurrentFastDefersNonCriticalContentHashingToFullGate(t *testing.T) {
+	enableIntegrityVerification(t)
 	root, pointer := makeRelease(t)
 	asset := filepath.Join(root, "2.1.29", "static", "assets", "app.js")
 	if err := os.WriteFile(asset, []byte("console.log('changed')"), 0o644); err != nil {
@@ -77,6 +84,7 @@ func TestVerifyCurrentFastDefersNonCriticalContentHashingToFullGate(t *testing.T
 }
 
 func TestVerifyCurrentDetectsFileTampering(t *testing.T) {
+	enableIntegrityVerification(t)
 	root, pointer := makeRelease(t)
 	verified, err := VerifyCurrent(pointer, root, []string{"v0.1.42"})
 	if err != nil || verified.Manifest.Version != "2.1.29" {
@@ -87,6 +95,33 @@ func TestVerifyCurrentDetectsFileTampering(t *testing.T) {
 	}
 	if _, err := VerifyCurrent(pointer, root, []string{"v0.1.42"}); err == nil {
 		t.Fatal("tampered release verified")
+	}
+}
+
+func TestVerifyCurrentSkipsContentHashingWhenIntegrityVerificationDisabled(t *testing.T) {
+	// Integrity verification defaults to off (intranet mode): same-size
+	// content tampering is accepted, while structural checks still run.
+	root, pointer := makeRelease(t)
+	asset := filepath.Join(root, "2.1.29", "static", "assets", "app.js")
+	if err := os.WriteFile(asset, []byte("console.log('changed')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := VerifyCurrent(pointer, root, []string{"v0.1.42"})
+	if err != nil || verified.Manifest.Version != "2.1.29" {
+		t.Fatalf("integrity-disabled verification rejected same-size tampering: %+v %v", verified, err)
+	}
+	if err := os.Remove(asset); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyCurrent(pointer, root, []string{"v0.1.42"}); err == nil {
+		t.Fatal("integrity-disabled verification accepted a missing manifested file")
+	}
+	if err := os.WriteFile(asset, []byte("console.log('changed')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	enableIntegrityVerification(t)
+	if _, err := VerifyCurrent(pointer, root, []string{"v0.1.42"}); err == nil {
+		t.Fatal("integrity-enabled verification accepted tampered noncritical content")
 	}
 }
 

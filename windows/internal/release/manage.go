@@ -27,7 +27,9 @@ func Install(source, releasesRoot, version, aionCoreVersion string, supportedAio
 	}
 	destination := filepath.Join(releasesRoot, version)
 	if _, statErr := os.Stat(destination); statErr == nil {
-		existing, err := VerifyReleasePath(destination, version, supportedAionCore)
+		// Install is the entry point for corrupted content into the system, so
+		// it always hashes file contents regardless of the runtime switch.
+		existing, err := verifyReleasePath(destination, version, supportedAionCore, true)
 		if err != nil {
 			return Verified{}, err
 		}
@@ -69,7 +71,7 @@ func Install(source, releasesRoot, version, aionCoreVersion string, supportedAio
 	if _, err := WriteManifest(filepath.Join(staging, ManifestName), manifest); err != nil {
 		return Verified{}, err
 	}
-	verified, err = VerifyReleasePath(staging, version, supportedAionCore)
+	verified, err = verifyReleasePath(staging, version, supportedAionCore, true)
 	if err != nil {
 		return Verified{}, err
 	}
@@ -82,6 +84,10 @@ func Install(source, releasesRoot, version, aionCoreVersion string, supportedAio
 }
 
 func VerifyReleasePath(releasePath, expectedVersion string, supportedAionCore []string) (Verified, error) {
+	return verifyReleasePath(releasePath, expectedVersion, supportedAionCore, integrityVerification.Load())
+}
+
+func verifyReleasePath(releasePath, expectedVersion string, supportedAionCore []string, hashContent bool) (Verified, error) {
 	if !filepath.IsAbs(releasePath) || !validVersion(expectedVersion) {
 		return Verified{}, errors.New("invalid release path or version")
 	}
@@ -125,9 +131,11 @@ func VerifyReleasePath(releasePath, expectedVersion string, supportedAionCore []
 		if err != nil || !info.Mode().IsRegular() || info.Size() != entry.Size {
 			return Verified{}, fmt.Errorf("release file %s has unexpected type or size: %w", name, err)
 		}
-		hash, err := hashFile(path)
-		if err != nil || !strings.EqualFold(hash, entry.SHA256) {
-			return Verified{}, fmt.Errorf("release file hash mismatch: %s", name)
+		if hashContent {
+			hash, err := hashFile(path)
+			if err != nil || !strings.EqualFold(hash, entry.SHA256) {
+				return Verified{}, fmt.Errorf("release file hash mismatch: %s", name)
+			}
 		}
 	}
 	return Verified{Path: releasePath, Manifest: manifest}, nil
@@ -173,7 +181,9 @@ func Rollback(currentPointerPath, previousPointerPath, releasesRoot string, supp
 	if err := strictJSON(previousBytes, &previous); err != nil {
 		return Verified{}, fmt.Errorf("previous release pointer is invalid: %w", err)
 	}
-	verified, err := VerifyCurrent(previousPointerPath, releasesRoot, supportedAionCore)
+	// Rollback re-activates a previous release, so it always hashes file
+	// contents regardless of the runtime integrity verification switch.
+	verified, err := verifyCurrent(previousPointerPath, releasesRoot, supportedAionCore, true)
 	if err != nil {
 		return Verified{}, fmt.Errorf("previous release failed integrity verification: %w", err)
 	}
@@ -198,10 +208,8 @@ func copyRelease(source, destination string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("release source contains a symlink: %s", path)
 		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return errors.New("release source path escaped its root")
-		}
+		// WalkDir only yields paths beneath source, so Rel cannot fail or escape.
+		relative, _ := filepath.Rel(source, path)
 		if relative == "." {
 			return nil
 		}

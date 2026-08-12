@@ -84,9 +84,8 @@ func (s *Server) restartCurrentUserService(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "message": "User service restart could not be started"})
 		return
 	}
-	if err := s.audit(r.Context(), "portal.service.restart", "accepted", session.User.Username, session.User.WindowsSID, peerIP(r.RemoteAddr), nil); err != nil {
-		s.internalError(w, "audit employee service restart", err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"success": true, "reconnect_after_ms": 2000})
+	// The mutation has already been accepted by the SID-private UserHost pipe. An audit storage
+	// failure must not turn that successful restart into a misleading 500 that invites retries.
+	s.auditBestEffort(r.Context(), "portal.service.restart", "accepted", session, r, nil)
+	writeJSON(w, http.StatusAccepted, map[string]any{"success": true, "reconnect_after_ms": 1000})
 }

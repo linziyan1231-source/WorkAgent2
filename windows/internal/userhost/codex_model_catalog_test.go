@@ -25,7 +25,7 @@ func TestReadCodexResponseHonorsContextWhileOutputIsBlocked(t *testing.T) {
 	started := time.Now()
 	results := scanCodexResponses(ctx, bufio.NewScanner(reader))
 	_, err := readCodexResponse(ctx, results, 1)
-	if err == nil || !strings.Contains(err.Error(), "exceeded 30 seconds") {
+	if err == nil || !strings.Contains(err.Error(), "exceeded 60 seconds") {
 		t.Fatalf("blocked response error = %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {

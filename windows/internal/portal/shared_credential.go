@@ -69,9 +69,6 @@ func retrySharedCredentialOperation(ctx context.Context, operation func() error)
 }
 
 func (s *Server) ensureSharedAgentCredential(ctx context.Context, ownerSID, conversationID string, payerKeyIDs []string) (string, error) {
-	if len(payerKeyIDs) == 0 {
-		return "", errors.New("shared AI run has no frozen payer keys")
-	}
 	client, err := cliproxy.NewManagementClient(cliproxy.ManagementOptions{
 		BaseURL: s.cfg.UsageManagementURL,
 		KeyFile: s.cfg.UsageManagementKeyFile,

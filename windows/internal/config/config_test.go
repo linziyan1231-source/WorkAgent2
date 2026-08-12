@@ -75,7 +75,7 @@ func TestProductionConfigAcceptsOnlyExactAdditionalBrowserOrigins(t *testing.T) 
 	c.PublicBaseURL = "http://portal.example.test"
 	c.TLSCertificateFile = ""
 	c.TLSPrivateKeyFile = ""
-	c.BrowserOrigins = []string{"http://203.0.113.79:25808", "http://127.0.0.1:25808"}
+	c.BrowserOrigins = []string{"http://134.175.110.121:25808", "http://127.0.0.1:25808"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("exact additional browser origins rejected: %v", err)
 	}
@@ -168,15 +168,15 @@ func TestChatForwardConfigRequiresLoopbackSecretAndProModels(t *testing.T) {
 
 func TestNotificationSourceRequiresExactBoundedURL(t *testing.T) {
 	valid := validPortal(t)
-	valid.NotificationSourceURL = "http://203.0.113.79:25888/notification"
+	valid.NotificationSourceURL = "http://134.175.110.121:25888/notification"
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid notification source rejected: %v", err)
 	}
 	for _, invalid := range []string{
-		"ftp://203.0.113.79:25888/notification",
-		"http://user@203.0.113.79:25888/notification",
-		"http://203.0.113.79:25888/",
-		"http://203.0.113.79:25888/notification?user=test1",
+		"ftp://134.175.110.121:25888/notification",
+		"http://user@134.175.110.121:25888/notification",
+		"http://134.175.110.121:25888/",
+		"http://134.175.110.121:25888/notification?user=test1",
 	} {
 		candidate := valid
 		candidate.NotificationSourceURL = invalid
@@ -213,6 +213,40 @@ func TestPortalConfigRejectsTrailingJSONValue(t *testing.T) {
 	}
 	if _, err := LoadPortal(path); err == nil {
 		t.Fatal("multiple JSON values were accepted")
+	}
+}
+
+func TestVerifyReleaseIntegrityDefaultsOffAndParses(t *testing.T) {
+	cfg := validPortal(t)
+	if cfg.VerifyReleaseIntegrity {
+		t.Fatal("verify_release_integrity defaulted to on")
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "portal.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadPortal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.VerifyReleaseIntegrity {
+		t.Fatal("verify_release_integrity loaded as on when omitted")
+	}
+	cfg.VerifyReleaseIntegrity = true
+	b, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = LoadPortal(path)
+	if err != nil || !loaded.VerifyReleaseIntegrity {
+		t.Fatalf("verify_release_integrity did not round-trip: %+v %v", loaded, err)
 	}
 }
 

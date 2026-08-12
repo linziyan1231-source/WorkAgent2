@@ -83,9 +83,9 @@ func makePackedSource(t *testing.T, root, name, marker string) string {
 		"aionui-web.exe": marker + "-web", "package.json": `{"version":"` + marker + `"}`,
 		"static/index.html": marker + "-renderer", "bundled-aioncore/win32-x64/aioncore.exe": marker + "-core",
 		"workagent-builtin-assistants/assistants.json":                 `{"assistants":[]}`,
-		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent AI Butler",
-		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent AI",
-		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent AI 管家",
+		"workagent-builtin-assistants/rules/aionui-assistant.en-US.md": "# WorkAgent Butler",
+		"workagent-builtin-assistants/rules/aionui-assistant.ru-RU.md": "# WorkAgent",
+		"workagent-builtin-assistants/rules/aionui-assistant.zh-CN.md": "# WorkAgent 管家",
 	} {
 		full := filepath.Join(source, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {

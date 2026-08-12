@@ -4,6 +4,10 @@ param(
     [Parameter(Mandatory)][ValidateSet('web-only', 'runtime-only', 'backend-only', 'combined')][string]$ReleaseScope,
     [string[]]$IncludedComponents,
     [string]$AionUiSource = (Join-Path $PSScriptRoot '..\..\AionUi'),
+    [string]$AionCoreSource = (Join-Path $PSScriptRoot '..\.tools\AionCore-src'),
+    [string]$AionCorePackagedDirectory,
+    [string]$AionCoreBinarySha256,
+    [string]$AionCoreBundleManifestSha256,
     [string]$GoExe = 'go',
     [string]$UpgradeBaselinePath,
     [switch]$FreshInstall,
@@ -13,6 +17,38 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ReleaseContract.ps1')
+
+if ($SkipAionUiPack) {
+    throw 'SkipAionUiPack is not permitted for immutable releases because it cannot prove renderer freshness.'
+}
+
+function Get-CleanGitProvenance {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Label)
+
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $commit = (& git -C $resolved rev-parse HEAD 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $commit -cnotmatch '^[0-9a-f]{40}$') {
+        throw "$Label source is not a readable Git checkout."
+    }
+    $tree = (& git -C $resolved rev-parse 'HEAD^{tree}' 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}$') {
+        throw "$Label source tree could not be resolved."
+    }
+    $dirty = @(& git -C $resolved status --porcelain=v1 --untracked-files=all 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "$Label source status could not be read." }
+    if ($dirty.Count -ne 0) {
+        throw "$Label source must be clean before an immutable release; first change: $($dirty[0])"
+    }
+    [ordered]@{ commit = $commit; tree = $tree; dirty = $false }
+}
+
+function Assert-GitProvenanceUnchanged {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Expected, [Parameter(Mandatory)][string]$Label)
+    $actual = Get-CleanGitProvenance -Path $Path -Label $Label
+    if ($actual.commit -cne $Expected.commit -or $actual.tree -cne $Expected.tree) {
+        throw "$Label source changed during the build."
+    }
+}
 
 if ($FreshInstall -and -not [string]::IsNullOrWhiteSpace($UpgradeBaselinePath)) {
     throw 'FreshInstall and UpgradeBaselinePath are mutually exclusive.'
@@ -82,8 +118,43 @@ if (-not $FreshInstall) {
 }
 
 $webManifest = $null
+$sourceProvenance = [ordered]@{
+    workagent2 = Get-CleanGitProvenance -Path $projectRoot -Label 'WorkAgent2 source and release tooling'
+    release_tooling = [ordered]@{
+        build_ps1_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        test_build_artifacts_ps1_sha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'Test-BuildArtifacts.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+        patch_codex_acp_ps1_sha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'Patch-CodexAcpSessionFork.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
 if ('web' -cin $IncludedComponents) {
     $aionRoot = (Resolve-Path $AionUiSource).Path
+    if ([string]::IsNullOrWhiteSpace($AionCorePackagedDirectory) -or [string]::IsNullOrWhiteSpace($AionCoreBinarySha256) -or
+        [string]::IsNullOrWhiteSpace($AionCoreBundleManifestSha256)) {
+        throw 'Web releases require the packaged Core directory plus binary and bundle-manifest SHA-256 values from the clean recorded Core build.'
+    }
+    Assert-Sha256String -Value $AionCoreBinarySha256 -Description 'recorded AionCore binary'
+    Assert-Sha256String -Value $AionCoreBundleManifestSha256 -Description 'recorded AionCore bundle manifest'
+    $resolvedCoreBundle = (Resolve-Path -LiteralPath $AionCorePackagedDirectory).Path
+    $coreBundleBinary = Join-Path $resolvedCoreBundle 'aioncore.exe'
+    $coreBundleManifestPath = Join-Path $resolvedCoreBundle 'manifest.json'
+    if (-not (Test-Path -LiteralPath $coreBundleBinary -PathType Leaf)) { throw "Recorded AionCore bundle is missing: $coreBundleBinary" }
+    if (-not (Test-Path -LiteralPath $coreBundleManifestPath -PathType Leaf)) { throw "Recorded AionCore bundle manifest is missing: $coreBundleManifestPath" }
+    if ((Get-FileHash -LiteralPath $coreBundleManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $AionCoreBundleManifestSha256.ToLowerInvariant()) {
+        throw 'Recorded AionCore bundle manifest hash does not match AionCoreBundleManifestSha256.'
+    }
+    $inputCoreHash = (Get-FileHash -LiteralPath $coreBundleBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($inputCoreHash -cne $AionCoreBinarySha256.ToLowerInvariant()) { throw 'Recorded AionCore bundle binary hash does not match AionCoreBinarySha256.' }
+    $sourceProvenance['aionui'] = Get-CleanGitProvenance -Path $aionRoot -Label 'AionUi'
+    $sourceProvenance['aioncore'] = Get-CleanGitProvenance -Path $AionCoreSource -Label 'AionCore'
+    $coreBundleManifest = Get-Content -LiteralPath $coreBundleManifestPath -Raw | ConvertFrom-Json
+    if ($coreBundleManifest.format_version -ne 2 -or [string]$coreBundleManifest.source.commit -cne $sourceProvenance['aioncore'].commit -or
+        [string]$coreBundleManifest.source.tree -cne $sourceProvenance['aioncore'].tree -or [bool]$coreBundleManifest.source.dirty -or
+        [string]$coreBundleManifest.aioncore_sha256 -cne $inputCoreHash) {
+        throw 'AionCore bundle manifest does not bind the binary to the selected clean Core commit/tree.'
+    }
+    $sourceProvenance['aioncore']['binary_sha256'] = $inputCoreHash
+    $sourceProvenance['aioncore']['bundle_manifest_sha256'] = $AionCoreBundleManifestSha256.ToLowerInvariant()
+    $sourceProvenance['aioncore']['managed_resources_aggregate_sha256'] = [string]$coreBundleManifest.managed_resources_aggregate_sha256
     $package = Get-Content -Raw (Join-Path $aionRoot 'package.json') | ConvertFrom-Json
     $version = [string]$package.version
     $coreVersion = [string]$package.aioncoreVersion
@@ -92,6 +163,8 @@ if ('web' -cin $IncludedComponents) {
     $packedDirectory = Join-Path $dist 'staging\aionui-web'
 
     if (-not $SkipAionUiPack) {
+        $previousPackagedCore = $env:AIONUI_PACKAGED_AIONCORE_DIRECTORY
+        $env:AIONUI_PACKAGED_AIONCORE_DIRECTORY = $resolvedCoreBundle
         Push-Location $aionRoot
         try {
             & bun run package
@@ -102,6 +175,7 @@ if ('web' -cin $IncludedComponents) {
             if ($LASTEXITCODE -ne 0) { throw "AionUi pack-web-cli.js failed with exit code $LASTEXITCODE" }
         } finally {
             Pop-Location
+            $env:AIONUI_PACKAGED_AIONCORE_DIRECTORY = $previousPackagedCore
         }
     }
 
@@ -132,6 +206,8 @@ if ('web' -cin $IncludedComponents) {
     if ($LASTEXITCODE -ne 0 -or $coreVersionOutput -cne ('aioncore ' + $coreVersion.TrimStart('v'))) {
         throw "Packed aioncore reports unexpected version: $coreVersionOutput"
     }
+    $packedCoreHash = (Get-FileHash -LiteralPath (Join-Path $packedDirectory 'bundled-aioncore\win32-x64\aioncore.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($packedCoreHash -cne $inputCoreHash) { throw 'Packed AionCore binary differs from the recorded clean Core build.' }
     $reparsePoints = @(Get-ChildItem -LiteralPath $packedDirectory -Force -Recurse | Where-Object {
         ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
     })
@@ -216,6 +292,11 @@ if (-not $FreshInstall) {
 
 $goVersion = ''
 if ($binaryComponents.Count -ne 0) { $goVersion = (& $GoExe version | Out-String).Trim() }
+Assert-GitProvenanceUnchanged -Path $projectRoot -Expected $sourceProvenance.workagent2 -Label 'WorkAgent2 source and release tooling'
+if ('web' -cin $IncludedComponents) {
+    Assert-GitProvenanceUnchanged -Path $aionRoot -Expected $sourceProvenance.aionui -Label 'AionUi'
+    Assert-GitProvenanceUnchanged -Path $AionCoreSource -Expected $sourceProvenance.aioncore -Label 'AionCore'
+}
 $manifest = [ordered]@{
     format_version = 2
     release_id = $ReleaseId
@@ -223,6 +304,7 @@ $manifest = [ordered]@{
     included_components = $IncludedComponents
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     go_version = $goVersion
+    source_provenance = $sourceProvenance
     web = $webManifest
     binaries = $binaryManifest
     upgrade_contract = $upgradeContract

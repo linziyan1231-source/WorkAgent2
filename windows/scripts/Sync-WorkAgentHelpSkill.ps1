@@ -34,11 +34,11 @@ $normalizedLines = foreach ($line in ($text -split "`r?`n")) {
 }
 $normalized = ($normalizedLines -join "`n") -replace "(`n\s*){3,}", "`n`n"
 $header = @'
-# WorkAgent AI 中文帮助文档
+# WorkAgent 中文帮助文档
 
-> 此文件由 WorkAgent AI 内置中文帮助文档自动生成。请勿手工编辑。
+> 此文件由 WorkAgent 内置中文帮助文档自动生成。请勿手工编辑。
 
 '@
 
 Set-Content -LiteralPath $ReferencePath -Value ($header + $normalized.Trim() + "`n") -Encoding utf8
-Write-Host "Synced WorkAgent AI help reference: $ReferencePath"
+Write-Host "Synced WorkAgent help reference: $ReferencePath"

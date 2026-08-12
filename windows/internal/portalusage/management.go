@@ -56,16 +56,7 @@ func (c *ManagementRemote) QueryMany(ctx context.Context, idsByOwner map[string]
 	expected := make(map[string]expectedKey, len(idsByOwner)*2)
 	providers := make(map[string]map[string]RawProvider, len(idsByOwner))
 	for owner, ids := range idsByOwner {
-		if owner == "" {
-			return nil, errors.New("CLIProxyAPI key usage owner was invalid")
-		}
 		for id, kind := range map[string]string{ids.CodexKeyID: KindChatGPT, ids.KimiKeyID: KindKimi} {
-			if id == "" {
-				return nil, errors.New("CLIProxyAPI key usage mapping was invalid")
-			}
-			if _, duplicate := expected[id]; duplicate {
-				return nil, errors.New("CLIProxyAPI key usage mapping was duplicated")
-			}
 			expected[id] = expectedKey{owner: owner, kind: kind}
 		}
 		providers[owner] = make(map[string]RawProvider, 2)
@@ -123,11 +114,7 @@ func (c *ManagementRemote) QueryMany(ctx context.Context, idsByOwner map[string]
 			Daily:  RawWindow{LimitUSD: key.Usage.DailyLimitUSD.String(), UsedUSD: key.Usage.DailyUSD.String(), ResetAt: key.Usage.DailyResetAt},
 			Weekly: RawWindow{LimitUSD: key.Usage.WeeklyLimitUSD.String(), UsedUSD: key.Usage.WeeklyUSD.String(), ResetAt: key.Usage.WeeklyResetAt}}
 	}
-	now := time.Now
-	if c.now != nil {
-		now = c.now
-	}
-	asOf := now().UTC().Format(time.RFC3339)
+	asOf := c.now().UTC().Format(time.RFC3339)
 	results := make(map[string]RawSnapshot, len(providers))
 	for owner, ownerProviders := range providers {
 		if len(ownerProviders) != 2 {

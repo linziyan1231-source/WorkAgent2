@@ -128,7 +128,7 @@ WHERE source='generated' AND deleted_at IS NULL
 	if err != nil {
 		return false, fmt.Errorf("set Aion CLI YOLO default: %w", err)
 	}
-	if changed, err := result.RowsAffected(); err != nil || changed < 0 || changed > 1 {
+	if changed, err := result.RowsAffected(); err != nil || changed > 1 {
 		return false, fmt.Errorf("unexpected Aion CLI YOLO update count: %d (%v)", changed, err)
 	}
 	var yoloCount int

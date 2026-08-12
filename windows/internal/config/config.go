@@ -59,6 +59,10 @@ type Portal struct {
 	OutboundProxyURL        string   `json:"outbound_proxy_url,omitempty"`
 	KimiDatasourceBrokerURL string   `json:"kimi_datasource_broker_url,omitempty"`
 	SupportedAionCore       []string `json:"supported_aioncore_versions"`
+	// VerifyReleaseIntegrity enables per-file SHA-256 comparison in runtime
+	// release verification. It defaults to off for controlled intranet
+	// deployments and must be enabled before public exposure.
+	VerifyReleaseIntegrity bool `json:"verify_release_integrity,omitempty"`
 }
 
 func DefaultPortal() Portal {
@@ -80,7 +84,7 @@ func DefaultPortal() Portal {
 		ChatForwardURL:          "http://127.0.0.1:3210",
 		ChatForwardSecretFile:   filepath.Join(DefaultPortalDataRoot, "chatforward.key"),
 		ChatGPTProModels:        []string{"gpt-5-4-pro", "gpt-5-5-pro", "gpt-5-6-pro"},
-		NotificationSourceURL:   "http://203.0.113.79:25888/notification",
+		NotificationSourceURL:   "http://134.175.110.121:25888/notification",
 		KimiDatasourceBrokerURL: "http://127.0.0.1:3211/mcp",
 		SupportedAionCore:       []string{"v0.1.42"},
 	}
@@ -321,7 +325,12 @@ type UserHost struct {
 	OutboundProxyURL   string                `json:"outbound_proxy_url,omitempty"`
 	KimiDatasource     *KimiDatasourceAccess `json:"kimi_datasource,omitempty"`
 	SupportedAionCore  []string              `json:"supported_aioncore_versions"`
-	Limits             ResourceLimits        `json:"limits"`
+	// VerifyReleaseIntegrity enables per-file SHA-256 comparison in runtime
+	// release and shared-project verification. It defaults to off for
+	// controlled intranet deployments and must be enabled before public
+	// exposure.
+	VerifyReleaseIntegrity bool `json:"verify_release_integrity,omitempty"`
+	Limits                 ResourceLimits `json:"limits"`
 }
 
 func LoadUserHost(path string) (UserHost, error) {

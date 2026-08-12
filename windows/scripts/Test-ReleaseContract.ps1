@@ -55,14 +55,23 @@ foreach ($interruptingRelease in @(
     }
 }
 
-$published = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"}]}' | ConvertFrom-Json
-Assert-PublishedUpgradeNotification -Payload $published -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage
+$notificationNow = [DateTime]::Parse('2026-08-07T08:02:00Z').ToUniversalTime()
+$published = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断","published_at":"2026-08-07T08:00:00Z"}]}' | ConvertFrom-Json
+Assert-PublishedUpgradeNotification -Payload $published -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage -NowUtc $notificationNow
 Assert-Throws {
-    Assert-PublishedUpgradeNotification -Payload $published -ExpectedId 'upgrade-safe-1' -ExpectedMessage $interruptionMessage
+    Assert-PublishedUpgradeNotification -Payload $published -ExpectedId 'upgrade-safe-1' -ExpectedMessage $interruptionMessage -NowUtc $notificationNow
 } 'wrong interruption message'
-$duplicate = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"},{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"}]}' | ConvertFrom-Json
+$tooRecent = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断","published_at":"2026-08-07T08:01:30Z"}]}' | ConvertFrom-Json
 Assert-Throws {
-    Assert-PublishedUpgradeNotification -Payload $duplicate -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage
+    Assert-PublishedUpgradeNotification -Payload $tooRecent -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage -NowUtc $notificationNow
+} 'at least 60 seconds'
+$missingPublishedAt = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断"}]}' | ConvertFrom-Json
+Assert-Throws {
+    Assert-PublishedUpgradeNotification -Payload $missingPublishedAt -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage -NowUtc $notificationNow
+} 'missing published_at'
+$duplicate = '{"notifications":[{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断","published_at":"2026-08-07T08:00:00Z"},{"id":"upgrade-safe-1","message":"系统正在升级，页面可能需要刷新，但正在进行的任务不会中断","published_at":"2026-08-07T08:00:00Z"}]}' | ConvertFrom-Json
+Assert-Throws {
+    Assert-PublishedUpgradeNotification -Payload $duplicate -ExpectedId 'upgrade-safe-1' -ExpectedMessage $refreshMessage -NowUtc $notificationNow
 } 'exactly one notification'
 
 if (-not (Test-UpgradeComponentTransition -Component 'AionUiUserHost.exe' -CurrentSha256 $a -TargetSha256 $b -ExpectedInstalledSha256 $a)) {
@@ -100,11 +109,24 @@ foreach ($required in @(
     "if (`$updatesUserHostBinary)",
     "Wait-AllInstancesIdle.ps1",
     "if (-not `$updatesUserHostBinary) { `$releaseInstallArguments += '--allow-running' }",
-    "if (`$portalServiceStoppedForUpgrade)",
+    "if (`$portalServiceStoppedForUpgrade -or (Get-Service -Name AionUiPortal).Status -eq 'Stopped')",
     "Get-UpgradeNotificationMessage",
     "Assert-PublishedUpgradeNotification"
 )) {
     if (-not $upgrade.Contains($required)) { throw "Upgrade script is missing the non-interrupting cutover contract: $required" }
+}
+if ($upgrade -notmatch "portalServiceStoppedForUpgrade\s+-or\s+\(Get-Service -Name AionUiPortal\)\.Status -eq 'Stopped'") {
+    throw 'Upgrade script must restart Portal after a prior interrupted invocation left it stopped.'
+}
+$build = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Build.ps1') -Raw
+foreach ($requiredBuildContract in @(
+    'SkipAionUiPack is not permitted for immutable releases',
+    'Get-CleanGitProvenance',
+    'source_provenance'
+)) {
+    if (-not $build.Contains($requiredBuildContract)) {
+        throw "Build script is missing immutable source-provenance contract: $requiredBuildContract"
+    }
 }
 $stopAllInstancesCalls = ([regex]::Matches($upgrade, [regex]::Escape("'Stop-AllInstances.ps1'"))).Count
 if ($stopAllInstancesCalls -ne 1) {

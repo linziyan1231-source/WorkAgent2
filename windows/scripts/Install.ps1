@@ -15,7 +15,7 @@ param(
     [string]$UsageManagementKeyFile = 'C:\ProgramData\CLIProxyAPI\.management-key',
     [string]$ChatForwardURL = 'http://127.0.0.1:3210',
     [string]$ChatForwardSecretFile = 'C:\ProgramData\AionUiPortal\chatforward.key',
-    [string]$NotificationSourceURL = 'http://203.0.113.79:25888/notification',
+    [string]$NotificationSourceURL = 'http://134.175.110.121:25888/notification',
     [AllowEmptyString()][string]$OutboundProxyURL = ''
 )
 
@@ -169,6 +169,7 @@ Copy-Item -LiteralPath (Join-Path $BinariesDirectory 'AionKimiDatasourceBroker.e
 foreach ($name in @('Remove-CodexSandboxGroupMembership.ps1', 'Set-UserHostRights.ps1', 'Set-UserDiskQuota.ps1', 'ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1', 'Configure-KimiDatasourceBroker.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $adminScripts $name) -Force
 }
+& (Join-Path $PSScriptRoot 'Publish-UserSkillPolicyBundle.ps1') -DestinationDirectory $adminScripts
 $agentCliArguments = @{
     LauncherPath = (Join-Path $BinariesDirectory 'AionAgentCli.exe')
 }

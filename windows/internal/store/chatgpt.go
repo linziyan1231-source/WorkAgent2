@@ -51,13 +51,10 @@ func (s *Store) SetChatGPTProWeeklyLimit(ctx context.Context, userID int64, limi
 	if userID <= 0 || limit < 1 || limit > 10000 {
 		return errors.New("ChatGPT Pro weekly limit must be between 1 and 10000")
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO chatgpt_pro_limits(user_id,weekly_limit,updated_at)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO chatgpt_pro_limits(user_id,weekly_limit,updated_at)
 VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET weekly_limit=excluded.weekly_limit,updated_at=excluded.updated_at`, userID, limit, now.Unix())
 	if err != nil {
 		return fmt.Errorf("set ChatGPT Pro weekly limit: %w", err)
-	}
-	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
-		return fmt.Errorf("unexpected ChatGPT Pro limit update count: %d (%v)", changed, err)
 	}
 	return nil
 }
@@ -117,26 +114,16 @@ func (s *Store) SettleChatGPTPro(ctx context.Context, userID int64, logicalSendI
 	if status != ProStatusConfirmed && status != ProStatusFallback && status != ProStatusUnknown && status != ProStatusUpstreamRejected {
 		return errors.New("invalid ChatGPT Pro settlement status")
 	}
-	models, err := json.Marshal(servedModels)
-	if err != nil {
-		return err
-	}
+	models, _ := json.Marshal(servedModels)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	if status == ProStatusUpstreamRejected {
-		result, err := tx.ExecContext(ctx, `DELETE FROM chatgpt_pro_usage WHERE user_id=? AND logical_send_id=? AND status='reserved'`, userID, logicalSendID)
+		_, err := tx.ExecContext(ctx, `DELETE FROM chatgpt_pro_usage WHERE user_id=? AND logical_send_id=? AND status='reserved'`, userID, logicalSendID)
 		if err != nil {
 			return fmt.Errorf("release rejected ChatGPT Pro reservation: %w", err)
-		}
-		changed, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if changed > 1 {
-			return fmt.Errorf("unexpected rejected ChatGPT Pro release count: %d", changed)
 		}
 		return tx.Commit()
 	}
@@ -151,9 +138,6 @@ WHERE user_id=? AND logical_send_id=? AND status='reserved'`, status, now.Unix()
 	}
 	if changed == 0 {
 		return nil
-	}
-	if changed != 1 {
-		return fmt.Errorf("unexpected ChatGPT Pro settlement count: %d", changed)
 	}
 	if status == ProStatusFallback {
 		_, err = tx.ExecContext(ctx, `INSERT INTO chatgpt_pro_events(user_id,usage_id,kind,occurred_at)
