@@ -257,6 +257,7 @@ func (s *Server) installMarketSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	downstream.Header.Set("Content-Type", "application/zip")
 	downstream.Header.Set("Cookie", route.Auth.CookieHeader)
+	downstream.Header.Set("X-WorkAgent-Runtime-Token", route.Auth.RuntimeToken)
 	downstream.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", route.Status.AionCorePort))
 	if route.Auth.CSRFToken != "" {
 		downstream.Header.Set("X-CSRF-Token", route.Auth.CSRFToken)
@@ -309,6 +310,7 @@ func (s *Server) fetchCustomSkillPackage(ctx context.Context, sid, skillName str
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Cookie", route.Auth.CookieHeader)
+	request.Header.Set("X-WorkAgent-Runtime-Token", route.Auth.RuntimeToken)
 	request.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", route.Status.AionCorePort))
 	if route.Auth.CSRFToken != "" {
 		request.Header.Set("X-CSRF-Token", route.Auth.CSRFToken)

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$PortalExecutable = 'C:\Program Files\AionUiPortal\AionUiPortal.exe',
-    [string]$RuleName = 'AionUi Portal TCP 25808'
+    [string]$RuleName = 'AionUi Portal TCP 25808',
+    [switch]$LoopbackOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +15,10 @@ if (-not [IO.Path]::IsPathRooted($PortalExecutable) -or -not (Test-Path -Literal
 
 foreach ($existingName in @($RuleName, 'AionUi Portal HTTPS 25808') | Select-Object -Unique) {
     Get-NetFirewallRule -DisplayName $existingName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+}
+if ($LoopbackOnly) {
+    Write-Host 'Verified reverse-proxy mode: no product inbound firewall rule exposes Portal TCP 25808.'
+    return
 }
 New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 25808 -Profile Any -Program $PortalExecutable | Out-Null
 $rules = @(Get-NetFirewallRule -DisplayName $RuleName -ErrorAction Stop)

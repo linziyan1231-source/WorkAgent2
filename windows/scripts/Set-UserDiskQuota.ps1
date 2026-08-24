@@ -26,7 +26,47 @@ if ($profiles.Count -ne 1 -or [string]::IsNullOrWhiteSpace($profiles[0].LocalPat
 }
 $profilePath = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables([string]$profiles[0].LocalPath)).TrimEnd('\')
 if (-not ([IO.Path]::GetDirectoryName($profilePath)).Equals('C:\Users', [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Windows profile $profilePath must be a direct child of C:\Users."
+	throw "Windows profile $profilePath must be a direct child of C:\Users."
+}
+
+function Set-MetadataTraverseAccess([string]$Path) {
+	# Node.js realpathSync requires SYNCHRONIZE in addition to directory
+	# FILE_TRAVERSE and FILE_READ_ATTRIBUTES. This exact non-inheriting mask
+	# (0x001000A0) deliberately excludes FILE_LIST_DIRECTORY and all data-read,
+	# write, delete, and ACL-management rights.
+	& icacls.exe $Path /grant:r "*$sid`:(X,RA,S)" | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "Failed to grant SID metadata-traverse access on $Path" }
+	$matching = @((Get-Acl -LiteralPath $Path).Access | Where-Object {
+		$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid
+	})
+	$expectedMask = [Security.AccessControl.FileSystemRights]1048736
+	if ($matching.Count -ne 1 -or
+		[uint64]$matching[0].FileSystemRights -ne [uint64]$expectedMask -or
+		$matching[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+		$matching[0].InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None -or
+		$matching[0].PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None -or
+		$matching[0].IsInherited) {
+		throw "SID metadata-traverse ACL readback failed on ${Path}: expected one explicit non-inheriting allow mask 0x001000A0."
+	}
+}
+
+function Set-AncestorReadExecuteAccess([string]$Path) {
+	# External ancestors intentionally allow directory enumeration for runtime
+	# compatibility. SID-private roots remain protected and unreadable to peers.
+	& icacls.exe $Path /grant:r "*$sid`:(RX)" | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "Failed to grant SID read-execute access on $Path" }
+	$matching = @((Get-Acl -LiteralPath $Path).Access | Where-Object {
+		$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid
+	})
+	$expectedMask = [Security.AccessControl.FileSystemRights]1179817
+	if ($matching.Count -ne 1 -or
+		[uint64]$matching[0].FileSystemRights -ne [uint64]$expectedMask -or
+		$matching[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+		$matching[0].InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None -or
+		$matching[0].PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None -or
+		$matching[0].IsInherited) {
+		throw "SID ancestor ACL readback failed on ${Path}: expected one explicit non-inheriting allow mask 0x001200A9."
+	}
 }
 $configuredDataRootBase = $DataRootBase
 if ([string]::IsNullOrWhiteSpace($configuredDataRootBase) -and (Test-Path -LiteralPath $PortalConfigPath -PathType Leaf)) {
@@ -54,15 +94,7 @@ $dataRoot = if ([string]::IsNullOrWhiteSpace($configuredDataRootBase)) {
 		if (-not $traverseItem.PSIsContainer -or ($traverseItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
 			throw "Data-root ancestor must be a normal directory: $traverseRoot"
 		}
-		& icacls.exe $traverseRoot /grant "*$sid`:(X)" | Out-Null
-		if ($LASTEXITCODE -ne 0) { throw "Failed to grant SID traverse access on $traverseRoot" }
-		$acl = Get-Acl -LiteralPath $traverseRoot
-		$matching = @($acl.Access | Where-Object {
-			$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid -and
-			($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Traverse) -eq [Security.AccessControl.FileSystemRights]::Traverse -and
-			$_.InheritanceFlags -eq [Security.AccessControl.InheritanceFlags]::None -and -not $_.IsInherited
-		})
-		if ($matching.Count -lt 1) { throw "SID traverse ACL readback failed on $traverseRoot" }
+		Set-AncestorReadExecuteAccess $traverseRoot
 	}
     Join-Path $base $sid
 }
@@ -115,12 +147,11 @@ foreach ($path in @($sharedRoot, $sharedOwnerRoot)) {
     Assert-NormalDirectory $path 'Shared-space root'
 }
 
-# Shared ancestors expose traversal only. The owner's root is the FSRM accounting
-# boundary and is private until individual project ACLs add accepted members.
+# Shared ancestors expose metadata traversal only. The owner's root is the FSRM
+# accounting boundary and is private until individual project ACLs add members.
 & icacls.exe $sharedRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Failed to protect shared root ACL: $sharedRoot" }
-& icacls.exe $sharedRoot /grant "*$sid`:(X)" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "Failed to grant owner traverse access on $sharedRoot" }
+Set-MetadataTraverseAccess $sharedRoot
 & icacls.exe $sharedOwnerRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$sid`:(OI)(CI)F" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Failed to protect shared owner root ACL: $sharedOwnerRoot" }
 & icacls.exe $sharedOwnerRoot /setowner "*$sid" | Out-Null

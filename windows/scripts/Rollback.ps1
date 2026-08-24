@@ -12,7 +12,10 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 $portalConfig = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $publicUri = [Uri][string]$portalConfig.public_base_url
 if (-not $publicUri.IsAbsoluteUri -or $publicUri.Scheme -notin @('http', 'https')) { throw 'Portal public_base_url has an unsupported scheme.' }
-$healthUri = ('{0}://127.0.0.1:25808/healthz' -f $publicUri.Scheme)
+$tlsReverseProxyProperty = $portalConfig.PSObject.Properties['tls_terminated_by_reverse_proxy']
+$tlsReverseProxy = $null -ne $tlsReverseProxyProperty -and [bool]$tlsReverseProxyProperty.Value
+$healthScheme = if ($tlsReverseProxy) { 'http' } else { $publicUri.Scheme }
+$healthUri = ('{0}://127.0.0.1:25808/healthz' -f $healthScheme)
 $stoppedServices = [Collections.Generic.List[string]]::new()
 try {
     foreach ($serviceName in @('AionUiPortalAdmin', 'AionUiPortal', 'AionKimiDatasourceBroker')) {

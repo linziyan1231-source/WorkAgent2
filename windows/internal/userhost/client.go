@@ -21,8 +21,9 @@ import (
 const maxControlResponse = 2 * 1024 * 1024
 
 type aionClient struct {
-	base   *url.URL
-	client *http.Client
+	base         *url.URL
+	client       *http.Client
+	runtimeToken string
 }
 
 type systemInfo struct {
@@ -33,12 +34,18 @@ type systemInfo struct {
 	Arch     string `json:"arch"`
 }
 
-func newAionClient(port int) (*aionClient, error) {
+func newAionClient(port int, runtimeToken string) (*aionClient, error) {
 	// url.Parse cannot fail for this fixed loopback URL and cookiejar.New
 	// cannot fail with nil options, so both errors are ignored.
 	base, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	jar, _ := cookiejar.New(nil)
-	return &aionClient{base: base, client: &http.Client{Jar: jar, Timeout: 15 * time.Second}}, nil
+	return &aionClient{base: base, client: &http.Client{Jar: jar, Timeout: 15 * time.Second}, runtimeToken: runtimeToken}, nil
+}
+
+func (a *aionClient) applyRuntimeAuth(req *http.Request) {
+	if a.runtimeToken != "" {
+		req.Header.Set("X-WorkAgent-Runtime-Token", a.runtimeToken)
+	}
 }
 
 func (a *aionClient) authenticate(ctx context.Context, username string, password []byte) (ipc.AuthMaterial, error) {
@@ -70,6 +77,7 @@ func (a *aionClient) authenticate(ctx context.Context, username string, password
 	if csrf != "" {
 		req.Header.Set("x-csrf-token", csrf)
 	}
+	a.applyRuntimeAuth(req)
 	response, err := a.client.Do(req)
 	if err != nil {
 		return ipc.AuthMaterial{}, fmt.Errorf("internal AionUi login request: %w", err)
@@ -139,6 +147,7 @@ func (a *aionClient) getJSON(ctx context.Context, path string, target any) error
 	if err != nil {
 		return err
 	}
+	a.applyRuntimeAuth(req)
 	response, err := a.client.Do(req)
 	if err != nil {
 		return err
@@ -186,6 +195,7 @@ func (a *aionClient) sendJSONWithHeader(ctx context.Context, method, path string
 	if csrf := a.cookie("aionui-csrf-token"); csrf != "" {
 		req.Header.Set("x-csrf-token", csrf)
 	}
+	a.applyRuntimeAuth(req)
 	response, err := a.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("%s %s request failed: %w", method, path, err)

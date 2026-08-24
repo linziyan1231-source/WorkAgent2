@@ -1113,6 +1113,45 @@ func TestRunServesPlainHTTPForHTTPPublicOrigin(t *testing.T) {
 	}
 }
 
+func TestRunServesPlainHTTPBehindTLSReverseProxy(t *testing.T) {
+	server, _, _ := testServerWithPublicURL(t, "https://portal.example.test")
+	server.cfg.TLSReverseProxy = true
+	reserved, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := reserved.Addr().String()
+	if err := reserved.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server.cfg.ListenAddress = address
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx) }()
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, requestErr := client.Get("http://" + address + "/healthz")
+		if requestErr == nil {
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK || response.Header.Get("Strict-Transport-Security") == "" {
+				cancel()
+				t.Fatalf("reverse-proxy health status=%d hsts=%q", response.StatusCode, response.Header.Get("Strict-Transport-Security"))
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("reverse-proxy HTTP upstream did not become ready: %v", requestErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("reverse-proxy HTTP upstream shutdown failed: %v", err)
+	}
+}
+
 func TestLoginInvalidatesPreviousSessionBeforeIssuingAnother(t *testing.T) {
 	server, data, _ := testServer(t)
 	password := []byte("correct-employee-portal-password")
@@ -1232,7 +1271,7 @@ func TestProxyUsesSessionSIDAndContainsInternalAuthentication(t *testing.T) {
 		t.Fatal(err)
 	}
 	instances.route = instance.Route{Status: ipc.Status{WindowsSID: testSID1, Healthy: true, WebPort: upstreamPort, AionCorePort: 34123},
-		Auth: ipc.AuthMaterial{CookieHeader: "aionui-session=internal-A; aionui-csrf-token=csrf-A", CSRFToken: "csrf-A"}}
+		Auth: ipc.AuthMaterial{CookieHeader: "aionui-session=internal-A; aionui-csrf-token=csrf-A", CSRFToken: "csrf-A", RuntimeToken: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
 	request := httptest.NewRequest(http.MethodPost, "https://portal.example.test/api/files/upload?sid="+url.QueryEscape(testSID2)+"&port=9", strings.NewReader("real-shaped-upload-body"))
 	request.RemoteAddr = "192.0.2.10:54321"
 	request.Header.Set("Origin", "https://portal.example.test")
@@ -1241,6 +1280,7 @@ func TestProxyUsesSessionSIDAndContainsInternalAuthentication(t *testing.T) {
 	request.Header.Set("X-Forwarded-For", "203.0.113.99")
 	request.Header.Set("X-Windows-SID", testSID2)
 	request.Header.Set("X-CSRF-Token", "attacker-csrf")
+	request.Header.Set("X-WorkAgent-Runtime-Token", "attacker-runtime-token")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || response.Body.String() != "real-shaped-upload-body" {
@@ -1252,6 +1292,9 @@ func TestProxyUsesSessionSIDAndContainsInternalAuthentication(t *testing.T) {
 	proxied := <-seen
 	if proxied.Header.Get("Cookie") != "aionui-session=internal-A; aionui-csrf-token=csrf-A" || proxied.Header.Get("X-CSRF-Token") != "csrf-A" {
 		t.Fatalf("wrong internal authentication: cookie=%q csrf=%q", proxied.Header.Get("Cookie"), proxied.Header.Get("X-CSRF-Token"))
+	}
+	if proxied.Header.Get("X-WorkAgent-Runtime-Token") != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("browser-controlled runtime token reached upstream")
 	}
 	for _, name := range []string{"Authorization", "X-Forwarded-For", "X-Windows-SID"} {
 		if value := proxied.Header.Get(name); value != "" {
@@ -1887,7 +1930,7 @@ func createPortalSessionFor(t *testing.T, data *store.Store, username, sid, wind
 
 func testRoute(port int) instance.Route {
 	return instance.Route{Status: ipc.Status{WindowsSID: testSID1, Healthy: true, WebPort: port, AionCorePort: 34123},
-		Auth: ipc.AuthMaterial{CookieHeader: "aionui-session=internal-A; aionui-csrf-token=csrf-A", CSRFToken: "csrf-A"}}
+		Auth: ipc.AuthMaterial{CookieHeader: "aionui-session=internal-A; aionui-csrf-token=csrf-A", CSRFToken: "csrf-A", RuntimeToken: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
 }
 
 type zeroReader struct{}

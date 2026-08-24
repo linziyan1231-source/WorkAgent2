@@ -861,6 +861,16 @@ func (m *Manager) VerifyUserACLs(user store.User) []error {
 		return []error{fmt.Errorf("user %s private data layout: %w", user.Username, err)}
 	}
 	var failures []error
+	for _, path := range m.UserDataAncestorReadExecutePaths() {
+		if err := winutil.VerifyDirectoryReadExecuteACL(path, user.WindowsSID); err != nil {
+			failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+		}
+	}
+	for _, path := range m.UserDataMetadataTraversePaths() {
+		if err := winutil.VerifyDirectoryMetadataTraverseACL(path, user.WindowsSID); err != nil {
+			failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+		}
+	}
 	if err := winutil.VerifyTreeACL(dataRoot, winutil.PrivateTreePolicy(user.WindowsSID)); err != nil {
 		failures = append(failures, fmt.Errorf("user %s private data: %w", user.Username, err))
 	}
@@ -893,7 +903,7 @@ func startupCaptureDiagnostic(path string) string {
 
 func (m *Manager) servicePrivateDirectories() []string {
 	paths := []string{filepath.Dir(m.Config.DatabasePath), filepath.Dir(m.Config.AuditLogPath), m.Config.UserConfigRoot}
-	if m.Config.UsesTLS() {
+	if m.Config.ServesTLS() {
 		paths = append(paths, filepath.Dir(m.Config.TLSCertificateFile))
 	}
 	return paths
@@ -904,7 +914,7 @@ func (m *Manager) servicePrivateFiles() []string {
 	if m.Config.ChatForwardURL != "" {
 		paths = append(paths, m.Config.ChatForwardSecretFile)
 	}
-	if m.Config.UsesTLS() {
+	if m.Config.ServesTLS() {
 		paths = append(paths, m.Config.TLSCertificateFile, m.Config.TLSPrivateKeyFile)
 	}
 	return paths
@@ -992,11 +1002,87 @@ func (m *Manager) ApplyACLs(ctx context.Context) []error {
 			failures = append(failures, fmt.Errorf("user %s private data layout: %w", user.Username, err))
 			continue
 		}
+		for _, path := range m.UserDataAncestorReadExecutePaths() {
+			if err := winutil.ApplyDirectoryReadExecuteACL(path, user.WindowsSID); err != nil {
+				failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+			}
+		}
+		for _, path := range m.UserDataMetadataTraversePaths() {
+			if err := winutil.ApplyDirectoryMetadataTraverseACL(path, user.WindowsSID); err != nil {
+				failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+			}
+		}
 		if err := winutil.ApplyTreeACL(dataRoot, winutil.PrivateTreePolicy(user.WindowsSID)); err != nil {
 			failures = append(failures, fmt.Errorf("user %s private data: %w", user.Username, err))
 		}
 		if err := winutil.ApplyTreeACL(filepath.Dir(m.userConfigPath(user.WindowsSID)), winutil.UserConfigPolicy(m.Config.PortalServiceSID, user.WindowsSID)); err != nil {
 			failures = append(failures, fmt.Errorf("user %s fixed config: %w", user.Username, err))
+		}
+	}
+	return failures
+}
+
+func (m *Manager) UserDataMetadataTraversePaths() []string {
+	if strings.TrimSpace(m.Config.UserDataRoot) == "" {
+		return nil
+	}
+	base := filepath.Clean(m.Config.UserDataRoot)
+	return []string{filepath.Join(base, "shared")}
+}
+
+func (m *Manager) UserDataAncestorReadExecutePaths() []string {
+	if strings.TrimSpace(m.Config.UserDataRoot) == "" {
+		return nil
+	}
+	base := filepath.Clean(m.Config.UserDataRoot)
+	return []string{filepath.Dir(base), base}
+}
+
+func (m *Manager) VerifyUserDataAncestorACLs(ctx context.Context) []error {
+	users, err := m.Store.ListManagedUsers(ctx)
+	if err != nil {
+		return []error{err}
+	}
+	var failures []error
+	for _, user := range users {
+		for _, path := range m.UserDataAncestorReadExecutePaths() {
+			if err := winutil.VerifyDirectoryReadExecuteACL(path, user.WindowsSID); err != nil {
+				failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+			}
+		}
+		for _, path := range m.UserDataMetadataTraversePaths() {
+			if err := winutil.VerifyDirectoryMetadataTraverseACL(path, user.WindowsSID); err != nil {
+				failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+			}
+		}
+	}
+	return failures
+}
+
+func (m *Manager) RepairUserDataAncestorACLs(ctx context.Context) []error {
+	users, err := m.Store.ListManagedUsers(ctx)
+	if err != nil {
+		return []error{err}
+	}
+	var failures []error
+	for _, user := range users {
+		for _, path := range m.UserDataAncestorReadExecutePaths() {
+			if err := winutil.ApplyDirectoryReadExecuteACL(path, user.WindowsSID); err != nil {
+				failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+			}
+		}
+		for _, path := range m.UserDataMetadataTraversePaths() {
+			if err := winutil.ApplyDirectoryMetadataTraverseACL(path, user.WindowsSID); err != nil {
+				failures = append(failures, fmt.Errorf("user %s data-root ancestor %s: %w", user.Username, path, err))
+			}
+		}
+	}
+	if len(failures) == 0 {
+		if err := m.Store.Audit(ctx, "admin.acl.data_root_ancestors.repair", "success", "managed-users", "", "local-admin", map[string]any{
+			"users": len(users), "read_execute_paths": m.UserDataAncestorReadExecutePaths(), "metadata_traverse_paths": m.UserDataMetadataTraversePaths(),
+			"read_execute_mask": "0x001200a9", "metadata_traverse_mask": "0x001000a0",
+		}, time.Now()); err != nil {
+			failures = append(failures, fmt.Errorf("ancestor ACLs were repaired but the audit event could not be recorded: %w", err))
 		}
 	}
 	return failures
@@ -1088,7 +1174,7 @@ func (m *Manager) Readiness(ctx context.Context) []error {
 	if err := m.Tasks.Check(ctx); err != nil {
 		failures = append(failures, fmt.Errorf("Task Scheduler COM: %w", err))
 	}
-	if m.Config.UsesTLS() {
+	if m.Config.ServesTLS() {
 		if _, err := tls.LoadX509KeyPair(m.Config.TLSCertificateFile, m.Config.TLSPrivateKeyFile); err != nil {
 			failures = append(failures, fmt.Errorf("TLS key pair: %w", err))
 		}

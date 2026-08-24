@@ -7,7 +7,24 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"aionuiportal/internal/auth"
 )
+
+func TestLoginHealthPasswordSurvivesCalleeZeroing(t *testing.T) {
+	password := []byte("correct horse battery staple")
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := retainLoginHealthPassword(password)
+	defer auth.Zero(retained)
+
+	auth.Zero(password)
+	if !auth.VerifyPassword(hash, retained) {
+		t.Fatal("retained login health password was affected when the callee cleared its password buffer")
+	}
+}
 
 func TestGenerateWindowsPasswordIsRandomAndMeetsRequiredClasses(t *testing.T) {
 	first, err := generateWindowsPassword(32)
@@ -42,6 +59,15 @@ func TestDiskQuotaScriptSupportsWindowsPowerShell(t *testing.T) {
 	if strings.Contains(string(content), "[IO.Path]::IsPathFullyQualified") {
 		t.Fatal("Set-UserDiskQuota.ps1 uses IsPathFullyQualified, which is unavailable in Windows PowerShell 5.1")
 	}
+	text := string(content)
+	for _, required := range []string{"/grant:r \"*$sid`:(RX)\"", "[Security.AccessControl.FileSystemRights]1179817", "/grant:r \"*$sid`:(X,RA,S)\"", "[Security.AccessControl.FileSystemRights]1048736", "$matching.Count -ne 1"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Set-UserDiskQuota.ps1 lacks exact metadata-traverse ACL enforcement %q", required)
+		}
+	}
+	if strings.Contains(text, "*$sid`:(X)\"") {
+		t.Fatal("Set-UserDiskQuota.ps1 still grants traverse without read-attributes and synchronize")
+	}
 }
 
 func TestDefaultEmployeeModelQuotas(t *testing.T) {
@@ -69,5 +95,33 @@ func TestSkillPolicyInvocationUsesPublishedBundleAndProvisionedBuiltins(t *testi
 	}
 	if strings.Join(arguments, "\x00") != strings.Join(expected, "\x00") {
 		t.Fatalf("unexpected Skill policy arguments: %#v", arguments)
+	}
+}
+
+func TestAgentSwarmPolicyInvocationPrefersKimiCodeConfig(t *testing.T) {
+	root := t.TempDir()
+	profile := filepath.Join(root, "profile")
+	modern := filepath.Join(profile, ".kimi-code", "config.toml")
+	legacy := filepath.Join(profile, ".kimi", "config.toml")
+	for _, path := range []string{modern, legacy} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("default_model = \"\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	provisioner := EmployeeProvisioner{}
+	name, arguments, err := provisioner.agentSwarmPolicyInvocation(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "Set-KimiAgentSwarmPolicy.ps1" {
+		t.Fatalf("unexpected AgentSwarm policy script: %s", name)
+	}
+	expected := []string{"-ConfigPath", modern, "-MaxNewAgentsPerSession", "4"}
+	if strings.Join(arguments, "\x00") != strings.Join(expected, "\x00") {
+		t.Fatalf("unexpected AgentSwarm policy arguments: %#v", arguments)
 	}
 }

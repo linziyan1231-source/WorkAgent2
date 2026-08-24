@@ -314,6 +314,15 @@ func (h *Host) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("select internal Web port: %w", err)
 	}
+	runtimeTokenPath, err := stageRuntimeToken(h.dirs.Runtime, h.runtimeControlSecret)
+	if err != nil {
+		return fmt.Errorf("stage managed runtime authentication: %w", err)
+	}
+	defer os.Remove(runtimeTokenPath)
+	env = append(env,
+		"WORKAGENT_TENANT_ID="+h.cfg.WindowsSID,
+		"WORKAGENT_RUNTIME_TOKEN_FILE="+runtimeTokenPath,
+	)
 	cmd := exec.Command(webPath, "start", "--port", fmt.Sprint(webPort), "--data-dir", h.dirs.Data, "--work-dir", h.dirs.Workspace, "--log-dir", h.dirs.Logs,
 		"--static-dir", staticPath, "--backend-bin", corePath, "--no-open")
 	cmd.Dir = h.dirs.Workspace
@@ -357,6 +366,7 @@ func (h *Host) initialize(ctx context.Context) error {
 		return err
 	}
 	h.client, h.auth = client, material
+	h.auth.RuntimeToken = h.runtimeControlSecret
 	// The live AionCore startup reconciles builtin assistant definitions after
 	// the migration process exits. Re-apply Portal-owned branding and managed
 	// capability bindings once that reconciliation is complete and before this
@@ -464,7 +474,7 @@ func (h *Host) runMigrations(ctx context.Context, corePath string, port int, env
 }
 
 func (h *Host) waitForAuthentication(ctx context.Context, port int, username string, password []byte) (*aionClient, ipc.AuthMaterial, error) {
-	client, err := newAionClient(port)
+	client, err := newAionClient(port, h.runtimeControlSecret)
 	if err != nil {
 		return nil, ipc.AuthMaterial{}, err
 	}
@@ -536,7 +546,7 @@ func (h *Host) verifyCompleteHealth(ctx context.Context, corePath string, webPor
 	if corePort == 0 {
 		return 0, 0, nil, errors.New("aioncore listener was not found")
 	}
-	if err := checkCoreHealth(ctx, corePort, h.release.Manifest.AionCoreVersion); err != nil {
+	if err := checkCoreHealth(ctx, corePort, h.release.Manifest.AionCoreVersion, h.runtimeControlSecret); err != nil {
 		return 0, 0, nil, err
 	}
 	if inside, err := h.job.ContainsPID(corePID); err != nil || !inside {
@@ -553,7 +563,7 @@ func waitCoreHealth(ctx context.Context, port int, expectedVersion string, done 
 	defer ticker.Stop()
 	var last error
 	for {
-		if err := checkCoreHealth(ctx, port, expectedVersion); err == nil {
+		if err := checkCoreHealth(ctx, port, expectedVersion, ""); err == nil {
 			return nil
 		} else {
 			last = err
@@ -591,10 +601,13 @@ func coreHealthMonitorDecision(consecutive int, err error) (int, bool) {
 	return consecutive, consecutive >= coreHealthTransientFailureThreshold
 }
 
-func checkCoreHealth(ctx context.Context, port int, expectedVersion string) error {
+func checkCoreHealth(ctx context.Context, port int, expectedVersion, runtimeToken string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", port), nil)
 	if err != nil {
 		return err
+	}
+	if runtimeToken != "" {
+		req.Header.Set("X-WorkAgent-Runtime-Token", runtimeToken)
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Do(req)
@@ -647,7 +660,7 @@ func (h *Host) monitor(ctx context.Context) error {
 			h.mu.Lock()
 			h.status.ProcessCount, h.status.MemoryBytes, h.status.CPUPercent = stats.ProcessCount, stats.MemoryBytes, cpu
 			h.mu.Unlock()
-			if err := checkCoreHealth(ctx, h.snapshot().AionCorePort, h.release.Manifest.AionCoreVersion); err != nil {
+			if err := checkCoreHealth(ctx, h.snapshot().AionCorePort, h.release.Manifest.AionCoreVersion, h.runtimeControlSecret); err != nil {
 				var fail bool
 				consecutiveHealthFailures, fail = coreHealthMonitorDecision(consecutiveHealthFailures, err)
 				if !fail {
@@ -709,7 +722,7 @@ func (h *Host) handleIPC(ctx context.Context, request ipc.Request) ipc.Response 
 	case "auth":
 		h.mu.RLock()
 		defer h.mu.RUnlock()
-		if !h.status.Healthy || h.auth.CookieHeader == "" {
+		if !h.status.Healthy || h.auth.CookieHeader == "" || h.auth.RuntimeToken == "" {
 			return ipc.Response{OK: false, ErrorCode: "INSTANCE_NOT_HEALTHY", ErrorMessage: "internal authentication is unavailable"}
 		}
 		auth := h.auth
@@ -1069,7 +1082,6 @@ func (h *Host) environment() []string {
 		"HOME": h.dirs.Profile, "USERPROFILE": h.dirs.Profile, "APPDATA": h.dirs.AppData, "LOCALAPPDATA": h.dirs.LocalAppData,
 		"TEMP": h.dirs.Temp, "TMP": h.dirs.Temp, "AIONUI_DATA_DIR": h.dirs.Data, "AIONUI_LOG_DIR": h.dirs.Logs,
 		"AIONUI_CACHE_DIR": h.dirs.Cache, "AIONUI_WORK_DIR": h.dirs.Workspace,
-		"AIONUI_RUNTIME_CONTROL_SECRET":    h.runtimeControlSecret,
 		"AIONUI_BUILTIN_ASSISTANTS_PATH":   filepath.Join(h.release.Path, "workagent-builtin-assistants"),
 		"CODEX_HOME":                       filepath.Join(h.dirs.Config, "codex"),
 		"KIMI_CODE_HOME":                   filepath.Join(h.dirs.Profile, ".kimi-code"),

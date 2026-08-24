@@ -87,7 +87,10 @@ foreach ($path in @($ConfigPath, $portalCli)) {
 $portalConfig = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $publicUri = [Uri][string]$portalConfig.public_base_url
 if (-not $publicUri.IsAbsoluteUri -or $publicUri.Scheme -notin @('http', 'https')) { throw 'Portal public_base_url has an unsupported scheme.' }
-$healthUri = ('{0}://127.0.0.1:25808/healthz' -f $publicUri.Scheme)
+$tlsReverseProxyProperty = $portalConfig.PSObject.Properties['tls_terminated_by_reverse_proxy']
+$tlsReverseProxy = $null -ne $tlsReverseProxyProperty -and [bool]$tlsReverseProxyProperty.Value
+$healthScheme = if ($tlsReverseProxy) { 'http' } else { $publicUri.Scheme }
+$healthUri = ('{0}://127.0.0.1:25808/healthz' -f $healthScheme)
 $artifactTestArguments = @{
     BuildManifestPath = $BuildManifestPath
     ReleaseScope = $ReleaseScope
@@ -310,7 +313,7 @@ if ($includedBackend.Count -ne 0) {
 if ($updatesPortalCli) {
     $adminScripts = Join-Path $InstallRoot 'admin-scripts'
     New-Item -ItemType Directory -Force -Path $adminScripts | Out-Null
-    foreach ($name in @('Remove-CodexSandboxGroupMembership.ps1', 'Set-UserHostRights.ps1', 'Set-UserDiskQuota.ps1', 'ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1', 'Configure-KimiDatasourceBroker.ps1')) {
+    foreach ($name in @('Remove-CodexSandboxGroupMembership.ps1', 'Set-UserHostRights.ps1', 'Set-UserDiskQuota.ps1', 'ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1', 'Configure-KimiDatasourceBroker.ps1', 'Set-KimiAgentSwarmPolicy.ps1', 'kimi-agent-swarm-guard.ps1')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $adminScripts $name) -Force
     }
     & (Join-Path $PSScriptRoot 'Publish-UserSkillPolicyBundle.ps1') -DestinationDirectory $adminScripts

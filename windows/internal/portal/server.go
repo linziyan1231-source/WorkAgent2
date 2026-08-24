@@ -177,7 +177,7 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 * 1024,
 	}
-	if s.cfg.UsesTLS() {
+	if s.cfg.ServesTLS() {
 		httpServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 	listener, err := net.Listen("tcp4", s.cfg.ListenAddress)
@@ -186,7 +186,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	done := make(chan error, 1)
 	go func() {
-		if s.cfg.UsesTLS() {
+		if s.cfg.ServesTLS() {
 			done <- httpServer.ServeTLS(listener, s.cfg.TLSCertificateFile, s.cfg.TLSPrivateKeyFile)
 			return
 		}
