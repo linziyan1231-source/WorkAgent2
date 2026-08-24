@@ -14,11 +14,25 @@ import (
 
 func fakeAionServer(t *testing.T, password string) *httptest.Server {
 	t.Helper()
+	const runtimeToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	mux := http.NewServeMux()
+	assertRuntimeToken := func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("X-WorkAgent-Runtime-Token") != runtimeToken {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return false
+		}
+		return true
+	}
 	mux.HandleFunc("/api/auth/status", func(w http.ResponseWriter, r *http.Request) {
+		if !assertRuntimeToken(w, r) {
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "needs_setup": false, "is_authenticated": false})
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if !assertRuntimeToken(w, r) {
+			return
+		}
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		if r.Header.Get("x-csrf-token") != "" || r.Header.Get("Origin") == "" || body["username"] != "admin" || body["password"] != password {
@@ -29,22 +43,35 @@ func fakeAionServer(t *testing.T, password string) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "user": map[string]any{"id": "system_default_user", "username": "admin"}, "token": "must-not-escape"})
 	})
 	mux.HandleFunc("/api/auth/user", func(w http.ResponseWriter, r *http.Request) {
+		if !assertRuntimeToken(w, r) {
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "user": map[string]any{"id": "system_default_user", "username": "admin"}})
 	})
 	mux.HandleFunc("/api/system/info", func(w http.ResponseWriter, r *http.Request) {
+		if !assertRuntimeToken(w, r) {
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"cache_dir": `C:\Users\worker\AionUiPortal\data`, "work_dir": `C:\Users\worker\AionUiPortal\data`, "log_dir": `C:\Users\worker\AionUiPortal\logs`, "platform": "win32", "arch": "x64"}})
 	})
 	mux.HandleFunc("/api/agents/management", func(w http.ResponseWriter, r *http.Request) {
+		if !assertRuntimeToken(w, r) {
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []any{map[string]any{"id": "aion"}}})
 	})
 	return httptest.NewServer(mux)
 }
 
-func clientForServer(t *testing.T, server *httptest.Server) *aionClient {
+func clientForServer(t *testing.T, server *httptest.Server, runtimeToken ...string) *aionClient {
 	t.Helper()
 	_, portText, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
 	port, _ := strconv.Atoi(portText)
-	client, err := newAionClient(port)
+	token := ""
+	if len(runtimeToken) != 0 {
+		token = runtimeToken[0]
+	}
+	client, err := newAionClient(port, token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +81,7 @@ func clientForServer(t *testing.T, server *httptest.Server) *aionClient {
 func TestInternalAuthenticationKeepsCookiesServerSide(t *testing.T) {
 	server := fakeAionServer(t, "internal-pass")
 	defer server.Close()
-	client := clientForServer(t, server)
+	client := clientForServer(t, server, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	material, err := client.authenticate(context.Background(), "admin", []byte("internal-pass"))
 	if err != nil {
 		t.Fatal(err)

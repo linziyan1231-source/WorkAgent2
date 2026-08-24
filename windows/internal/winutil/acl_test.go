@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -259,6 +260,123 @@ func TestSharedReadOnlyPolicyRejectsUsersWrite(t *testing.T) {
 	}
 }
 
+func TestDirectoryMetadataTraverseACLRequiresExactMinimalMask(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTarget := func(t *testing.T, rights, flags string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "ancestor")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		applySecurityDescriptorForTest(t, path, "O:"+AdministratorsSID+"G:"+SystemSID+"D:P"+
+			"(A;OICI;FA;;;"+SystemSID+")"+
+			"(A;OICI;FA;;;"+AdministratorsSID+")"+
+			"(A;"+flags+";"+rights+";;;"+identity.SID+")")
+		return path
+	}
+
+	t.Run("exact", func(t *testing.T) {
+		path := newTarget(t, "0x001000a0", "")
+		if err := VerifyDirectoryMetadataTraverseACL(path, identity.SID); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, test := range []struct {
+		name   string
+		rights string
+		flags  string
+	}{
+		{name: "missing synchronize", rights: "0x000000a0"},
+		{name: "list directory", rights: "0x001000a1"},
+		{name: "generic read", rights: "GRGX"},
+		{name: "write attributes", rights: "0x001001a0"},
+		{name: "inheriting", rights: "0x001000a0", flags: "OICI"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := newTarget(t, test.rights, test.flags)
+			if err := VerifyDirectoryMetadataTraverseACL(path, identity.SID); err == nil {
+				t.Fatal("unsafe or incomplete metadata-traverse ACE was accepted")
+			}
+		})
+	}
+}
+
+func TestApplyDirectoryMetadataTraverseACLIsIdempotentAndPreservesOtherPrincipals(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ancestor")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	applySecurityDescriptorForTest(t, path, "O:"+AdministratorsSID+"G:"+SystemSID+"D:P"+
+		"(A;OICI;FA;;;"+SystemSID+")"+
+		"(A;OICI;FA;;;"+AdministratorsSID+")"+
+		"(A;;GRGX;;;"+identity.SID+")")
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := ApplyDirectoryMetadataTraverseACL(path, identity.SID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := VerifyDirectoryMetadataTraverseACL(path, identity.SID); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := (*aclHeader)(unsafe.Pointer(dacl))
+	seen := map[string]bool{}
+	for index := uint32(0); index < uint32(header.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		seen[sid.String()] = true
+	}
+	if !seen[SystemSID] || !seen[AdministratorsSID] {
+		t.Fatal("metadata-traverse repair removed an unrelated administrative ACE")
+	}
+}
+
+func TestDirectoryReadExecuteACLRequiresExactMaskAndIsIdempotent(t *testing.T) {
+	identity, err := CurrentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ancestor")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	applySecurityDescriptorForTest(t, path, "O:"+AdministratorsSID+"G:"+SystemSID+"D:P"+
+		"(A;OICI;FA;;;"+SystemSID+")"+
+		"(A;OICI;FA;;;"+AdministratorsSID+")"+
+		"(A;;0x001000a0;;;"+identity.SID+")")
+	if err := VerifyDirectoryReadExecuteACL(path, identity.SID); err == nil {
+		t.Fatal("read-execute verifier accepted metadata-traverse-only access")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := ApplyDirectoryReadExecuteACL(path, identity.SID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := VerifyDirectoryReadExecuteACL(path, identity.SID); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyDirectoryMetadataTraverseACL(path, identity.SID); err == nil {
+		t.Fatal("metadata-traverse verifier accepted enumerable read-execute access")
+	}
+}
+
 func TestServiceCredentialPolicyGrantsServiceReadOnly(t *testing.T) {
 	identity, err := CurrentIdentity()
 	if err != nil {
@@ -301,6 +419,13 @@ func TestPrivateTreeAllowsOnlyContainedDescendantReparsePoints(t *testing.T) {
 	if err := VerifyTreeACL(root, policy); err != nil {
 		t.Fatalf("contained private-tree skill link failed ACL verification: %v", err)
 	}
+	danglingContained := filepath.Join(linkDirectory, "dangling-contained")
+	if err := os.Symlink(filepath.Join(root, "data", "builtin-skills", "not-installed"), danglingContained); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyTreeACL(root, policy); err != nil {
+		t.Fatalf("contained dangling private-tree skill link failed ACL verification: %v", err)
+	}
 
 	outside := filepath.Join(t.TempDir(), "outside")
 	if err := os.MkdirAll(outside, 0o700); err != nil {
@@ -324,6 +449,16 @@ func TestPrivateTreeAllowsOnlyContainedDescendantReparsePoints(t *testing.T) {
 	}
 	if err := VerifyTreeACL(root, SharedProjectPolicy(identity.SID, nil)); err == nil {
 		t.Fatal("shared project policy verified a contained reparse point")
+	}
+	if err := os.Remove(escaping); err != nil {
+		t.Fatal(err)
+	}
+	danglingEscaping := filepath.Join(linkDirectory, "dangling-escaping")
+	if err := os.Symlink(filepath.Join(outside, "not-installed"), danglingEscaping); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyTreeACL(root, policy); err == nil {
+		t.Fatal("dangling private-tree link escaping its protected root was accepted")
 	}
 }
 

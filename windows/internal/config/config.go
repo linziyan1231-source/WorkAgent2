@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	ProductionListenAddress = "0.0.0.0:25808"
-	DefaultUserProfilesRoot = `C:\Users`
-	UserDataDirectoryName   = "AionUiPortal"
-	DefaultCLIProxyRoot     = `C:\ProgramData\CLIProxyAPI`
-	DefaultPortalDataRoot   = `C:\ProgramData\AionUiPortal`
+	ProductionListenAddress             = "0.0.0.0:25808"
+	ProductionReverseProxyListenAddress = "127.0.0.1:25808"
+	DefaultUserProfilesRoot             = `C:\Users`
+	UserDataDirectoryName               = "AionUiPortal"
+	DefaultCLIProxyRoot                 = `C:\ProgramData\CLIProxyAPI`
+	DefaultPortalDataRoot               = `C:\ProgramData\AionUiPortal`
 )
 
 type Portal struct {
@@ -26,6 +27,7 @@ type Portal struct {
 	ListenAddress           string   `json:"listen_address"`
 	PublicBaseURL           string   `json:"public_base_url"`
 	BrowserOrigins          []string `json:"additional_browser_origins,omitempty"`
+	TLSReverseProxy         bool     `json:"tls_terminated_by_reverse_proxy,omitempty"`
 	TLSCertificateFile      string   `json:"tls_certificate_file"`
 	TLSPrivateKeyFile       string   `json:"tls_private_key_file"`
 	DatabasePath            string   `json:"database_path"`
@@ -117,8 +119,14 @@ func (c Portal) Validate() error {
 	if c.Mode != "production" && c.Mode != "test" {
 		return fmt.Errorf("mode must be production or test, got %q", c.Mode)
 	}
-	if c.Mode == "production" && c.ListenAddress != ProductionListenAddress {
-		return fmt.Errorf("production listen_address must be %s", ProductionListenAddress)
+	if c.Mode == "production" {
+		expectedListenAddress := ProductionListenAddress
+		if c.TLSReverseProxy {
+			expectedListenAddress = ProductionReverseProxyListenAddress
+		}
+		if c.ListenAddress != expectedListenAddress {
+			return fmt.Errorf("production listen_address must be %s", expectedListenAddress)
+		}
 	}
 	host, port, err := net.SplitHostPort(c.ListenAddress)
 	if err != nil || host == "" || port == "" {
@@ -131,7 +139,11 @@ func (c Portal) Validate() error {
 	if base.Path != "" && base.Path != "/" {
 		return errors.New("public_base_url must not contain a path")
 	}
-	if c.Mode == "production" && base.Port() != "25808" && !(base.Scheme == "http" && (base.Port() == "" || base.Port() == "80")) {
+	if c.TLSReverseProxy {
+		if base.Scheme != "https" || (base.Port() != "" && base.Port() != "443") {
+			return errors.New("public_base_url must use standard HTTPS when TLS is terminated by a reverse proxy")
+		}
+	} else if c.Mode == "production" && base.Port() != "25808" && !(base.Scheme == "http" && (base.Port() == "" || base.Port() == "80")) {
 		return errors.New("production public_base_url must use port 25808 or standard HTTP port 80")
 	}
 	browserOrigins := map[string]struct{}{strings.ToLower(base.Scheme + "://" + base.Host): {}}
@@ -147,12 +159,12 @@ func (c Portal) Validate() error {
 		}
 		browserOrigins[key] = struct{}{}
 	}
-	if c.UsesTLS() {
+	if c.ServesTLS() {
 		if !filepath.IsAbs(c.TLSCertificateFile) || !filepath.IsAbs(c.TLSPrivateKeyFile) {
 			return errors.New("tls_certificate_file and tls_private_key_file must be absolute paths for HTTPS")
 		}
 	} else if c.TLSCertificateFile != "" || c.TLSPrivateKeyFile != "" {
-		return errors.New("TLS file paths must be empty when public_base_url uses HTTP")
+		return errors.New("TLS file paths must be empty unless Portal terminates HTTPS directly")
 	}
 	if c.Mode == "production" && !strings.EqualFold(filepath.Clean(c.UserProfilesRoot), filepath.Clean(DefaultUserProfilesRoot)) {
 		return fmt.Errorf("production user_profiles_root must be %s", DefaultUserProfilesRoot)
@@ -299,6 +311,10 @@ func (c Portal) UsesTLS() bool {
 	return err == nil && strings.EqualFold(base.Scheme, "https")
 }
 
+func (c Portal) ServesTLS() bool {
+	return c.UsesTLS() && !c.TLSReverseProxy
+}
+
 type ResourceLimits struct {
 	MemoryBytes     uint64 `json:"memory_bytes"`
 	CPUPercent      uint32 `json:"cpu_percent"`
@@ -329,7 +345,7 @@ type UserHost struct {
 	// release and shared-project verification. It defaults to off for
 	// controlled intranet deployments and must be enabled before public
 	// exposure.
-	VerifyReleaseIntegrity bool `json:"verify_release_integrity,omitempty"`
+	VerifyReleaseIntegrity bool           `json:"verify_release_integrity,omitempty"`
 	Limits                 ResourceLimits `json:"limits"`
 }
 

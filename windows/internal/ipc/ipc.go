@@ -238,6 +238,7 @@ type Status struct {
 type AuthMaterial struct {
 	CookieHeader string `json:"cookie_header"`
 	CSRFToken    string `json:"csrf_token"`
+	RuntimeToken string `json:"runtime_token"`
 }
 
 type ModelKeyIDs struct {

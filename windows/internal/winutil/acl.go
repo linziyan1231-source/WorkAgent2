@@ -20,7 +20,13 @@ const (
 	capabilitySIDPrefix = "S-1-15-3-1024-"
 
 	fileAllAccess windows.ACCESS_MASK = 0x001F01FF
-	fileWriteBits windows.ACCESS_MASK = windows.GENERIC_ALL | windows.GENERIC_WRITE | windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA |
+	// Directory metadata lookup on Windows opens a handle that also requests
+	// SYNCHRONIZE. FILE_TRAVERSE | FILE_READ_ATTRIBUTES alone still makes
+	// Node.js realpathSync fail with EPERM, while this exact mask does not grant
+	// FILE_LIST_DIRECTORY or any read-data, write, delete, or ACL-management bit.
+	directoryTraverseAttributesAccess windows.ACCESS_MASK = windows.FILE_TRAVERSE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+	directoryReadExecuteAccess        windows.ACCESS_MASK = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_EXECUTE
+	fileWriteBits                     windows.ACCESS_MASK = windows.GENERIC_ALL | windows.GENERIC_WRITE | windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA |
 		windows.FILE_WRITE_EA | windows.FILE_WRITE_ATTRIBUTES | windows.DELETE | windows.WRITE_DAC | windows.WRITE_OWNER
 	cacheCapabilityAccess windows.ACCESS_MASK = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.DELETE |
 		windows.GENERIC_READ | windows.GENERIC_WRITE | windows.GENERIC_EXECUTE
@@ -214,11 +220,11 @@ func VerifyTreeACL(root string, policy ACLPolicy) error {
 }
 
 func validateContainedReparsePoint(root, path string) error {
-	resolvedRoot, err := filepath.EvalSymlinks(root)
+	resolvedRoot, err := finalPathByHandle(root)
 	if err != nil {
 		return fmt.Errorf("resolve private ACL root: %w", err)
 	}
-	resolvedTarget, err := filepath.EvalSymlinks(path)
+	resolvedTarget, err := finalReparseTargetForContainment(path)
 	if err != nil {
 		return fmt.Errorf("resolve private-tree reparse point %s: %w", path, err)
 	}
@@ -230,6 +236,96 @@ func validateContainedReparsePoint(root, path string) error {
 	return nil
 }
 
+func finalReparseTargetForContainment(path string) (string, error) {
+	resolved, err := finalPathByHandle(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return "", err
+	}
+	target, readErr := os.Readlink(path)
+	if readErr != nil {
+		return "", err
+	}
+	target = normalizeWindowsFinalPath(target)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	return canonicalizePossiblyMissingPath(target)
+}
+
+func canonicalizePossiblyMissingPath(path string) (string, error) {
+	current := filepath.Clean(path)
+	missing := []string{}
+	for {
+		resolved, err := finalPathByHandle(current)
+		if err == nil {
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if strings.EqualFold(parent, current) {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
+}
+
+// finalPathByHandle asks Windows for the normalized path of the object opened
+// through any reparse points. Unlike filepath.EvalSymlinks on Windows, it does
+// not enumerate each parent directory to recover case-preserved component
+// names, so callers need only metadata-traverse access to external ancestors.
+func finalPathByHandle(path string) (string, error) {
+	pointer, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	handle, err := windows.CreateFile(pointer,
+		windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(handle)
+
+	size := uint32(windows.MAX_PATH)
+	for {
+		buffer := make([]uint16, size)
+		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], size, 0)
+		if err != nil {
+			return "", err
+		}
+		if length < size {
+			return filepath.Clean(normalizeWindowsFinalPath(windows.UTF16ToString(buffer[:length]))), nil
+		}
+		size = length + 1
+	}
+}
+
+func normalizeWindowsFinalPath(path string) string {
+	upper := strings.ToUpper(path)
+	if strings.HasPrefix(upper, `\\?\UNC\`) {
+		return `\\` + path[len(`\\?\UNC\`):]
+	}
+	if strings.HasPrefix(upper, `\??\UNC\`) {
+		return `\\` + path[len(`\??\UNC\`):]
+	}
+	for _, prefix := range []string{`\\?\`, `\??\`} {
+		if strings.HasPrefix(upper, strings.ToUpper(prefix)) {
+			return path[len(prefix):]
+		}
+	}
+	return path
+}
+
 func applyPathACL(path string, directory bool, policy ACLPolicy) error {
 	sddl := "O:" + policy.OwnerSID + "G:" + SystemSID + "D:P"
 	for _, sid := range sortedPolicySIDs(policy) {
@@ -239,7 +335,7 @@ func applyPathACL(path string, directory bool, policy ACLPolicy) error {
 		} else if policy.Principals[sid] == ACLReadExecute {
 			rights = "GRGX"
 		} else if policy.Principals[sid] == ACLTraverse {
-			rights = "GX"
+			rights = "0x001000a0"
 		}
 		flags := ""
 		if directory {
@@ -323,8 +419,8 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool, treeRoo
 		if permission == ACLReadExecute && ace.Mask&fileWriteBits != 0 {
 			return fmt.Errorf("read-only principal %s has write or ACL-management rights 0x%08x", principalSID, uint32(ace.Mask))
 		}
-		if permission == ACLTraverse && ace.Mask&(fileWriteBits|windows.FILE_LIST_DIRECTORY|windows.GENERIC_READ) != 0 {
-			return fmt.Errorf("traverse-only principal %s can enumerate or write (mask 0x%08x)", principalSID, uint32(ace.Mask))
+		if permission == ACLTraverse && ace.Mask&^directoryTraverseAttributesAccess != 0 {
+			return fmt.Errorf("metadata-traverse principal %s has excessive rights (mask 0x%08x)", principalSID, uint32(ace.Mask))
 		}
 	}
 	for sid, permission := range policy.Principals {
@@ -350,10 +446,127 @@ func verifyPathACL(path string, policy ACLPolicy, requireProtected bool, treeRoo
 				return fmt.Errorf("principal %s lacks read/execute rights (mask 0x%08x)", sid, uint32(mask))
 			}
 		case ACLTraverse:
-			if mask&windows.GENERIC_EXECUTE == 0 && mask&windows.FILE_TRAVERSE == 0 {
-				return fmt.Errorf("principal %s lacks traverse rights (mask 0x%08x)", sid, uint32(mask))
+			if mask != directoryTraverseAttributesAccess {
+				return fmt.Errorf("principal %s requires exact metadata-traverse rights 0x%08x, got 0x%08x", sid, uint32(directoryTraverseAttributesAccess), uint32(mask))
 			}
 		}
+	}
+	return nil
+}
+
+// ApplyDirectoryMetadataTraverseACL replaces only the named SID's ACE and
+// preserves the directory's owner, protection state, and every unrelated ACE.
+func ApplyDirectoryMetadataTraverseACL(path, sidText string) error {
+	return applyExactDirectoryACL(path, sidText, directoryTraverseAttributesAccess, "metadata-traverse")
+}
+
+func ApplyDirectoryReadExecuteACL(path, sidText string) error {
+	return applyExactDirectoryACL(path, sidText, directoryReadExecuteAccess, "read-execute")
+}
+
+func applyExactDirectoryACL(path, sidText string, access windows.ACCESS_MASK, label string) error {
+	if err := validateNormalACLDirectory(path, sidText); err != nil {
+		return err
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil || dacl == nil {
+		return errors.New("directory DACL is missing")
+	}
+	sid, err := windows.StringToSid(sidText)
+	if err != nil {
+		return fmt.Errorf("parse directory %s SID: %w", label, err)
+	}
+	entries := []windows.EXPLICIT_ACCESS{{
+		AccessPermissions: access,
+		AccessMode:        windows.SET_ACCESS,
+		Inheritance:       windows.NO_INHERITANCE,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_USER, TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
+	}}
+	updated, err := windows.ACLFromEntries(entries, dacl)
+	if err != nil {
+		return fmt.Errorf("replace directory %s ACE: %w", label, err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, updated, nil); err != nil {
+		return fmt.Errorf("set directory %s ACE: %w", label, err)
+	}
+	return verifyExactDirectoryACL(path, sidText, access, label)
+}
+
+func VerifyDirectoryMetadataTraverseACL(path, sidText string) error {
+	return verifyExactDirectoryACL(path, sidText, directoryTraverseAttributesAccess, "metadata-traverse")
+}
+
+func VerifyDirectoryReadExecuteACL(path, sidText string) error {
+	return verifyExactDirectoryACL(path, sidText, directoryReadExecuteAccess, "read-execute")
+}
+
+func verifyExactDirectoryACL(path, sidText string, access windows.ACCESS_MASK, label string) error {
+	if err := validateNormalACLDirectory(path, sidText); err != nil {
+		return err
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil || dacl == nil {
+		return errors.New("directory DACL is missing")
+	}
+	header := (*aclHeader)(unsafe.Pointer(dacl))
+	matching := 0
+	for index := uint32(0); index < uint32(header.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil {
+			return err
+		}
+		if ace == nil {
+			return fmt.Errorf("invalid ACE at index %d", index)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if sid == nil || !sid.IsValid() || !strings.EqualFold(sid.String(), sidText) {
+			continue
+		}
+		matching++
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return fmt.Errorf("directory %s SID %s has a non-allow ACE", label, sidText)
+		}
+		if ace.Header.AceFlags != 0 {
+			return fmt.Errorf("directory %s SID %s has inherited or propagating flags 0x%02x", label, sidText, ace.Header.AceFlags)
+		}
+		if ace.Mask != access {
+			return fmt.Errorf("directory %s SID %s requires exact mask 0x%08x, got 0x%08x", label, sidText, uint32(access), uint32(ace.Mask))
+		}
+	}
+	if matching != 1 {
+		return fmt.Errorf("directory %s SID %s requires exactly one explicit ACE, found %d", label, sidText, matching)
+	}
+	return nil
+}
+
+func validateNormalACLDirectory(path, sidText string) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("directory metadata-traverse path must be absolute")
+	}
+	if !validSIDText(sidText) {
+		return errors.New("directory metadata-traverse SID is invalid")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("directory metadata-traverse path is not a directory")
+	}
+	if reparse, err := isReparsePoint(path); err != nil {
+		return err
+	} else if reparse {
+		return fmt.Errorf("directory metadata-traverse path is a reparse point: %s", path)
 	}
 	return nil
 }

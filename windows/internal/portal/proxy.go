@@ -81,6 +81,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			request.SetURL(target)
 			request.Out.Host = target.Host
 			stripBrowserCredentials(request.Out.Header)
+			request.Out.Header.Set("X-WorkAgent-Runtime-Token", route.Auth.RuntimeToken)
 			request.Out.Header.Set("Cookie", route.Auth.CookieHeader)
 			if route.Auth.CSRFToken != "" {
 				request.Out.Header.Set("X-CSRF-Token", route.Auth.CSRFToken)
@@ -412,7 +413,8 @@ func stripBrowserCredentials(header http.Header) {
 		lower := strings.ToLower(name)
 		if lower == "cookie" || lower == "authorization" || lower == "proxy-authorization" || lower == "x-csrf-token" || lower == "x-api-key" ||
 			lower == "forwarded" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-windows-") ||
-			strings.HasPrefix(lower, "x-aionui-portal-") || strings.HasPrefix(lower, "x-chatforward-") {
+			strings.HasPrefix(lower, "x-aionui-portal-") || strings.HasPrefix(lower, "x-chatforward-") ||
+			strings.HasPrefix(lower, "x-workagent-") {
 			header.Del(name)
 		}
 	}

@@ -89,6 +89,15 @@ func (h *Host) preparePendingModelBootstrap(ctx context.Context, env []string) (
 		return nil, errors.New("API model bootstrap and rebase are both pending")
 	}
 	if !found && !rebasing {
+		status, err := modelbootstrap.Inspect(h.cfg.DataRoot)
+		if err != nil {
+			return nil, fmt.Errorf("inspect applied API model bootstrap: %w", err)
+		}
+		if status.Applied {
+			if _, err := h.configureKimiAPIKey(ctx, env, status.State.BaseURL, ""); err != nil {
+				return nil, fmt.Errorf("converge managed Kimi web services: %w", err)
+			}
+		}
 		return nil, nil
 	}
 	if rebasing {
@@ -249,6 +258,8 @@ api_key = payload.pop("api_key", None)
 base_url = payload.pop("base_url")
 if payload or (api_key is not None and (not isinstance(api_key, str) or not api_key.startswith("cpa_"))) or not isinstance(base_url, str):
     raise RuntimeError("invalid Kimi API-key configuration input")
+search_url = f"{base_url}/search?model={K3_MODEL_NAME}"
+fetch_url = f"{base_url}/fetch?model={K3_MODEL_NAME}"
 
 if config_path.exists():
     info = config_path.lstat()
@@ -322,6 +333,23 @@ if not isinstance(thinking, dict):
 thinking["enabled"] = True
 document["thinking"] = thinking
 
+services = document.get("services")
+if not isinstance(services, dict):
+    services = tomlkit.table()
+    document["services"] = services
+def upsert_service(key, service_url):
+    service = services.get(key)
+    if not isinstance(service, dict):
+        service = tomlkit.table()
+    service["base_url"] = service_url
+    service["api_key"] = api_key
+    if "oauth" in service:
+        del service["oauth"]
+    services[key] = service
+
+upsert_service("moonshot_search", search_url)
+upsert_service("moonshot_fetch", fetch_url)
+
 def remove_kimi_oauth(section):
     if not isinstance(section, dict):
         return
@@ -348,6 +376,8 @@ try:
     candidate_model = candidate.models.get(MODEL_KEY)
     candidate_highspeed_model = candidate.models.get(HIGHSPEED_MODEL_KEY)
     candidate_k3_model = candidate.models.get(K3_MODEL_KEY)
+    candidate_search = candidate.services.moonshot_search
+    candidate_fetch = candidate.services.moonshot_fetch
     candidate_document = tomlkit.parse(temporary_path.read_text(encoding="utf-8"))
     candidate_models = candidate_document.get("models")
     candidate_thinking = candidate_document.get("thinking")
@@ -376,6 +406,14 @@ try:
         or candidate_k3_model.max_context_size != 1048576
         or candidate_k3_model.capabilities is None
         or "thinking" not in candidate_k3_model.capabilities
+        or candidate_search is None
+        or candidate_search.base_url != search_url
+        or candidate_search.api_key.get_secret_value() != api_key
+        or candidate_search.oauth is not None
+        or candidate_fetch is None
+        or candidate_fetch.base_url != fetch_url
+        or candidate_fetch.api_key.get_secret_value() != api_key
+        or candidate_fetch.oauth is not None
         or not isinstance(candidate_models, dict)
         or any(candidate_models[key].get("support_efforts") != THINKING_EFFORTS for key in (MODEL_KEY, HIGHSPEED_MODEL_KEY, K3_MODEL_KEY))
         or candidate_models[MODEL_KEY].get("default_effort") != "high"
@@ -388,7 +426,10 @@ try:
     for service in (candidate.services.moonshot_search, candidate.services.moonshot_fetch):
         if service is not None and service.oauth is not None and service.oauth.key == OAUTH_KEY:
             raise RuntimeError("Kimi OAuth service reference remains")
-    os.replace(temporary_path, config_path)
+    if config_path.exists() and temporary_path.read_bytes() == config_path.read_bytes():
+        temporary_path.unlink()
+    else:
+        os.replace(temporary_path, config_path)
 finally:
     if temporary_path.exists():
         temporary_path.unlink()
@@ -404,7 +445,9 @@ for path in oauth_paths:
 
 verified = load_config(config_path)
 verified_provider = verified.providers.get(PROVIDER_KEY)
-if verified.default_thinking is not True or verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key:
+verified_search = verified.services.moonshot_search
+verified_fetch = verified.services.moonshot_fetch
+if verified.default_thinking is not True or verified.default_yolo is not True or verified_provider is None or verified_provider.oauth is not None or verified_provider.api_key.get_secret_value() != api_key or verified_search is None or verified_search.base_url != search_url or verified_search.api_key.get_secret_value() != api_key or verified_search.oauth is not None or verified_fetch is None or verified_fetch.base_url != fetch_url or verified_fetch.api_key.get_secret_value() != api_key or verified_fetch.oauth is not None:
     raise RuntimeError("persisted Kimi API-key configuration verification failed")
 persisted_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
 persisted_models = persisted_document.get("models")

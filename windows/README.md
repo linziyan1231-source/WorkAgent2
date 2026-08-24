@@ -2,13 +2,13 @@
 
 本项目为 Windows Server 上的 AionUi 多用户入口提供一套静态 Go 控制平面、每 SID 隔离的 UserHost、不可变 AionUi Web 发布物，以及安装、升级、回滚和验证脚本。浏览器只访问一个 Portal；Portal 根据服务端会话选择 Windows SID，按需启动该 SID 的进程树，并把 HTTP 与 WebSocket 流量转发到仅监听回环地址的 AionUi Web CLI。
 
-> 当前部署、回滚点和未解决问题见 [STATUS.md](STATUS.md)。公网入口仍为明文 HTTP，不满足生产保密要求。
+> 当前部署、回滚点和未解决问题见 [STATUS.md](STATUS.md)。公网入口应通过可信 HTTPS 访问；同机反向代理终止 TLS 时，Portal 只接受回环上游流量。
 
 ## 成功标准与边界
 
 生产验收要求同时满足：
 
-- Portal 以 `NT SERVICE\AionUiPortal` 运行，只公开 `0.0.0.0:25808`；当前按管理员例外使用 HTTP。
+- Portal 以 `NT SERVICE\AionUiPortal` 运行；直接 TLS 模式监听 `0.0.0.0:25808`，反向代理 TLS 模式只监听 `127.0.0.1:25808`，外部 Cookie、HSTS 和 OAuth 回调均以 HTTPS 为准。
 - 每个 Portal 用户一对一映射到现有、非管理员 Windows SID；Portal 密码和 Windows 密码彼此独立。
 - 每个 SID 只运行一个 `AionUiUserHost.exe -> aionui-web.exe -> aioncore.exe` 进程树，内部端口只绑定 `127.0.0.1`，子进程受 Windows Job Object 限制。
 - 用户私有数据固定在该 SID 注册的 `C:\Users\<Windows用户>\AionUiPortal`，每棵树由 FSRM 施加 20 GiB 硬配额；AionUi 与 Codex/Kimi/Python 分别位于 `C:\Program Files\AionUiWebShared` 和 `C:\Program Files\AionAgentCliShared`，均按清单逐文件校验和只读 ACL 保护。稳定的 `python.exe` 与 Codex/Kimi 共用机器 PATH，虚拟环境和其他可写 Python 数据仍属于各 SID 的私有树。
@@ -47,7 +47,8 @@ portal.exe --config C:\ProgramData\AionUiPortal\portal.json kimi-datasource revo
 
 ```mermaid
 flowchart LR
-    B["浏览器"] -->|"HTTP :25808（明文例外）\nPortal 会话"| P["AionUiPortal.exe\n虚拟服务账户"]
+    B["浏览器"] -->|"HTTPS :443\nPortal 会话"| T["同机 TLS 反向代理"]
+    T -->|"HTTP 回环 :25808"| P["AionUiPortal.exe\n虚拟服务账户"]
     P -->|"受 ACL 保护的命名管道\nSID 由服务端会话决定"| U1["AionUiUserHost.exe\nWindows SID A"]
     P -->|"受 ACL 保护的命名管道\nSID 由服务端会话决定"| U2["AionUiUserHost.exe\nWindows SID B"]
     U1 -->|"Job Object"| W1["aionui-web + aioncore\n127.0.0.1 随机端口"]

@@ -94,8 +94,22 @@ func dispatch(ctx context.Context, manager *admin.Manager, arguments []string) e
 	case "release":
 		return releaseCommand(ctx, manager, arguments[1:])
 	case "acl":
+		if len(arguments) == 3 && arguments[1] == "ancestors" && (arguments[2] == "repair" || arguments[2] == "verify") {
+			var failures []error
+			if arguments[2] == "repair" {
+				failures = manager.RepairUserDataAncestorACLs(ctx)
+			} else {
+				failures = manager.VerifyUserDataAncestorACLs(ctx)
+			}
+			if err := printFailures("data-root ancestor ACL "+arguments[2], failures); err != nil {
+				return err
+			}
+			fmt.Printf("Exact non-inheriting ancestor ACLs verified: RX 0x001200a9 on %s; metadata-traverse 0x001000a0 on %s\n",
+				strings.Join(manager.UserDataAncestorReadExecutePaths(), ", "), strings.Join(manager.UserDataMetadataTraversePaths(), ", "))
+			return nil
+		}
 		if len(arguments) != 2 || (arguments[1] != "verify" && arguments[1] != "apply") {
-			return errors.New("usage: portal --config <path> acl <apply|verify>")
+			return errors.New("usage: portal --config <path> acl <apply|verify|ancestors <repair|verify>>")
 		}
 		if arguments[1] == "apply" {
 			return printFailures("ACL application", manager.ApplyACLs(ctx))

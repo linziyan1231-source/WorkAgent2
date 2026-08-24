@@ -113,7 +113,7 @@ api_key = "custom-secret"
 		t.Fatal(err)
 	}
 	got := string(content)
-	for _, required := range []string{"# preserve this comment", `default_model = "kimi-code/kimi-k3"`, `theme = "light"`, `default_thinking = true`, `default_yolo = true`, `support_efforts = ["low", "high", "max"]`, `default_effort = "high"`, `display_name = "Kimi K2.7 Code"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi K2.7 Code HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `default_effort = "low"`, `[thinking]`, `enabled = true`, `[providers.custom]`, `base_url = "http://43.134.118.158:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
+	for _, required := range []string{"# preserve this comment", `default_model = "kimi-code/kimi-k3"`, `theme = "light"`, `default_thinking = true`, `default_yolo = true`, `support_efforts = ["low", "high", "max"]`, `default_effort = "high"`, `display_name = "Kimi K2.7 Code"`, `[models."kimi-code/kimi-for-coding-highspeed"]`, `model = "kimi-for-coding-highspeed"`, `display_name = "Kimi K2.7 Code HighSpeed"`, `[models."kimi-code/kimi-k3"]`, `model = "kimi-k3"`, `max_context_size = 1048576`, `default_effort = "low"`, `[thinking]`, `enabled = true`, `[services.moonshot_search]`, `base_url = "http://43.134.118.158:8317/v1/search?model=kimi-k3"`, `[services.moonshot_fetch]`, `base_url = "http://43.134.118.158:8317/v1/fetch?model=kimi-k3"`, `[providers.custom]`, `base_url = "http://43.134.118.158:8317/v1"`, `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`} {
 		if !strings.Contains(got, required) {
 			t.Fatalf("Kimi config is missing %q:\n%s", required, got)
 		}
@@ -141,7 +141,7 @@ api_key = "custom-secret"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(rebased), `base_url = "http://127.0.0.1:8317/v1"`) || !strings.Contains(string(rebased), `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`) {
+	if !strings.Contains(string(rebased), `base_url = "http://127.0.0.1:8317/v1"`) || !strings.Contains(string(rebased), `base_url = "http://127.0.0.1:8317/v1/search?model=kimi-k3"`) || !strings.Contains(string(rebased), `base_url = "http://127.0.0.1:8317/v1/fetch?model=kimi-k3"`) || !strings.Contains(string(rebased), `api_key = "cpa_abcdefghijklmnopqrstuvwxyz012345"`) {
 		t.Fatalf("Kimi Base URL rebase did not preserve the API key:\n%s", rebased)
 	}
 }

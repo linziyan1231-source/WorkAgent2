@@ -183,6 +183,8 @@ func (p *EmployeeProvisioner) AddWithProgress(ctx context.Context, username stri
 	if err := advance(62, "creating_portal_account"); err != nil {
 		return store.User{}, err
 	}
+	loginHealthPassword := retainLoginHealthPassword(portalPassword)
+	defer auth.Zero(loginHealthPassword)
 	user := portalUser
 	if portalExists {
 		if err := p.Manager.ResetPortalPassword(ctx, user.Username, portalPassword); err != nil {
@@ -238,12 +240,18 @@ func (p *EmployeeProvisioner) AddWithProgress(ctx context.Context, username stri
 	if !status.Applied || status.RebasePending {
 		return user, errors.New("model bootstrap did not finish")
 	}
-	if err := advance(96, "applying_skill_policy"); err != nil {
-		return store.User{}, err
-	}
 	dataRoot, err := p.Manager.UserDataRootForSID(user.WindowsSID)
 	if err != nil {
-		return user, fmt.Errorf("resolve user data root for Skill policy: %w", err)
+		return user, fmt.Errorf("resolve user data root for managed policies: %w", err)
+	}
+	if err := advance(95, "applying_agent_swarm_policy"); err != nil {
+		return store.User{}, err
+	}
+	if err := p.applyAgentSwarmPolicy(ctx, dataRoot); err != nil {
+		return user, err
+	}
+	if err := advance(96, "applying_skill_policy"); err != nil {
+		return store.User{}, err
 	}
 	if err := p.applySkillPolicy(ctx, dataRoot); err != nil {
 		return user, err
@@ -258,7 +266,7 @@ func (p *EmployeeProvisioner) AddWithProgress(ctx context.Context, username stri
 		return store.User{}, err
 	}
 	verifiedUser, err := p.Manager.Store.UserByUsername(ctx, user.Username)
-	if err != nil || !verifiedUser.Enabled || verifiedUser.Admin || !auth.VerifyPassword(verifiedUser.PasswordHash, portalPassword) {
+	if err != nil || !verifiedUser.Enabled || verifiedUser.Admin || !auth.VerifyPassword(verifiedUser.PasswordHash, loginHealthPassword) {
 		return user, errors.New("Portal login credential health gate did not pass")
 	}
 	if err := advance(99, "graduating_account"); err != nil {
@@ -268,6 +276,10 @@ func (p *EmployeeProvisioner) AddWithProgress(ctx context.Context, username stri
 		return user, err
 	}
 	return user, nil
+}
+
+func retainLoginHealthPassword(password []byte) []byte {
+	return append([]byte(nil), password...)
 }
 
 func (p *EmployeeProvisioner) runScript(ctx context.Context, name, windowsAccount string) error {
@@ -280,6 +292,46 @@ func (p *EmployeeProvisioner) applySkillPolicy(ctx context.Context, dataRoot str
 		return fmt.Errorf("apply managed Skill policy: %w", err)
 	}
 	return nil
+}
+
+func (p *EmployeeProvisioner) applyAgentSwarmPolicy(ctx context.Context, dataRoot string) error {
+	name, arguments, err := p.agentSwarmPolicyInvocation(dataRoot)
+	if err != nil {
+		return err
+	}
+	if err := p.runPowerShellScript(ctx, name, arguments...); err != nil {
+		return fmt.Errorf("apply managed AgentSwarm policy: %w", err)
+	}
+	return nil
+}
+
+func (p *EmployeeProvisioner) agentSwarmPolicyInvocation(dataRoot string) (string, []string, error) {
+	profile := filepath.Join(dataRoot, "profile")
+	var configPath string
+	for _, candidate := range []string{
+		filepath.Join(profile, ".kimi-code", "config.toml"),
+		filepath.Join(profile, ".kimi", "config.toml"),
+	} {
+		info, err := os.Lstat(candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", nil, fmt.Errorf("inspect initialized Kimi configuration: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return "", nil, fmt.Errorf("initialized Kimi configuration is not a regular file: %s", candidate)
+		}
+		configPath = candidate
+		break
+	}
+	if configPath == "" {
+		return "", nil, fmt.Errorf("initialized Kimi configuration is missing below %s", profile)
+	}
+	return "Set-KimiAgentSwarmPolicy.ps1", []string{
+		"-ConfigPath", configPath,
+		"-MaxNewAgentsPerSession", "4",
+	}, nil
 }
 
 func (p *EmployeeProvisioner) skillPolicyInvocation(dataRoot string) (string, []string) {

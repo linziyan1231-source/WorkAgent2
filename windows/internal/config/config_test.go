@@ -59,6 +59,32 @@ func TestProductionConfigAcceptsExplicitHTTPAndRejectsUnsafeOrigins(t *testing.T
 		t.Fatal("alternate production public port accepted")
 	}
 	c = validPortal(t)
+	c.PublicBaseURL = "https://portal.example.test"
+	c.ListenAddress = ProductionReverseProxyListenAddress
+	c.TLSReverseProxy = true
+	c.TLSCertificateFile = ""
+	c.TLSPrivateKeyFile = ""
+	if err := c.Validate(); err != nil {
+		t.Fatalf("standard HTTPS reverse-proxy config rejected: %v", err)
+	}
+	if !c.UsesTLS() || c.ServesTLS() {
+		t.Fatal("reverse-proxy TLS mode did not preserve external HTTPS without direct TLS serving")
+	}
+	c.ListenAddress = ProductionListenAddress
+	if err := c.Validate(); err == nil {
+		t.Fatal("reverse-proxy TLS mode accepted a non-loopback production listener")
+	}
+	c.ListenAddress = ProductionReverseProxyListenAddress
+	c.PublicBaseURL = "http://portal.example.test"
+	if err := c.Validate(); err == nil {
+		t.Fatal("reverse-proxy TLS mode accepted an HTTP public URL")
+	}
+	c.PublicBaseURL = "https://portal.example.test"
+	c.TLSCertificateFile = filepath.Join(`C:\ProgramData\AionUiPortal`, "tls", "unused.pem")
+	if err := c.Validate(); err == nil {
+		t.Fatal("reverse-proxy TLS mode accepted a direct TLS certificate path")
+	}
+	c = validPortal(t)
 	c.PublicBaseURL = "https://user@portal.example.test:25808"
 	if err := c.Validate(); err == nil {
 		t.Fatal("public URL userinfo accepted")

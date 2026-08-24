@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$PublicBaseUrl,
+    [switch]$TLSReverseProxy,
     [string]$CertificateFile,
     [string]$PrivateKeyFile,
     [Parameter(Mandatory)][string]$BinariesDirectory,
@@ -100,12 +101,21 @@ if ($null -eq $systemVolume -or $systemVolume.DriveType -ne 3 -or $systemVolume.
     throw 'C: must be a fixed NTFS volume for per-user AionUi data.'
 }
 $publicUri = [Uri]$PublicBaseUrl
-if (-not $publicUri.IsAbsoluteUri -or $publicUri.Scheme -notin @('http', 'https') -or $publicUri.Port -ne 25808 -or $publicUri.AbsolutePath -ne '/' -or
+if (-not $publicUri.IsAbsoluteUri -or $publicUri.Scheme -notin @('http', 'https') -or $publicUri.AbsolutePath -ne '/' -or
     -not [string]::IsNullOrEmpty($publicUri.UserInfo) -or -not [string]::IsNullOrEmpty($publicUri.Query) -or -not [string]::IsNullOrEmpty($publicUri.Fragment)) {
-    throw 'PublicBaseUrl must be an absolute HTTP or HTTPS origin on port 25808 without a path.'
+    throw 'PublicBaseUrl must be an absolute HTTP or HTTPS origin without a path.'
 }
 $useTls = $publicUri.Scheme -eq 'https'
-if ($useTls) {
+if ($TLSReverseProxy) {
+    if (-not $useTls -or $publicUri.Port -ne 443) {
+        throw 'TLSReverseProxy requires a standard HTTPS PublicBaseUrl.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CertificateFile) -or -not [string]::IsNullOrWhiteSpace($PrivateKeyFile)) {
+        throw 'CertificateFile and PrivateKeyFile must be omitted when TLSReverseProxy is enabled.'
+    }
+} elseif ($publicUri.Port -ne 25808) {
+    throw 'A directly served PublicBaseUrl must use port 25808.'
+} elseif ($useTls) {
     if ([string]::IsNullOrWhiteSpace($CertificateFile) -or [string]::IsNullOrWhiteSpace($PrivateKeyFile)) {
         throw 'CertificateFile and PrivateKeyFile are required for an HTTPS PublicBaseUrl.'
     }
@@ -150,7 +160,7 @@ if ($existingService) {
 }
 
 $directories = @($installRoot, $adminScripts, $sharedRoot, $programData, (Join-Path $programData 'logs'), (Join-Path $programData 'users'))
-if ($useTls) { $directories += (Join-Path $programData 'tls') }
+if ($useTls -and -not $TLSReverseProxy) { $directories += (Join-Path $programData 'tls') }
 New-Item -ItemType Directory -Force -Path $directories | Out-Null
 if (-not (Test-Path -LiteralPath $ChatForwardSecretFile)) {
     $chatForwardSecretBytes = [byte[]]::new(48)
@@ -166,7 +176,7 @@ Copy-Item -LiteralPath (Join-Path $BinariesDirectory 'AionUiPortal.exe') -Destin
 Copy-Item -LiteralPath (Join-Path $BinariesDirectory 'AionUiUserHost.exe') -Destination (Join-Path $installRoot 'AionUiUserHost.exe') -Force
 Copy-Item -LiteralPath (Join-Path $BinariesDirectory 'portal.exe') -Destination $portalCli -Force
 Copy-Item -LiteralPath (Join-Path $BinariesDirectory 'AionKimiDatasourceBroker.exe') -Destination (Join-Path $installRoot 'AionKimiDatasourceBroker.exe') -Force
-foreach ($name in @('Remove-CodexSandboxGroupMembership.ps1', 'Set-UserHostRights.ps1', 'Set-UserDiskQuota.ps1', 'ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1', 'Configure-KimiDatasourceBroker.ps1')) {
+foreach ($name in @('Remove-CodexSandboxGroupMembership.ps1', 'Set-UserHostRights.ps1', 'Set-UserDiskQuota.ps1', 'ReleaseContract.ps1', 'Publish-UpgradeNotification.ps1', 'Configure-KimiDatasourceBroker.ps1', 'Set-KimiAgentSwarmPolicy.ps1', 'kimi-agent-swarm-guard.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $adminScripts $name) -Force
 }
 & (Join-Path $PSScriptRoot 'Publish-UserSkillPolicyBundle.ps1') -DestinationDirectory $adminScripts
@@ -179,7 +189,7 @@ if (-not [string]::IsNullOrWhiteSpace($AgentCliPythonVersion)) { $agentCliArgume
 & (Join-Path $PSScriptRoot 'Publish-SharedAgentClis.ps1') @agentCliArguments
 $certificateDestination = ''
 $privateKeyDestination = ''
-if ($useTls) {
+if ($useTls -and -not $TLSReverseProxy) {
     $certificateDestination = Join-Path $programData 'tls\portal-cert.pem'
     $privateKeyDestination = Join-Path $programData 'tls\portal-key.pem'
     Copy-Item -LiteralPath (Resolve-Path $CertificateFile).Path -Destination $certificateDestination -Force
@@ -211,8 +221,9 @@ if ($serviceSid -notmatch '^S-1-5-80-') { throw "Unexpected Portal service SID: 
 
 $configuration = [ordered]@{
     mode = 'production'
-    listen_address = '0.0.0.0:25808'
+    listen_address = if ($TLSReverseProxy) { '127.0.0.1:25808' } else { '0.0.0.0:25808' }
     public_base_url = $publicUri.GetLeftPart([UriPartial]::Authority)
+    tls_terminated_by_reverse_proxy = [bool]$TLSReverseProxy
     tls_certificate_file = $certificateDestination
     tls_private_key_file = $privateKeyDestination
     database_path = (Join-Path $programData 'portal.db')
@@ -254,7 +265,7 @@ Assert-Exit 'Install immutable AionUi Web release'
 Assert-Exit 'Apply production ACLs'
 & $portalCli --config $configPath acl verify
 Assert-Exit 'Verify production ACLs'
-& (Join-Path $PSScriptRoot 'Configure-PortalFirewall.ps1') -PortalExecutable $portalExe
+& (Join-Path $PSScriptRoot 'Configure-PortalFirewall.ps1') -PortalExecutable $portalExe -LoopbackOnly:$TLSReverseProxy
 
 Start-Service -Name $adminServiceName
 (Get-Service -Name $adminServiceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
@@ -262,8 +273,9 @@ Start-Service -Name $serviceName
 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 $healthy = $false
-$healthUri = ('{0}://127.0.0.1:25808/healthz' -f $publicUri.Scheme)
-$lastHealthError = "no $($publicUri.Scheme.ToUpperInvariant()) response was received"
+$healthScheme = if ($TLSReverseProxy) { 'http' } else { $publicUri.Scheme }
+$healthUri = ('{0}://127.0.0.1:25808/healthz' -f $healthScheme)
+$lastHealthError = "no $($healthScheme.ToUpperInvariant()) response was received"
 do {
     $handler = $null
     $client = $null
@@ -271,7 +283,7 @@ do {
     try {
         $handler = New-Object Net.Http.HttpClientHandler
         $handler.UseProxy = $false
-        if ($useTls) {
+        if ($useTls -and -not $TLSReverseProxy) {
             $handler.ServerCertificateCustomValidationCallback = [Net.Http.HttpClientHandler]::DangerousAcceptAnyServerCertificateValidator
         }
         $client = [Net.Http.HttpClient]::new($handler)
@@ -287,12 +299,13 @@ do {
         if ($handler) { $handler.Dispose() }
     }
 } while (-not $healthy -and [DateTime]::UtcNow -lt $deadline)
-if (-not $healthy) { throw "Portal did not pass its local $($publicUri.Scheme.ToUpperInvariant()) health check. Last error: $lastHealthError" }
+if (-not $healthy) { throw "Portal did not pass its local $($healthScheme.ToUpperInvariant()) health check. Last error: $lastHealthError" }
 
 $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
 if ($service.StartName -ne "NT SERVICE\$serviceName" -or $service.ProcessId -eq 0) { throw 'Portal service identity or PID verification failed.' }
-$listener = @(Get-NetTCPConnection -State Listen -LocalPort 25808 | Where-Object { $_.LocalAddress -eq '0.0.0.0' -and $_.OwningProcess -eq $service.ProcessId })
-if ($listener.Count -ne 1) { throw 'Portal is not listening exactly once on 0.0.0.0:25808 under the service PID.' }
+$expectedListenAddress = if ($TLSReverseProxy) { '127.0.0.1' } else { '0.0.0.0' }
+$listener = @(Get-NetTCPConnection -State Listen -LocalPort 25808 | Where-Object { $_.LocalAddress -eq $expectedListenAddress -and $_.OwningProcess -eq $service.ProcessId })
+if ($listener.Count -ne 1) { throw "Portal is not listening exactly once on $expectedListenAddress`:25808 under the service PID." }
 $adminService = Get-CimInstance Win32_Service -Filter "Name='$adminServiceName'"
 if ($adminService.StartName -ne 'LocalSystem' -or $adminService.ProcessId -eq 0) { throw 'Portal administration service identity or PID verification failed.' }
 & $portalCli --config $configPath acl verify

@@ -13,8 +13,45 @@ import (
 	"aionuiportal/internal/config"
 	"aionuiportal/internal/release"
 	"aionuiportal/internal/scheduler"
+	"aionuiportal/internal/store"
 	"aionuiportal/internal/winutil"
 )
+
+func TestRepairUserDataAncestorACLsIsExplicitAndIdempotent(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "external-data", "users")
+	for _, path := range []string{base, filepath.Join(base, "shared")} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const employeeSID = "S-1-5-21-111-222-333-4242"
+	data, err := store.Open(filepath.Join(root, "portal.db"), filepath.Join(root, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	if _, err := data.CreateUser(context.Background(), "employee", "test-password-hash", employeeSID, `MACHINE\employee`, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := Manager{Config: config.Portal{UserDataRoot: base}, Store: data}
+	readExecutePaths := manager.UserDataAncestorReadExecutePaths()
+	if len(readExecutePaths) != 2 || !strings.EqualFold(readExecutePaths[0], filepath.Dir(base)) || !strings.EqualFold(readExecutePaths[1], base) {
+		t.Fatalf("unexpected read-execute ancestor paths: %v", readExecutePaths)
+	}
+	metadataPaths := manager.UserDataMetadataTraversePaths()
+	if len(metadataPaths) != 1 || !strings.EqualFold(metadataPaths[0], filepath.Join(base, "shared")) {
+		t.Fatalf("unexpected metadata-traverse paths: %v", metadataPaths)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if failures := manager.RepairUserDataAncestorACLs(context.Background()); len(failures) != 0 {
+			t.Fatalf("ancestor repair attempt %d failed: %v", attempt+1, failures)
+		}
+	}
+	if failures := manager.VerifyUserDataAncestorACLs(context.Background()); len(failures) != 0 {
+		t.Fatalf("ancestor verification failed: %v", failures)
+	}
+}
 
 func TestRemainingTaskVerificationWaitOnlyExtendsRunningTask(t *testing.T) {
 	running := scheduler.Info{LastTaskResult: 0x00041301}

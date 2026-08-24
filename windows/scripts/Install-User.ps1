@@ -101,10 +101,18 @@ if ($LASTEXITCODE -ne 0) { throw 'Password-logon task registration or real ident
 & $PortalCli --config $ConfigPath model-bootstrap status $PortalUsername
 if ($LASTEXITCODE -ne 0) { throw 'UserHost did not complete Codex/Aion model initialization.' }
 $installedDataRoot = if ([string]::IsNullOrWhiteSpace($userDataRoot)) { Join-Path $profilePath 'AionUiPortal' } else { Join-Path $userDataRoot $expectedSid }
+$swarmPolicyScript = Join-Path $PSScriptRoot 'Set-KimiAgentSwarmPolicy.ps1'
+if (-not (Test-Path -LiteralPath $swarmPolicyScript -PathType Leaf)) { throw "Managed AgentSwarm policy script is missing: $swarmPolicyScript" }
+$privateProfile = Join-Path $installedDataRoot 'profile'
+$modernKimiConfig = Join-Path $privateProfile '.kimi-code\config.toml'
+$legacyKimiConfig = Join-Path $privateProfile '.kimi\config.toml'
+$kimiConfig = if (Test-Path -LiteralPath $modernKimiConfig -PathType Leaf) { $modernKimiConfig } elseif (Test-Path -LiteralPath $legacyKimiConfig -PathType Leaf) { $legacyKimiConfig } else { '' }
+if ([string]::IsNullOrWhiteSpace($kimiConfig)) { throw "Initialized Kimi configuration is missing below $privateProfile." }
+& $swarmPolicyScript -ConfigPath $kimiConfig -MaxNewAgentsPerSession 4 | Out-Null
 $skillPolicyScript = Join-Path $PSScriptRoot 'Apply-UserSkillPolicy.ps1'
 if (-not (Test-Path -LiteralPath $skillPolicyScript -PathType Leaf)) { throw "Managed Skill policy script is missing: $skillPolicyScript" }
 & $skillPolicyScript -DataRoot $installedDataRoot | Out-Null
 & $PortalCli --config $ConfigPath acl verify
 if ($LASTEXITCODE -ne 0) { throw 'Post-install ACL verification failed.' }
 & (Join-Path $PSScriptRoot 'Test-WindowsProfileIsolation.ps1') -WindowsAccount $resolvedAccount -DataRootBase $userDataRoot
-Write-Host "User $PortalUsername is installed at $installedDataRoot; runtime, managed Skill policy, and identity isolation are verified."
+Write-Host "User $PortalUsername is installed at $installedDataRoot; runtime, AgentSwarm limit, managed Skill policy, and identity isolation are verified."
